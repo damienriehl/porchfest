@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   scanGitHistory,
   scanTree,
@@ -21,6 +22,19 @@ function git(directory, ...args) {
       GIT_COMMITTER_EMAIL: "clean-room@example.test",
     },
   });
+}
+
+function runCleanRoom(repository) {
+  return spawnSync(
+    process.execPath,
+    [
+      fileURLToPath(new URL("clean-room-scan.mjs", import.meta.url)),
+      "--repo-root",
+      repository,
+      "--skip-history",
+    ],
+    { encoding: "utf8" },
+  );
 }
 
 function participantEmail() {
@@ -106,6 +120,89 @@ await withTemporaryDirectory(
         location: "working tree:notes.txt",
       },
     ]);
+  },
+);
+
+await withTemporaryDirectory(
+  "porchfest-clean-ignored-artifacts-",
+  async (repository) => {
+    git(repository, "init", "--quiet");
+    await writeFile(
+      join(repository, ".gitignore"),
+      ["private/", "data/", "*.csv", "*.db", ""].join("\n"),
+    );
+
+    const privateDirectory = join(repository, "packages", "core", "private");
+    await mkdir(privateDirectory, { recursive: true });
+    await writeFile(
+      join(privateDirectory, "raw-export.csv"),
+      "contact_name,contact_email,contact_phone\n",
+    );
+
+    const refused = runCleanRoom(repository);
+    assert.equal(refused.status, 1);
+    assert.match(
+      refused.stderr,
+      /prohibited private\/ directory at working tree:packages\/core\/private\/raw-export\.csv/,
+    );
+    assert.match(
+      refused.stderr,
+      /raw export \(\.csv\) at working tree:packages\/core\/private\/raw-export\.csv/,
+    );
+
+    await rm(join(repository, "packages"), { recursive: true });
+    const dataDirectory = join(repository, "data");
+    await mkdir(dataDirectory);
+    await writeFile(join(dataDirectory, "porchfest.db"), "runtime data\n");
+
+    const allowed = runCleanRoom(repository);
+    assert.equal(allowed.status, 0);
+    assert.match(allowed.stdout, /working tree \(including ignored paths\)/);
+  },
+);
+
+await withTemporaryDirectory(
+  "porchfest-clean-index-artifacts-",
+  async (repository) => {
+    git(repository, "init", "--quiet");
+    await writeFile(join(repository, ".gitignore"), "private/\n*.csv\n");
+    const privateDirectory = join(repository, "packages", "core", "private");
+    await mkdir(privateDirectory, { recursive: true });
+    await writeFile(
+      join(privateDirectory, "raw-export.csv"),
+      "contact_name,contact_email,contact_phone\n",
+    );
+    git(repository, "add", "--force", "packages/core/private/raw-export.csv");
+    await rm(join(repository, "packages"), { recursive: true });
+
+    const refused = runCleanRoom(repository);
+    assert.equal(refused.status, 1);
+    assert.match(
+      refused.stderr,
+      /prohibited private\/ directory at Git index:packages\/core\/private\/raw-export\.csv/,
+    );
+  },
+);
+
+await withTemporaryDirectory(
+  "porchfest-clean-symlink-artifacts-",
+  async (repository) => {
+    git(repository, "init", "--quiet");
+    await writeFile(join(repository, ".gitignore"), "private/\n*.csv\n");
+    await writeFile(join(repository, "fixture.txt"), "participant record\n");
+    const privateDirectory = join(repository, "packages", "core", "private");
+    await mkdir(privateDirectory, { recursive: true });
+    await symlink(
+      join(repository, "fixture.txt"),
+      join(privateDirectory, "raw-export.csv"),
+    );
+
+    const refused = runCleanRoom(repository);
+    assert.equal(refused.status, 1);
+    assert.match(
+      refused.stderr,
+      /prohibited private\/ directory at working tree:packages\/core\/private\/raw-export\.csv/,
+    );
   },
 );
 

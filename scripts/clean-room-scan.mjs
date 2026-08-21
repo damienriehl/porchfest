@@ -178,21 +178,34 @@ export function scanGitHistory(repoRoot) {
 }
 
 export async function scanWorkingTree(repoRoot) {
-  const paths = nulList(
-    git(
-      ["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
-      repoRoot,
-    ),
-  );
   const findings = [];
-  for (const path of paths) {
-    findings.push(...inspectPath(path, "working tree"));
+  // Git ignore rules intentionally cover both prohibited participant-data
+  // artifacts and legitimate runtime state, so `git ls-files` cannot define
+  // this privacy boundary. Walk the filesystem to catch ignored artifacts.
+  // The root data/ volume (including its SQLite files) and .env files are
+  // expected after running the app; data, .env, and .env.* are also excluded
+  // from container build contexts by .dockerignore. .git and node_modules are
+  // omitted solely to keep the walk bounded and fast.
+  const presentPaths = new Set();
+  for (const file of await treeFiles(repoRoot)) {
+    presentPaths.add(normalizePath(file.relative));
+    findings.push(...inspectPath(file.relative, "working tree"));
+    if (file.isSymbolicLink || isExpectedRuntimeFile(file.relative)) continue;
     try {
-      const content = await readFile(resolve(repoRoot, path), "utf8");
-      findings.push(...inspectContent(content, path, "working tree"));
+      const content = await readFile(file.absolute, "utf8");
+      findings.push(...inspectContent(content, file.relative, "working tree"));
     } catch {
       // Binary and concurrently removed files are covered by path/history checks.
     }
+  }
+
+  // Preserve index coverage for staged paths whose working-tree copy is gone.
+  // Reading their content was never part of this pass, but prohibited artifact
+  // names in the index must remain a hard failure.
+  const indexedPaths = nulList(git(["ls-files", "-z", "--cached"], repoRoot));
+  for (const path of indexedPaths) {
+    if (!presentPaths.has(normalizePath(path)))
+      findings.push(...inspectPath(path, "Git index"));
   }
   return findings;
 }
@@ -201,19 +214,40 @@ async function treeFiles(directory, root = directory) {
   const entries = await readdir(directory, { withFileTypes: true });
   const files = [];
   for (const entry of entries) {
-    if ([".git", "node_modules", "data"].includes(entry.name)) continue;
     const path = join(directory, entry.name);
+    const relativePath = relative(root, path);
+    if (
+      [".git", "node_modules"].includes(entry.name) ||
+      relativePath === "data"
+    )
+      continue;
     if (entry.isDirectory()) files.push(...(await treeFiles(path, root)));
-    else if (entry.isFile())
-      files.push({ absolute: path, relative: relative(root, path) });
+    else if (entry.isFile() || entry.isSymbolicLink())
+      files.push({
+        absolute: path,
+        relative: relativePath,
+        isSymbolicLink: entry.isSymbolicLink(),
+      });
   }
   return files;
+}
+
+function isExpectedRuntimeFile(path) {
+  const filename = basename(normalizePath(path)).toLowerCase();
+  return (
+    (filename !== ".env.example" &&
+      (filename === ".env" || filename.startsWith(".env."))) ||
+    filename.endsWith(".db") ||
+    filename.endsWith(".db-shm") ||
+    filename.endsWith(".db-wal")
+  );
 }
 
 export async function scanTree(directory, location = "image") {
   const findings = [];
   for (const file of await treeFiles(directory)) {
     findings.push(...inspectPath(file.relative, location));
+    if (file.isSymbolicLink) continue;
     try {
       const content = await readFile(file.absolute, "utf8");
       findings.push(...inspectContent(content, file.relative, location));
@@ -265,17 +299,30 @@ async function main() {
   const args = process.argv.slice(2);
   const treeIndex = args.indexOf("--tree");
   const imageIndex = args.indexOf("--image");
+  const repoRootIndex = args.indexOf("--repo-root");
   let findings = [];
+  let scannedScope;
 
   if (treeIndex >= 0) {
     const tree = args[treeIndex + 1];
     if (!tree) throw new Error("--tree requires a directory");
     findings = await scanTree(resolve(tree), "image");
+    scannedScope = "image tree";
   } else {
-    const repoRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
+    const requestedRoot =
+      repoRootIndex >= 0 ? args[repoRootIndex + 1] : undefined;
+    if (repoRootIndex >= 0 && !requestedRoot)
+      throw new Error("--repo-root requires a directory");
+    const repoRoot = resolve(
+      requestedRoot ?? fileURLToPath(new URL("..", import.meta.url)),
+    );
     findings.push(...(await scanWorkingTree(repoRoot)));
-    if (!args.includes("--skip-history"))
+    if (!args.includes("--skip-history")) {
       findings.push(...scanGitHistory(repoRoot));
+      scannedScope = "working tree (including ignored paths) and Git history";
+    } else {
+      scannedScope = "working tree (including ignored paths)";
+    }
   }
 
   if (printFindings(findings) > 0) {
@@ -290,9 +337,12 @@ async function main() {
       process.exitCode = 1;
       return;
     }
+    scannedScope += " and container image";
   }
 
-  console.log("OK: clean-room scan found no participant data");
+  console.log(
+    `OK: clean-room scan found no participant-data artifacts in ${scannedScope}`,
+  );
 }
 
 if (
