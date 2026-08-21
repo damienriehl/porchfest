@@ -1,0 +1,24 @@
+node_modules/
+dist/
+drizzle/
+data/
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.*
+!.env.example
+
+# Public-repository privacy boundary. The clean-room scan enforces these in Git
+# history and container payloads as well as relying on ignore rules.
+private/
+out/
+raw-exports/
+generated-messages/
+*.csv
+*.tsv
+*.xls
+*.xlsx
+*.ods
+*.eml
+*.mbox

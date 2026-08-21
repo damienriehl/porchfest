@@ -1,0 +1,36 @@
+name: porchfest-reference
+
+services:
+  app:
+    image: porchfest-ci
+    build:
+      context: .
+    restart: unless-stopped
+    volumes:
+      - porchfest-data:/data
+    expose:
+      - "9398"
+
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      PORCHFEST_ORIGIN: ${PUBLIC_BASE_URL:-https://localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - porchfest-caddy-data:/data
+      - porchfest-caddy-config:/config
+
+volumes:
+  porchfest-data:
+    name: porchfest-data
+  porchfest-caddy-data:
+    name: porchfest-caddy-data
+  porchfest-caddy-config:
+    name: porchfest-caddy-config
