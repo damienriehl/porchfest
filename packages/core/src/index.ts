@@ -9,9 +9,9 @@ export type {
   EmailPort,
   GeocodeRequest,
   GeoPort,
-} from './ports/index.js';
+} from "./ports/index.js";
 
-import type { AdapterPorts } from './ports/index.js';
+import type { AdapterPorts } from "./ports/index.js";
 
 export interface CoreRuntime {
   readonly ports: AdapterPorts;

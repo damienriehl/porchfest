@@ -6,7 +6,7 @@ export interface EmailMessage {
 }
 
 export interface EmailDeliveryResult {
-  readonly status: 'sent' | 'skipped';
+  readonly status: "sent" | "skipped";
   readonly providerMessageId?: string;
   readonly reason?: string;
 }

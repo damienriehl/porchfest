@@ -31,7 +31,7 @@ Caddy uses its local certificate authority for `https://localhost`, so the comma
 accepts that development certificate. A successful response is:
 
 ```json
-{"ok":true,"service":"porchfest"}
+{ "ok": true, "service": "porchfest" }
 ```
 
 For a public host:
