@@ -19,7 +19,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint .",
     "format:check": "prettier --check .",
-    "test": "vitest run",
+    "test": "vitest run && node scripts/check-core-boundary.test.mjs && node scripts/clean-room-scan.test.mjs",
     "test:watch": "vitest",
     "test:container": "bash scripts/container-smoke.sh",
     "check:boundaries": "node scripts/check-core-boundary.mjs",

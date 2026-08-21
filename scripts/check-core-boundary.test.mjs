@@ -1,36 +1,53 @@
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import assert from "node:assert/strict";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   findCoreBoundaryViolations,
   findWebRouteBoundaryViolations,
-} from './check-core-boundary.mjs';
+} from "./check-core-boundary.mjs";
 
-describe('core dependency boundary', () => {
-  it('flags imports from an adapter package', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'porchfest-core-boundary-'));
-    await mkdir(join(directory, 'src'));
-    await writeFile(
-      join(directory, 'src/example.ts'),
-      "import { NullEmailAdapter } from '@porchfest/email';\n",
-    );
+const directory = await mkdtemp(
+  join(tmpdir(), "porchfest-boundary-self-test-"),
+);
 
-    await expect(findCoreBoundaryViolations(directory)).resolves.toEqual([
-      expect.objectContaining({ specifier: '@porchfest/email' }),
-    ]);
-  });
-});
+try {
+  const coreDirectory = join(directory, "core");
+  await mkdir(join(coreDirectory, "src"), { recursive: true });
+  await writeFile(
+    join(coreDirectory, "src/example.ts"),
+    "import { NullEmailAdapter } from '@porchfest/email';\n",
+  );
 
-describe('web route boundary', () => {
-  it('flags direct Hono route registration outside the central registry', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'porchfest-route-boundary-'));
-    await mkdir(join(directory, 'router'));
-    await writeFile(join(directory, 'rogue.ts'), "app.get('/unguarded', handler);\n");
-    await writeFile(join(directory, 'router/registry.ts'), "app.on('GET', '/guarded', handler);\n");
+  assert.deepEqual(
+    (await findCoreBoundaryViolations(coreDirectory)).map(
+      ({ specifier }) => specifier,
+    ),
+    ["@porchfest/email"],
+  );
+  console.log("OK: core boundary self-test refuses adapter imports");
 
-    await expect(findWebRouteBoundaryViolations(directory)).resolves.toEqual([
-      expect.objectContaining({ method: 'get', line: 1 }),
-    ]);
-  });
-});
+  const webDirectory = join(directory, "web");
+  await mkdir(join(webDirectory, "router"), { recursive: true });
+  await writeFile(
+    join(webDirectory, "rogue.ts"),
+    "app.get('/unguarded', handler);\n",
+  );
+  await writeFile(
+    join(webDirectory, "router/registry.ts"),
+    "app.on('GET', '/guarded', handler);\n",
+  );
+
+  assert.deepEqual(
+    (await findWebRouteBoundaryViolations(webDirectory)).map(
+      ({ method, line }) => ({
+        method,
+        line,
+      }),
+    ),
+    [{ method: "get", line: 1 }],
+  );
+  console.log("OK: route boundary self-test refuses direct registration");
+} finally {
+  await rm(directory, { recursive: true, force: true });
+}

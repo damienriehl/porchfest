@@ -1,24 +1,24 @@
-import { execFileSync, spawnSync } from 'node:child_process';
-import { readFile, readdir } from 'node:fs/promises';
-import { basename, extname, join, relative, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { execFileSync, spawnSync } from "node:child_process";
+import { readFile, readdir } from "node:fs/promises";
+import { basename, extname, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const PRIVATE_DIRECTORIES = new Set([
-  'private',
-  'out',
-  'raw-exports',
-  'generated-messages',
-  'generated-emails',
-  'message-bodies',
+  "private",
+  "out",
+  "raw-exports",
+  "generated-messages",
+  "generated-emails",
+  "message-bodies",
 ]);
 const RAW_EXPORT_EXTENSIONS = new Set([
-  '.csv',
-  '.tsv',
-  '.xls',
-  '.xlsx',
-  '.ods',
+  ".csv",
+  ".tsv",
+  ".xls",
+  ".xlsx",
+  ".ods",
 ]);
-const MESSAGE_EXTENSIONS = new Set(['.eml', '.mbox']);
+const MESSAGE_EXTENSIONS = new Set([".eml", ".mbox"]);
 const KNOWN_PRIVATE_FILENAMES = [
   /^submissions(?:[-_.].*)?\.json$/i,
   /^matches(?:[-_.].*)?\.json$/i,
@@ -28,18 +28,20 @@ const EMAIL_ADDRESS = /\b[A-Z0-9._%+-]+@([A-Z0-9.-]+\.[A-Z]{2,})\b/gi;
 const PHONE_NUMBER = /\b(?:\+?1[ .-])?\(?[2-9]\d{2}\)?[ .-]\d{3}[ .-]\d{4}\b/g;
 const GENERATED_BODY_HEADER =
   /(?:^|\n)(?:to|recipients):[^\n]+\nsubject:[^\n]+\n(?:content-type:|body:)/i;
-const SAFE_EMAIL_HOSTS = new Set(['example.com', 'example.net', 'example.org']);
+const SAFE_EMAIL_HOSTS = new Set(["example.com", "example.net", "example.org"]);
 
 function normalizePath(path) {
-  return path.replaceAll('\\', '/').replace(/^\.\//, '');
+  return path.replaceAll("\\", "/").replace(/^\.\//, "");
 }
 
 export function inspectPath(path, location) {
   const normalized = normalizePath(path);
-  const segments = normalized.toLowerCase().split('/');
+  const segments = normalized.toLowerCase().split("/");
   const findings = [];
 
-  const privateSegment = segments.find((segment) => PRIVATE_DIRECTORIES.has(segment));
+  const privateSegment = segments.find((segment) =>
+    PRIVATE_DIRECTORIES.has(segment),
+  );
   if (privateSegment) {
     findings.push({
       kind: `prohibited ${privateSegment}/ directory`,
@@ -49,7 +51,10 @@ export function inspectPath(path, location) {
 
   const extension = extname(normalized).toLowerCase();
   if (RAW_EXPORT_EXTENSIONS.has(extension)) {
-    findings.push({ kind: `raw export (${extension})`, location: `${location}:${normalized}` });
+    findings.push({
+      kind: `raw export (${extension})`,
+      location: `${location}:${normalized}`,
+    });
   }
   if (MESSAGE_EXTENSIONS.has(extension)) {
     findings.push({
@@ -57,8 +62,15 @@ export function inspectPath(path, location) {
       location: `${location}:${normalized}`,
     });
   }
-  if (KNOWN_PRIVATE_FILENAMES.some((pattern) => pattern.test(basename(normalized)))) {
-    findings.push({ kind: 'known participant-data artifact', location: `${location}:${normalized}` });
+  if (
+    KNOWN_PRIVATE_FILENAMES.some((pattern) =>
+      pattern.test(basename(normalized)),
+    )
+  ) {
+    findings.push({
+      kind: "known participant-data artifact",
+      location: `${location}:${normalized}`,
+    });
   }
 
   return findings;
@@ -68,7 +80,7 @@ export function inspectContent(content, path, location) {
   // UTF-16 text and deliberately obfuscated text can contain NUL bytes while
   // still carrying participant data. Removing NULs recovers the searchable
   // text without attempting to interpret arbitrary binary formats.
-  const searchableContent = content.replaceAll('\0', '');
+  const searchableContent = content.replaceAll("\0", "");
   const findings = [];
   const normalized = normalizePath(path);
 
@@ -77,40 +89,51 @@ export function inspectContent(content, path, location) {
     if (
       host &&
       !SAFE_EMAIL_HOSTS.has(host) &&
-      !host.endsWith('.example') &&
-      !host.endsWith('.invalid') &&
-      !host.endsWith('.test')
+      !host.endsWith(".example") &&
+      !host.endsWith(".invalid") &&
+      !host.endsWith(".test")
     ) {
       findings.push({
-        kind: 'possible participant email address',
+        kind: "possible participant email address",
         location: `${location}:${normalized}`,
       });
       break;
     }
   }
   if (PHONE_NUMBER.test(searchableContent)) {
-    findings.push({ kind: 'possible participant phone number', location: `${location}:${normalized}` });
+    findings.push({
+      kind: "possible participant phone number",
+      location: `${location}:${normalized}`,
+    });
   }
   PHONE_NUMBER.lastIndex = 0;
   if (GENERATED_BODY_HEADER.test(searchableContent)) {
-    findings.push({ kind: 'generated message body headers', location: `${location}:${normalized}` });
+    findings.push({
+      kind: "generated message body headers",
+      location: `${location}:${normalized}`,
+    });
   }
 
   return findings;
 }
 
-function git(args, cwd, encoding = 'utf8') {
-  return execFileSync('git', args, { cwd, encoding, maxBuffer: 64 * 1024 * 1024 });
+function git(args, cwd, encoding = "utf8") {
+  return execFileSync("git", args, {
+    cwd,
+    encoding,
+    maxBuffer: 64 * 1024 * 1024,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
 }
 
 function nulList(output) {
-  return output.split('\0').filter(Boolean);
+  return output.split("\0").filter(Boolean);
 }
 
 function treeEntries(output) {
   return nulList(output).map((entry) => {
-    const tab = entry.indexOf('\t');
-    const metadata = entry.slice(0, tab).split(' ');
+    const tab = entry.indexOf("\t");
+    const metadata = entry.slice(0, tab).split(" ");
     return { objectId: metadata[2], path: entry.slice(tab + 1) };
   });
 }
@@ -118,26 +141,32 @@ function treeEntries(output) {
 export function scanGitHistory(repoRoot) {
   let commits = [];
   try {
-    commits = git(['rev-list', '--all'], repoRoot).trim().split('\n').filter(Boolean);
+    commits = git(["rev-list", "--all"], repoRoot)
+      .trim()
+      .split("\n")
+      .filter(Boolean);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(`clean-room scan could not enumerate Git history in ${repoRoot}: ${detail}`, {
-      cause: error,
-    });
+    throw new Error(
+      `clean-room scan could not enumerate Git history in ${repoRoot}: ${detail}`,
+      {
+        cause: error,
+      },
+    );
   }
 
   const findings = [];
   const inspectedObjects = new Set();
   for (const commit of commits) {
     const shortCommit = commit.slice(0, 12);
-    const entries = treeEntries(git(['ls-tree', '-r', '-z', commit], repoRoot));
+    const entries = treeEntries(git(["ls-tree", "-r", "-z", commit], repoRoot));
     for (const { objectId, path } of entries) {
       const location = `history ${shortCommit}`;
       findings.push(...inspectPath(path, location));
       if (!objectId || inspectedObjects.has(objectId)) continue;
       inspectedObjects.add(objectId);
       try {
-        const content = git(['cat-file', 'blob', objectId], repoRoot);
+        const content = git(["cat-file", "blob", objectId], repoRoot);
         findings.push(...inspectContent(content, path, location));
       } catch {
         // A path finding already catches binary export/message formats. Other
@@ -150,14 +179,17 @@ export function scanGitHistory(repoRoot) {
 
 export async function scanWorkingTree(repoRoot) {
   const paths = nulList(
-    git(['ls-files', '-z', '--cached', '--others', '--exclude-standard'], repoRoot),
+    git(
+      ["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+      repoRoot,
+    ),
   );
   const findings = [];
   for (const path of paths) {
-    findings.push(...inspectPath(path, 'working tree'));
+    findings.push(...inspectPath(path, "working tree"));
     try {
-      const content = await readFile(resolve(repoRoot, path), 'utf8');
-      findings.push(...inspectContent(content, path, 'working tree'));
+      const content = await readFile(resolve(repoRoot, path), "utf8");
+      findings.push(...inspectContent(content, path, "working tree"));
     } catch {
       // Binary and concurrently removed files are covered by path/history checks.
     }
@@ -169,20 +201,21 @@ async function treeFiles(directory, root = directory) {
   const entries = await readdir(directory, { withFileTypes: true });
   const files = [];
   for (const entry of entries) {
-    if (['.git', 'node_modules', 'data'].includes(entry.name)) continue;
+    if ([".git", "node_modules", "data"].includes(entry.name)) continue;
     const path = join(directory, entry.name);
     if (entry.isDirectory()) files.push(...(await treeFiles(path, root)));
-    else if (entry.isFile()) files.push({ absolute: path, relative: relative(root, path) });
+    else if (entry.isFile())
+      files.push({ absolute: path, relative: relative(root, path) });
   }
   return files;
 }
 
-export async function scanTree(directory, location = 'image') {
+export async function scanTree(directory, location = "image") {
   const findings = [];
   for (const file of await treeFiles(directory)) {
     findings.push(...inspectPath(file.relative, location));
     try {
-      const content = await readFile(file.absolute, 'utf8');
+      const content = await readFile(file.absolute, "utf8");
       findings.push(...inspectContent(content, file.relative, location));
     } catch {
       // Path inspection still covers raw binary exports and mailboxes.
@@ -194,24 +227,24 @@ export async function scanTree(directory, location = 'image') {
 function scanImage(image) {
   const scriptPath = fileURLToPath(import.meta.url);
   const result = spawnSync(
-    'docker',
+    "docker",
     [
-      'run',
-      '--rm',
-      '--entrypoint',
-      'node',
-      '--mount',
+      "run",
+      "--rm",
+      "--entrypoint",
+      "node",
+      "--mount",
       `type=bind,source=${scriptPath},target=/tmp/clean-room-scan.mjs,readonly`,
       image,
-      '/tmp/clean-room-scan.mjs',
-      '--tree',
-      '/app',
-      '--skip-history',
+      "/tmp/clean-room-scan.mjs",
+      "--tree",
+      "/app",
+      "--skip-history",
     ],
-    { encoding: 'utf8' },
+    { encoding: "utf8" },
   );
-  process.stdout.write(result.stdout ?? '');
-  process.stderr.write(result.stderr ?? '');
+  process.stdout.write(result.stdout ?? "");
+  process.stderr.write(result.stderr ?? "");
   return result.status ?? 1;
 }
 
@@ -221,25 +254,28 @@ function printFindings(findings) {
     unique.set(`${finding.kind}\0${finding.location}`, finding);
   }
   for (const finding of unique.values()) {
-    console.error(`ERROR: clean-room scan found ${finding.kind} at ${finding.location}`);
+    console.error(
+      `ERROR: clean-room scan found ${finding.kind} at ${finding.location}`,
+    );
   }
   return unique.size;
 }
 
 async function main() {
   const args = process.argv.slice(2);
-  const treeIndex = args.indexOf('--tree');
-  const imageIndex = args.indexOf('--image');
+  const treeIndex = args.indexOf("--tree");
+  const imageIndex = args.indexOf("--image");
   let findings = [];
 
   if (treeIndex >= 0) {
     const tree = args[treeIndex + 1];
-    if (!tree) throw new Error('--tree requires a directory');
-    findings = await scanTree(resolve(tree), 'image');
+    if (!tree) throw new Error("--tree requires a directory");
+    findings = await scanTree(resolve(tree), "image");
   } else {
-    const repoRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
+    const repoRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
     findings.push(...(await scanWorkingTree(repoRoot)));
-    if (!args.includes('--skip-history')) findings.push(...scanGitHistory(repoRoot));
+    if (!args.includes("--skip-history"))
+      findings.push(...scanGitHistory(repoRoot));
   }
 
   if (printFindings(findings) > 0) {
@@ -249,16 +285,19 @@ async function main() {
 
   if (imageIndex >= 0) {
     const image = args[imageIndex + 1];
-    if (!image) throw new Error('--image requires an image reference');
+    if (!image) throw new Error("--image requires an image reference");
     if (scanImage(image) !== 0) {
       process.exitCode = 1;
       return;
     }
   }
 
-  console.log('OK: clean-room scan found no participant data');
+  console.log("OK: clean-room scan found no participant data");
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (
+  process.argv[1] &&
+  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
   await main();
 }
