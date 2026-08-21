@@ -3,6 +3,7 @@ import { extname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const FORBIDDEN_PACKAGES = /^@porchfest\/(?:email|antibot|geo|web)(?:\/|$)/;
+const FORBIDDEN_PACKAGE_PATH = /\/packages\/(?:email|antibot|geo|web)(?:\/|$)/;
 const IMPORT_SPECIFIER =
   /\b(?:from\s+|import\s*\(\s*|import\s+|require\s*\(\s*)['"]([^'"]+)['"]/g;
 
@@ -29,9 +30,7 @@ export async function findCoreBoundaryViolations(coreDirectory) {
       const reachesAdapter =
         FORBIDDEN_PACKAGES.test(specifier) ||
         (resolvedRelative !== null &&
-          new RegExp(`${sep}packages${sep}(?:email|antibot|geo|web)(?:${sep}|$)`).test(
-            resolvedRelative,
-          ));
+          FORBIDDEN_PACKAGE_PATH.test(resolvedRelative.split(sep).join('/')));
 
       if (reachesAdapter) violations.push({ file, specifier });
     }

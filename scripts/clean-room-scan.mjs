@@ -104,6 +104,14 @@ function nulList(output) {
   return output.split('\0').filter(Boolean);
 }
 
+function treeEntries(output) {
+  return nulList(output).map((entry) => {
+    const tab = entry.indexOf('\t');
+    const metadata = entry.slice(0, tab).split(' ');
+    return { objectId: metadata[2], path: entry.slice(tab + 1) };
+  });
+}
+
 export function scanGitHistory(repoRoot) {
   let commits = [];
   try {
@@ -113,14 +121,17 @@ export function scanGitHistory(repoRoot) {
   }
 
   const findings = [];
+  const inspectedObjects = new Set();
   for (const commit of commits) {
     const shortCommit = commit.slice(0, 12);
-    const paths = nulList(git(['ls-tree', '-r', '--name-only', '-z', commit], repoRoot));
-    for (const path of paths) {
+    const entries = treeEntries(git(['ls-tree', '-r', '-z', commit], repoRoot));
+    for (const { objectId, path } of entries) {
       const location = `history ${shortCommit}`;
       findings.push(...inspectPath(path, location));
+      if (!objectId || inspectedObjects.has(objectId)) continue;
+      inspectedObjects.add(objectId);
       try {
-        const content = git(['show', `${commit}:${path}`], repoRoot);
+        const content = git(['cat-file', 'blob', objectId], repoRoot);
         findings.push(...inspectContent(content, path, location));
       } catch {
         // A path finding already catches binary export/message formats. Other
