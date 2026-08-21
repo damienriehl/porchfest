@@ -1,0 +1,48 @@
+{
+  "name": "porchfest",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Run your own neighborhood porchfest.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Damien Riehl",
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "npm run typecheck",
+    "dev": "tsx watch packages/web/src/server.ts",
+    "start": "tsx packages/web/src/server.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:container": "bash scripts/container-smoke.sh",
+    "check:boundaries": "node scripts/check-core-boundary.mjs",
+    "check:clean-room": "node scripts/clean-room-scan.mjs",
+    "db:generate": "drizzle-kit generate"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.0.8",
+    "better-sqlite3": "^12.11.1",
+    "dotenv": "^17.4.2",
+    "drizzle-orm": "^0.45.2",
+    "hono": "^4.12.29",
+    "tsx": "^4.23.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.0",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^24.13.3",
+    "drizzle-kit": "^0.31.10",
+    "eslint": "^9.39.0",
+    "prettier": "^3.9.5",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.63.0",
+    "vitest": "^4.1.10"
+  }
+}
