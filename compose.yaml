@@ -1,8 +1,8 @@
-name: porchfest-reference
+name: ${PORCHFEST_COMPOSE_PROJECT:-porchfest-reference}
 
 services:
   app:
-    image: porchfest-ci
+    image: ${PORCHFEST_APP_IMAGE:-porchfest-ci}
     build:
       context: .
     restart: unless-stopped
@@ -23,8 +23,8 @@ services:
     environment:
       PORCHFEST_ORIGIN: ${PUBLIC_BASE_URL:-https://localhost}
     ports:
-      - "80:80"
-      - "443:443"
+      - "${PORCHFEST_HTTP_PORT_MAPPING:-80:80}"
+      - "${PORCHFEST_HTTPS_PORT_MAPPING:-443:443}"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - porchfest-caddy-data:/data
@@ -32,8 +32,8 @@ services:
 
 volumes:
   porchfest-data:
-    name: porchfest-data
+    name: ${PORCHFEST_DATA_VOLUME:-porchfest-data}
   porchfest-caddy-data:
-    name: porchfest-caddy-data
+    name: ${PORCHFEST_CADDY_DATA_VOLUME:-porchfest-caddy-data}
   porchfest-caddy-config:
-    name: porchfest-caddy-config
+    name: ${PORCHFEST_CADDY_CONFIG_VOLUME:-porchfest-caddy-config}

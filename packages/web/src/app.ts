@@ -8,7 +8,8 @@ export interface AppOptions {
 }
 
 export interface PorchfestApp {
-  readonly app: Hono;
+  readonly fetch: Hono['fetch'];
+  readonly request: Hono['request'];
   readonly routes: RouteRegistry;
 }
 
@@ -29,5 +30,9 @@ export function createApp(options: AppOptions): PorchfestApp {
     handler: (context) => context.json({ ok: true, service: 'porchfest' } as const),
   });
 
-  return { app, routes };
+  return {
+    fetch: app.fetch.bind(app),
+    request: app.request.bind(app),
+    routes,
+  };
 }

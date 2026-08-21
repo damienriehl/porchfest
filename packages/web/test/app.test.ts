@@ -10,9 +10,10 @@ describe('application scaffold', () => {
     const dataDirectory = await mkdtemp(join(tmpdir(), 'porchfest-empty-config-'));
     const runtime = await createRuntime({ env: {}, dataDirectory });
 
-    const response = await runtime.app.request('/health');
+    const response = await runtime.request('/health');
 
     expect(response.status).toBe(200);
+    expect('app' in runtime).toBe(false);
     await expect(response.json()).resolves.toEqual({ ok: true, service: 'porchfest' });
     expect(runtime.routes.list()).toEqual([
       expect.objectContaining({ method: 'GET', path: '/health', tier: 'public' }),
@@ -27,7 +28,7 @@ describe('application scaffold', () => {
     });
 
     expect(runtime.sessionSecret.length).toBeGreaterThan(0);
-    expect((await runtime.app.request('/health')).status).toBe(200);
+    expect((await runtime.request('/health')).status).toBe(200);
   });
 
   it('refuses to boot with the public placeholder configured', async () => {

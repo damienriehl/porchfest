@@ -36,23 +36,33 @@ function validateRoute(input: unknown): RouteDeclaration {
     throw new RouteRegistrationError('Route declaration must be an object; registration refused.');
   }
 
-  const route = input as Record<string, unknown>;
-  if (!isHttpMethod(route.method)) {
-    throw new RouteRegistrationError(`Route has an unknown HTTP method: ${String(route.method)}`);
+  const candidate = input as Record<string, unknown>;
+  const method = candidate.method;
+  const path = candidate.path;
+  const tier = candidate.tier;
+  const handler = candidate.handler;
+
+  if (!isHttpMethod(method)) {
+    throw new RouteRegistrationError(`Route has an unknown HTTP method: ${String(method)}`);
   }
-  if (typeof route.path !== 'string' || !route.path.startsWith('/')) {
-    throw new RouteRegistrationError(`Route has an invalid path: ${String(route.path)}`);
+  if (typeof path !== 'string' || !path.startsWith('/')) {
+    throw new RouteRegistrationError(`Route has an invalid path: ${String(path)}`);
   }
-  if (!isTrustTier(route.tier)) {
+  if (!isTrustTier(tier)) {
     throw new RouteRegistrationError(
-      `Route ${route.method} ${route.path} has a missing or unknown trust tier; registration refused.`,
+      `Route ${method} ${path} has a missing or unknown trust tier; registration refused.`,
     );
   }
-  if (typeof route.handler !== 'function') {
-    throw new RouteRegistrationError(`Route ${route.method} ${route.path} has no handler.`);
+  if (typeof handler !== 'function') {
+    throw new RouteRegistrationError(`Route ${method} ${path} has no handler.`);
   }
 
-  return route as unknown as RouteDeclaration;
+  return Object.freeze({
+    method,
+    path,
+    tier,
+    handler: handler as Handler,
+  });
 }
 
 const denyProtectedRoutes: TrustAuthorizer = () => false;

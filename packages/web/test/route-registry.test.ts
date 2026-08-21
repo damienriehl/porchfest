@@ -46,4 +46,56 @@ describe('central route registry', () => {
 
     expect((await app.request('/organizer')).status).toBe(401);
   });
+
+  it('snapshots a declaration so caller mutations cannot remove protection', async () => {
+    const app = new Hono();
+    const routes = new RouteRegistry(app);
+    const declaration: Record<string, unknown> = {
+      method: 'GET',
+      path: '/protected-snapshot',
+      tier: 'organizer',
+      handler: (context: { text: (body: string) => Response }) => context.text('organizer'),
+    };
+
+    const registered = routes.register(declaration);
+    declaration.tier = 'public';
+    declaration.handler = () => new Response('replacement');
+
+    expect(registered).not.toBe(declaration);
+    expect(Object.isFrozen(registered)).toBe(true);
+    expect((await app.request('/protected-snapshot')).status).toBe(401);
+  });
+
+  it('returns frozen declarations so registry consumers cannot remove protection', async () => {
+    const app = new Hono();
+    const routes = new RouteRegistry(app);
+    routes.register({
+      method: 'GET',
+      path: '/listed-protected-route',
+      tier: 'participant',
+      handler: (context) => context.text('participant'),
+    });
+
+    const listed = routes.list()[0];
+    expect(Object.isFrozen(listed)).toBe(true);
+    expect(() => {
+      (listed as { tier: string }).tier = 'public';
+    }).toThrow(TypeError);
+    expect((await app.request('/listed-protected-route')).status).toBe(401);
+  });
+
+  it('runs an organizer route when the authorizer grants that tier', async () => {
+    const app = new Hono();
+    const routes = new RouteRegistry(app, (tier) => tier === 'organizer');
+    routes.register({
+      method: 'GET',
+      path: '/authorized-organizer',
+      tier: 'organizer',
+      handler: (context) => context.text('organizer'),
+    });
+
+    const response = await app.request('/authorized-organizer');
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('organizer');
+  });
 });

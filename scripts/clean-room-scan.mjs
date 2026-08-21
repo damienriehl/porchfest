@@ -65,11 +65,14 @@ export function inspectPath(path, location) {
 }
 
 export function inspectContent(content, path, location) {
-  if (content.includes('\0')) return [];
+  // UTF-16 text and deliberately obfuscated text can contain NUL bytes while
+  // still carrying participant data. Removing NULs recovers the searchable
+  // text without attempting to interpret arbitrary binary formats.
+  const searchableContent = content.replaceAll('\0', '');
   const findings = [];
   const normalized = normalizePath(path);
 
-  for (const match of content.matchAll(EMAIL_ADDRESS)) {
+  for (const match of searchableContent.matchAll(EMAIL_ADDRESS)) {
     const host = match[1]?.toLowerCase();
     if (
       host &&
@@ -85,11 +88,11 @@ export function inspectContent(content, path, location) {
       break;
     }
   }
-  if (PHONE_NUMBER.test(content)) {
+  if (PHONE_NUMBER.test(searchableContent)) {
     findings.push({ kind: 'possible participant phone number', location: `${location}:${normalized}` });
   }
   PHONE_NUMBER.lastIndex = 0;
-  if (GENERATED_BODY_HEADER.test(content)) {
+  if (GENERATED_BODY_HEADER.test(searchableContent)) {
     findings.push({ kind: 'generated message body headers', location: `${location}:${normalized}` });
   }
 
@@ -116,8 +119,11 @@ export function scanGitHistory(repoRoot) {
   let commits = [];
   try {
     commits = git(['rev-list', '--all'], repoRoot).trim().split('\n').filter(Boolean);
-  } catch {
-    return [];
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`clean-room scan could not enumerate Git history in ${repoRoot}: ${detail}`, {
+      cause: error,
+    });
   }
 
   const findings = [];

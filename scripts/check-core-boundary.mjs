@@ -6,6 +6,9 @@ const FORBIDDEN_PACKAGES = /^@porchfest\/(?:email|antibot|geo|web)(?:\/|$)/;
 const FORBIDDEN_PACKAGE_PATH = /\/packages\/(?:email|antibot|geo|web)(?:\/|$)/;
 const IMPORT_SPECIFIER =
   /\b(?:from\s+|import\s*\(\s*|import\s+|require\s*\(\s*)['"]([^'"]+)['"]/g;
+const DIRECT_ROUTE_REGISTRATION =
+  /\.\s*(get|post|put|patch|delete|options|all|on|route|mount)\s*\(/g;
+const ROUTE_REGISTRY_PATH = '/router/registry.ts';
 
 async function sourceFiles(directory) {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -38,15 +41,38 @@ export async function findCoreBoundaryViolations(coreDirectory) {
   return violations;
 }
 
+export async function findWebRouteBoundaryViolations(webSourceDirectory) {
+  const violations = [];
+  for (const file of await sourceFiles(webSourceDirectory)) {
+    const normalizedFile = file.split(sep).join('/');
+    if (normalizedFile.endsWith(ROUTE_REGISTRY_PATH)) continue;
+
+    const source = await readFile(file, 'utf8');
+    for (const match of source.matchAll(DIRECT_ROUTE_REGISTRATION)) {
+      if (match.index === undefined) continue;
+      const line = source.slice(0, match.index).split('\n').length;
+      violations.push({ file, line, method: match[1] });
+    }
+  }
+  return violations;
+}
+
 async function main() {
   const repoRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
   const coreDirectory = resolve(repoRoot, 'packages/core');
-  const violations = await findCoreBoundaryViolations(coreDirectory);
+  const webSourceDirectory = resolve(repoRoot, 'packages/web/src');
+  const coreViolations = await findCoreBoundaryViolations(coreDirectory);
+  const webRouteViolations = await findWebRouteBoundaryViolations(webSourceDirectory);
 
-  if (violations.length > 0) {
-    for (const violation of violations) {
+  if (coreViolations.length > 0 || webRouteViolations.length > 0) {
+    for (const violation of coreViolations) {
       console.error(
         `ERROR: core boundary violation in ${relative(repoRoot, violation.file)}: imports ${violation.specifier}`,
+      );
+    }
+    for (const violation of webRouteViolations) {
+      console.error(
+        `ERROR: route boundary violation in ${relative(repoRoot, violation.file)}:${violation.line}: calls .${violation.method}() outside the central registry`,
       );
     }
     process.exitCode = 1;
@@ -54,6 +80,7 @@ async function main() {
   }
 
   console.log('OK: core imports no adapter package');
+  console.log('OK: web routes are registered only through the central registry');
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

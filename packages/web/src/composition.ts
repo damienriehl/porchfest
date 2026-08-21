@@ -16,8 +16,9 @@ export interface RuntimeOptions {
 
 export interface PorchfestRuntime {
   readonly adapters: AdapterPorts;
-  readonly app: Hono;
   readonly core: CoreRuntime;
+  readonly fetch: Hono['fetch'];
+  readonly request: Hono['request'];
   readonly routes: RouteRegistry;
   readonly sessionSecret: string;
 }
@@ -40,7 +41,7 @@ export async function createRuntime(options: RuntimeOptions = {}): Promise<Porch
   });
   const adapters = createAdapterSet(options.adapterOverrides);
   const core = createCore(adapters);
-  const { app, routes } = createApp({ core, authorize: options.authorize });
+  const { fetch, request, routes } = createApp({ core, authorize: options.authorize });
 
-  return { adapters, app, core, routes, sessionSecret };
+  return { adapters, core, fetch, request, routes, sessionSecret };
 }

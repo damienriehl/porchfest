@@ -10,6 +10,6 @@ if (!Number.isInteger(parsedPort) || parsedPort < 1 || parsedPort > 65_535) {
 
 const runtime = await createRuntime();
 
-serve({ fetch: runtime.app.fetch, hostname, port: parsedPort }, (info) => {
+serve({ fetch: runtime.fetch, hostname, port: parsedPort }, (info) => {
   console.log(`Porchfest listening on http://${hostname}:${info.port}`);
 });
