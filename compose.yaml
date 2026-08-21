@@ -6,6 +6,9 @@ services:
     build:
       context: .
     restart: unless-stopped
+    environment:
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+      PORCHFEST_SESSION_SECRET: ${PORCHFEST_SESSION_SECRET:-}
     volumes:
       - porchfest-data:/data
     expose:

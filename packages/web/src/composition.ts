@@ -33,9 +33,10 @@ export function createAdapterSet(overrides: Partial<AdapterPorts> = {}): Adapter
 export async function createRuntime(options: RuntimeOptions = {}): Promise<PorchfestRuntime> {
   const env = options.env ?? process.env;
   const dataDirectory = options.dataDirectory ?? env.PORCHFEST_DATA_DIR ?? './data';
+  const configuredSecret = env.PORCHFEST_SESSION_SECRET?.trim();
   const sessionSecret = await loadSessionSecret({
     dataDirectory,
-    configuredSecret: env.PORCHFEST_SESSION_SECRET,
+    configuredSecret: configuredSecret || undefined,
   });
   const adapters = createAdapterSet(options.adapterOverrides);
   const core = createCore(adapters);

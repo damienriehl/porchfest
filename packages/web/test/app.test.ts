@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createRuntime } from '../src/composition.js';
+import { SESSION_SECRET_PLACEHOLDER } from '../src/config/session-secret.js';
 
 describe('application scaffold', () => {
   it('boots with an empty configuration and serves health', async () => {
@@ -16,5 +17,27 @@ describe('application scaffold', () => {
     expect(runtime.routes.list()).toEqual([
       expect.objectContaining({ method: 'GET', path: '/health', tier: 'public' }),
     ]);
+  });
+
+  it('treats Compose empty-string interpolation as unconfigured', async () => {
+    const dataDirectory = await mkdtemp(join(tmpdir(), 'porchfest-empty-compose-env-'));
+    const runtime = await createRuntime({
+      env: { PORCHFEST_SESSION_SECRET: '' },
+      dataDirectory,
+    });
+
+    expect(runtime.sessionSecret.length).toBeGreaterThan(0);
+    expect((await runtime.app.request('/health')).status).toBe(200);
+  });
+
+  it('refuses to boot with the public placeholder configured', async () => {
+    const dataDirectory = await mkdtemp(join(tmpdir(), 'porchfest-placeholder-boot-'));
+
+    await expect(
+      createRuntime({
+        env: { PORCHFEST_SESSION_SECRET: SESSION_SECRET_PLACEHOLDER },
+        dataDirectory,
+      }),
+    ).rejects.toThrow(/placeholder/i);
   });
 });
