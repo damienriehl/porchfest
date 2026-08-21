@@ -1,101 +1,102 @@
-import { Hono } from 'hono';
-import { describe, expect, it } from 'vitest';
-import { RouteRegistry } from '../src/router/registry.js';
+import { Hono, type Context } from "hono";
+import { describe, expect, it } from "vitest";
+import { RouteRegistry } from "../src/router/registry.js";
 
-describe('central route registry', () => {
-  it('refuses a route with no trust tier and leaves it unreachable', async () => {
+describe("central route registry", () => {
+  it("refuses a route with no trust tier and leaves it unreachable", async () => {
     const app = new Hono();
     const routes = new RouteRegistry(app);
 
     expect(() =>
       routes.register({
-        method: 'GET',
-        path: '/missing-tier',
-        handler: () => new Response('should never run'),
+        method: "GET",
+        path: "/missing-tier",
+        handler: () => new Response("should never run"),
       }),
     ).toThrow(/missing or unknown trust tier/i);
 
-    expect((await app.request('/missing-tier')).status).toBe(404);
+    expect((await app.request("/missing-tier")).status).toBe(404);
   });
 
-  it('refuses an unknown trust tier and leaves it unreachable', async () => {
+  it("refuses an unknown trust tier and leaves it unreachable", async () => {
     const app = new Hono();
     const routes = new RouteRegistry(app);
 
     expect(() =>
       routes.register({
-        method: 'GET',
-        path: '/unknown-tier',
-        tier: 'trusted-somehow',
-        handler: () => new Response('should never run'),
+        method: "GET",
+        path: "/unknown-tier",
+        tier: "trusted-somehow",
+        handler: () => new Response("should never run"),
       }),
     ).toThrow(/missing or unknown trust tier/i);
 
-    expect((await app.request('/unknown-tier')).status).toBe(404);
+    expect((await app.request("/unknown-tier")).status).toBe(404);
   });
 
-  it('denies protected tiers until an authorizer grants access', async () => {
+  it("denies protected tiers until an authorizer grants access", async () => {
     const app = new Hono();
     const routes = new RouteRegistry(app);
     routes.register({
-      method: 'GET',
-      path: '/organizer',
-      tier: 'organizer',
-      handler: (context) => context.text('organizer'),
+      method: "GET",
+      path: "/organizer",
+      tier: "organizer",
+      handler: (context: Context) => context.text("organizer"),
     });
 
-    expect((await app.request('/organizer')).status).toBe(401);
+    expect((await app.request("/organizer")).status).toBe(401);
   });
 
-  it('snapshots a declaration so caller mutations cannot remove protection', async () => {
+  it("snapshots a declaration so caller mutations cannot remove protection", async () => {
     const app = new Hono();
     const routes = new RouteRegistry(app);
     const declaration: Record<string, unknown> = {
-      method: 'GET',
-      path: '/protected-snapshot',
-      tier: 'organizer',
-      handler: (context: { text: (body: string) => Response }) => context.text('organizer'),
+      method: "GET",
+      path: "/protected-snapshot",
+      tier: "organizer",
+      handler: (context: { text: (body: string) => Response }) =>
+        context.text("organizer"),
     };
 
     const registered = routes.register(declaration);
-    declaration.tier = 'public';
-    declaration.handler = () => new Response('replacement');
+    declaration.tier = "public";
+    declaration.handler = () => new Response("replacement");
 
     expect(registered).not.toBe(declaration);
     expect(Object.isFrozen(registered)).toBe(true);
-    expect((await app.request('/protected-snapshot')).status).toBe(401);
+    expect((await app.request("/protected-snapshot")).status).toBe(401);
   });
 
-  it('returns frozen declarations so registry consumers cannot remove protection', async () => {
+  it("returns frozen declarations so registry consumers cannot remove protection", async () => {
     const app = new Hono();
     const routes = new RouteRegistry(app);
     routes.register({
-      method: 'GET',
-      path: '/listed-protected-route',
-      tier: 'participant',
-      handler: (context) => context.text('participant'),
+      method: "GET",
+      path: "/listed-protected-route",
+      tier: "participant",
+      handler: (context: Context) => context.text("participant"),
     });
 
     const listed = routes.list()[0];
     expect(Object.isFrozen(listed)).toBe(true);
     expect(() => {
-      (listed as { tier: string }).tier = 'public';
+      (listed as { tier: string }).tier = "public";
     }).toThrow(TypeError);
-    expect((await app.request('/listed-protected-route')).status).toBe(401);
+    expect((await app.request("/listed-protected-route")).status).toBe(401);
   });
 
-  it('runs an organizer route when the authorizer grants that tier', async () => {
+  it("runs an organizer route when the authorizer grants that tier", async () => {
     const app = new Hono();
-    const routes = new RouteRegistry(app, (tier) => tier === 'organizer');
+    const routes = new RouteRegistry(app, (tier) => tier === "organizer");
     routes.register({
-      method: 'GET',
-      path: '/authorized-organizer',
-      tier: 'organizer',
-      handler: (context) => context.text('organizer'),
+      method: "GET",
+      path: "/authorized-organizer",
+      tier: "organizer",
+      handler: (context: Context) => context.text("organizer"),
     });
 
-    const response = await app.request('/authorized-organizer');
+    const response = await app.request("/authorized-organizer");
     expect(response.status).toBe(200);
-    expect(await response.text()).toBe('organizer');
+    expect(await response.text()).toBe("organizer");
   });
 });

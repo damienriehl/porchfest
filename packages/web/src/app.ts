@@ -1,6 +1,6 @@
-import { Hono } from 'hono';
-import type { CoreRuntime } from '@porchfest/core';
-import { RouteRegistry, type TrustAuthorizer } from './router/registry.js';
+import { Hono, type Context } from "hono";
+import type { CoreRuntime } from "@porchfest/core";
+import { RouteRegistry, type TrustAuthorizer } from "./router/registry.js";
 
 export interface AppOptions {
   readonly core: CoreRuntime;
@@ -8,8 +8,8 @@ export interface AppOptions {
 }
 
 export interface PorchfestApp {
-  readonly fetch: Hono['fetch'];
-  readonly request: Hono['request'];
+  readonly fetch: Hono["fetch"];
+  readonly request: Hono["request"];
   readonly routes: RouteRegistry;
 }
 
@@ -24,10 +24,11 @@ export function createApp(options: AppOptions): PorchfestApp {
   // The health endpoint is deliberately the first member of the canonical route
   // registry, so even the scaffold proves that reachability requires a trust tier.
   routes.register({
-    method: 'GET',
-    path: '/health',
-    tier: 'public',
-    handler: (context) => context.json({ ok: true, service: 'porchfest' } as const),
+    method: "GET",
+    path: "/health",
+    tier: "public",
+    handler: (context: Context) =>
+      context.json({ ok: true, service: "porchfest" } as const),
   });
 
   return {
