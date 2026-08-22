@@ -1,7 +1,10 @@
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, isNull, or, sql } from "drizzle-orm";
 import {
   acts,
+  assignments,
   contacts,
+  emailLog,
+  slots,
   venues,
   type Act,
   type Contact,
@@ -14,6 +17,7 @@ import {
   type RepositoryOptions,
   conflict as repositoryConflict,
 } from "./storage/repository-errors.js";
+import { SeasonLifecycleError } from "./season.js";
 
 export type ActChanges = Partial<
   Pick<
@@ -200,14 +204,34 @@ export function createRecordRepository(
         throw new RecordLifecycleError(
           "promotion records belong to different seasons",
         );
+      if (placeholder.canonicalActId !== null)
+        throw new RecordLifecycleError(
+          `act ${placeholderId} is already superseded`,
+        );
+      if (submission.canonicalActId !== null)
+        throw new RecordLifecycleError(
+          `act ${submissionId} is already superseded`,
+        );
+      const placeholderAssignment = tx
+        .select({ id: assignments.id })
+        .from(assignments)
+        .where(eq(assignments.actId, placeholderId))
+        .get();
+      const submissionAssignment = tx
+        .select({ id: assignments.id })
+        .from(assignments)
+        .where(eq(assignments.actId, submissionId))
+        .get();
+      if (placeholderAssignment && submissionAssignment)
+        throw new RecordLifecycleError("act promotion would merge assignments");
 
       const placeholderResult = tx
         .update(acts)
         .set({
           name: submission.name,
-          genre: submission.genre,
-          description: submission.description,
-          links: submission.links,
+          genre: submission.genre ?? placeholder.genre,
+          description: submission.description ?? placeholder.description,
+          links: submission.links ?? placeholder.links,
           placeholder: false,
           reachViaContactId:
             submission.reachViaContactId ?? placeholder.reachViaContactId,
@@ -220,6 +244,24 @@ export function createRecordRepository(
         .run();
       if (placeholderResult.changes !== 1)
         conflict("act", placeholderId, ["promotion"]);
+
+      tx.update(assignments)
+        .set({
+          actId: placeholderId,
+          version: sql`${assignments.version} + 1`,
+          updatedAt: now(),
+        })
+        .where(eq(assignments.actId, submissionId))
+        .run();
+      tx.update(emailLog)
+        .set({ recordId: placeholderId })
+        .where(
+          and(
+            eq(emailLog.recordType, "act"),
+            eq(emailLog.recordId, submissionId),
+          ),
+        )
+        .run();
 
       const submissionResult = tx
         .update(acts)
@@ -279,16 +321,46 @@ export function createRecordRepository(
         throw new RecordLifecycleError(
           "promotion records belong to different seasons",
         );
+      if (placeholder.canonicalVenueId !== null)
+        throw new RecordLifecycleError(
+          `venue ${placeholderId} is already superseded`,
+        );
+      if (submission.canonicalVenueId !== null)
+        throw new RecordLifecycleError(
+          `venue ${submissionId} is already superseded`,
+        );
+      const placeholderSlot = tx
+        .select({ id: slots.id })
+        .from(slots)
+        .where(
+          or(
+            eq(slots.venueId, placeholderId),
+            eq(slots.fallbackVenueId, placeholderId),
+          ),
+        )
+        .get();
+      const submissionSlot = tx
+        .select({ id: slots.id })
+        .from(slots)
+        .where(
+          or(
+            eq(slots.venueId, submissionId),
+            eq(slots.fallbackVenueId, submissionId),
+          ),
+        )
+        .get();
+      if (placeholderSlot && submissionSlot)
+        throw new RecordLifecycleError("venue promotion would merge slots");
 
       const placeholderResult = tx
         .update(venues)
         .set({
           title: submission.title,
-          address: submission.address,
-          latitude: submission.latitude,
-          longitude: submission.longitude,
-          notes: submission.notes,
-          hostContactId: submission.hostContactId,
+          address: submission.address ?? placeholder.address,
+          latitude: submission.latitude ?? placeholder.latitude,
+          longitude: submission.longitude ?? placeholder.longitude,
+          notes: submission.notes ?? placeholder.notes,
+          hostContactId: submission.hostContactId ?? placeholder.hostContactId,
           placeholder: false,
           reachViaContactId:
             submission.reachViaContactId ?? placeholder.reachViaContactId,
@@ -304,6 +376,30 @@ export function createRecordRepository(
         .run();
       if (placeholderResult.changes !== 1)
         conflict("venue", placeholderId, ["promotion"]);
+
+      tx.update(slots)
+        .set({
+          venueId: sql`case when ${slots.venueId} = ${submissionId} then ${placeholderId} else ${slots.venueId} end`,
+          fallbackVenueId: sql`case when ${slots.fallbackVenueId} = ${submissionId} then ${placeholderId} else ${slots.fallbackVenueId} end`,
+          version: sql`${slots.version} + 1`,
+          updatedAt: now(),
+        })
+        .where(
+          or(
+            eq(slots.venueId, submissionId),
+            eq(slots.fallbackVenueId, submissionId),
+          ),
+        )
+        .run();
+      tx.update(emailLog)
+        .set({ recordId: placeholderId })
+        .where(
+          and(
+            eq(emailLog.recordType, "venue"),
+            eq(emailLog.recordId, submissionId),
+          ),
+        )
+        .run();
 
       const submissionResult = tx
         .update(venues)
@@ -454,25 +550,110 @@ export function createRecordRepository(
     expectedVersion: number,
     canonicalId: number,
   ): Act {
-    const source = getAct(id);
-    const target = resolveCanonicalAct(canonicalId);
-    if (source.seasonId !== target.seasonId)
-      throw new RecordLifecycleError(
-        "supersession records belong to different seasons",
+    return db.transaction((tx) => {
+      const source = tx.select().from(acts).where(eq(acts.id, id)).get();
+      if (!source) throw new RecordLifecycleError(`act ${id} does not exist`);
+
+      let target = tx.select().from(acts).where(eq(acts.id, canonicalId)).get();
+      if (!target)
+        throw new RecordLifecycleError(`act ${canonicalId} does not exist`);
+      const seen = new Set<number>();
+      while (target.canonicalActId !== null) {
+        if (seen.has(target.id))
+          throw new RecordLifecycleError(
+            `act ${canonicalId} has a supersession cycle`,
+          );
+        seen.add(target.id);
+        const nextId: number = target.canonicalActId;
+        target = tx.select().from(acts).where(eq(acts.id, nextId)).get();
+        if (!target)
+          throw new RecordLifecycleError(`act ${nextId} does not exist`);
+      }
+
+      if (source.seasonId !== target.seasonId)
+        throw new RecordLifecycleError(
+          "supersession records belong to different seasons",
+        );
+      if (source.id === target.id)
+        throw new RecordLifecycleError("act supersession would create a cycle");
+
+      const targetCheck = tx
+        .select({ canonicalActId: acts.canonicalActId })
+        .from(acts)
+        .where(eq(acts.id, target.id))
+        .get();
+      if (!targetCheck)
+        throw new RecordLifecycleError(`act ${target.id} does not exist`);
+      if (targetCheck.canonicalActId !== null)
+        throw new RecordLifecycleError(
+          `act ${target.id} is already superseded`,
+        );
+
+      const seasonActs = tx
+        .select({ id: acts.id, canonicalActId: acts.canonicalActId })
+        .from(acts)
+        .where(eq(acts.seasonId, source.seasonId))
+        .all();
+      const canonicalActIdById = new Map(
+        seasonActs.map((act) => [act.id, act.canonicalActId]),
       );
-    if (source.id === target.id)
-      throw new RecordLifecycleError("act supersession would create a cycle");
-    const result = db
-      .update(acts)
-      .set({
-        canonicalActId: target.id,
-        version: sql`${acts.version} + 1`,
-        updatedAt: now(),
-      })
-      .where(and(eq(acts.id, id), eq(acts.version, expectedVersion)))
-      .run();
-    if (result.changes !== 1) conflict("act", id, ["canonicalActId"]);
-    return getAct(id);
+      const assignedActs = tx
+        .select({ actId: assignments.actId })
+        .from(assignments)
+        .where(eq(assignments.seasonId, source.seasonId))
+        .all();
+      const resolvesToTarget = (
+        actId: number,
+        applySupersession: boolean,
+      ): boolean => {
+        let currentId = actId;
+        const assignedSeen = new Set<number>();
+        while (currentId !== target.id) {
+          if (assignedSeen.has(currentId))
+            throw new RecordLifecycleError(
+              `act ${actId} has a supersession cycle`,
+            );
+          assignedSeen.add(currentId);
+          const nextId =
+            applySupersession && currentId === source.id
+              ? target.id
+              : canonicalActIdById.get(currentId);
+          if (nextId === undefined)
+            throw new RecordLifecycleError(`act ${currentId} does not exist`);
+          if (nextId === null) return false;
+          currentId = nextId;
+        }
+        return true;
+      };
+      const currentTargetAssignments = assignedActs.filter((assignment) =>
+        resolvesToTarget(assignment.actId, false),
+      ).length;
+      const supersededTargetAssignments = assignedActs.filter((assignment) =>
+        resolvesToTarget(assignment.actId, true),
+      ).length;
+      if (
+        supersededTargetAssignments > 1 &&
+        supersededTargetAssignments > currentTargetAssignments
+      )
+        throw new SeasonLifecycleError(
+          `canonical act ${target.id} is already assigned in season ${source.seasonId}`,
+        );
+
+      const result = tx
+        .update(acts)
+        .set({
+          canonicalActId: target.id,
+          version: sql`${acts.version} + 1`,
+          updatedAt: now(),
+        })
+        .where(and(eq(acts.id, id), eq(acts.version, expectedVersion)))
+        .run();
+      if (result.changes !== 1) conflict("act", id, ["canonicalActId"]);
+
+      const superseded = tx.select().from(acts).where(eq(acts.id, id)).get();
+      if (!superseded) throw new RecordLifecycleError(`act ${id} disappeared`);
+      return superseded;
+    });
   }
 
   function supersedeVenue(
@@ -480,25 +661,71 @@ export function createRecordRepository(
     expectedVersion: number,
     canonicalId: number,
   ): Venue {
-    const source = getVenue(id);
-    const target = resolveCanonicalVenue(canonicalId);
-    if (source.seasonId !== target.seasonId)
-      throw new RecordLifecycleError(
-        "supersession records belong to different seasons",
-      );
-    if (source.id === target.id)
-      throw new RecordLifecycleError("venue supersession would create a cycle");
-    const result = db
-      .update(venues)
-      .set({
-        canonicalVenueId: target.id,
-        version: sql`${venues.version} + 1`,
-        updatedAt: now(),
-      })
-      .where(and(eq(venues.id, id), eq(venues.version, expectedVersion)))
-      .run();
-    if (result.changes !== 1) conflict("venue", id, ["canonicalVenueId"]);
-    return getVenue(id);
+    return db.transaction((tx) => {
+      const source = tx.select().from(venues).where(eq(venues.id, id)).get();
+      if (!source) throw new RecordLifecycleError(`venue ${id} does not exist`);
+
+      let target = tx
+        .select()
+        .from(venues)
+        .where(eq(venues.id, canonicalId))
+        .get();
+      if (!target)
+        throw new RecordLifecycleError(`venue ${canonicalId} does not exist`);
+      const seen = new Set<number>();
+      while (target.canonicalVenueId !== null) {
+        if (seen.has(target.id))
+          throw new RecordLifecycleError(
+            `venue ${canonicalId} has a supersession cycle`,
+          );
+        seen.add(target.id);
+        const nextId: number = target.canonicalVenueId;
+        target = tx.select().from(venues).where(eq(venues.id, nextId)).get();
+        if (!target)
+          throw new RecordLifecycleError(`venue ${nextId} does not exist`);
+      }
+
+      if (source.seasonId !== target.seasonId)
+        throw new RecordLifecycleError(
+          "supersession records belong to different seasons",
+        );
+      if (source.id === target.id)
+        throw new RecordLifecycleError(
+          "venue supersession would create a cycle",
+        );
+
+      const targetCheck = tx
+        .select({ canonicalVenueId: venues.canonicalVenueId })
+        .from(venues)
+        .where(eq(venues.id, target.id))
+        .get();
+      if (!targetCheck)
+        throw new RecordLifecycleError(`venue ${target.id} does not exist`);
+      if (targetCheck.canonicalVenueId !== null)
+        throw new RecordLifecycleError(
+          `venue ${target.id} is already superseded`,
+        );
+
+      const result = tx
+        .update(venues)
+        .set({
+          canonicalVenueId: target.id,
+          version: sql`${venues.version} + 1`,
+          updatedAt: now(),
+        })
+        .where(and(eq(venues.id, id), eq(venues.version, expectedVersion)))
+        .run();
+      if (result.changes !== 1) conflict("venue", id, ["canonicalVenueId"]);
+
+      const superseded = tx
+        .select()
+        .from(venues)
+        .where(eq(venues.id, id))
+        .get();
+      if (!superseded)
+        throw new RecordLifecycleError(`venue ${id} disappeared`);
+      return superseded;
+    });
   }
 
   function supersedeContact(
@@ -506,27 +733,80 @@ export function createRecordRepository(
     expectedVersion: number,
     canonicalId: number,
   ): Contact {
-    const source = getContact(id);
-    const target = resolveCanonicalContact(canonicalId);
-    if (source.seasonId !== target.seasonId)
-      throw new RecordLifecycleError(
-        "supersession records belong to different seasons",
-      );
-    if (source.id === target.id)
-      throw new RecordLifecycleError(
-        "contact supersession would create a cycle",
-      );
-    const result = db
-      .update(contacts)
-      .set({
-        canonicalContactId: target.id,
-        version: sql`${contacts.version} + 1`,
-        updatedAt: now(),
-      })
-      .where(and(eq(contacts.id, id), eq(contacts.version, expectedVersion)))
-      .run();
-    if (result.changes !== 1) conflict("contact", id, ["canonicalContactId"]);
-    return getContact(id);
+    return db.transaction((tx) => {
+      const source = tx
+        .select()
+        .from(contacts)
+        .where(eq(contacts.id, id))
+        .get();
+      if (!source)
+        throw new RecordLifecycleError(`contact ${id} does not exist`);
+
+      let target = tx
+        .select()
+        .from(contacts)
+        .where(eq(contacts.id, canonicalId))
+        .get();
+      if (!target)
+        throw new RecordLifecycleError(`contact ${canonicalId} does not exist`);
+      const seen = new Set<number>();
+      while (target.canonicalContactId !== null) {
+        if (seen.has(target.id))
+          throw new RecordLifecycleError(
+            `contact ${canonicalId} has a supersession cycle`,
+          );
+        seen.add(target.id);
+        const nextId: number = target.canonicalContactId;
+        target = tx
+          .select()
+          .from(contacts)
+          .where(eq(contacts.id, nextId))
+          .get();
+        if (!target)
+          throw new RecordLifecycleError(`contact ${nextId} does not exist`);
+      }
+
+      if (source.seasonId !== target.seasonId)
+        throw new RecordLifecycleError(
+          "supersession records belong to different seasons",
+        );
+      if (source.id === target.id)
+        throw new RecordLifecycleError(
+          "contact supersession would create a cycle",
+        );
+
+      const targetCheck = tx
+        .select({ canonicalContactId: contacts.canonicalContactId })
+        .from(contacts)
+        .where(eq(contacts.id, target.id))
+        .get();
+      if (!targetCheck)
+        throw new RecordLifecycleError(`contact ${target.id} does not exist`);
+      if (targetCheck.canonicalContactId !== null)
+        throw new RecordLifecycleError(
+          `contact ${target.id} is already superseded`,
+        );
+
+      const result = tx
+        .update(contacts)
+        .set({
+          canonicalContactId: target.id,
+          version: sql`${contacts.version} + 1`,
+          updatedAt: now(),
+        })
+        .where(and(eq(contacts.id, id), eq(contacts.version, expectedVersion)))
+        .run();
+      if (result.changes !== 1) conflict("contact", id, ["canonicalContactId"]);
+
+      const superseded = tx
+        .select()
+        .from(contacts)
+        .where(eq(contacts.id, id))
+        .get();
+      if (!superseded)
+        throw new RecordLifecycleError(`contact ${id} disappeared`);
+      return superseded;
+    });
   }
 
   function listActivityQueue(seasonId: number): ActivityQueueItem[] {
