@@ -9,7 +9,7 @@ resume_focus: "Clear the four residual P2s, get Damien's two decisions, then shi
 repository: "porchfest"
 repo_root_sha: "dbf6a6dd03fa91654c65c7364dc924cd6b4160cf"
 branch: "feat/u3-schema"
-head: "ccd7223dfb093d80c087969307f334b0a5a4bb21"
+head: "2c0fb70b21a757a3e61af05c7d71f1c1382e0b4f"
 ---
 
 # Porchfest U3 after the remediation review
@@ -22,7 +22,7 @@ reviewed twice, remediated twice, and fully committed**. Seven commits sit on
 pushed** — 12 commits are ahead of `origin/main`.
 
 Working tree clean. `npm run typecheck`, `npm run lint` and `npm test` all pass;
-the suite is **148 tests across 13 files**, up from 117/11 when the first review ran.
+the suite is **152 tests across 13 files**, up from 117/11 when the first review ran.
 The full container smoke test passes end to end.
 
 ## What happened, in order
@@ -35,7 +35,11 @@ The full container smoke test passes end to end.
 3. **Second review**, of the remediation itself (`8563c2a..61887b3`) — ten reviewers
    again. This is the important one: **the fixes had introduced real defects of their
    own.** 17 findings merged to 13; the validator confirmed 8 of 9 P1s.
-4. **Second remediation** — three Codex workers, committed as `ccd7223`.
+4. **Second remediation** — three Codex workers, committed as `ccd7223` and a follow-up.
+   Note: `ccd7223` captured a green but *partial* state of the core worker, because its
+   report file was mistaken for a completion signal while the process was still alive.
+   The follow-up commit completes that work. A worker's report file is not a done signal;
+   only the process exiting is.
 
 The lesson worth carrying: reviewing a remediation was not ceremony. It found a guard
 hole with two working reproductions, a boot path that could not start at all under a
