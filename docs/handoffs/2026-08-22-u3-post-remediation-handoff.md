@@ -92,7 +92,7 @@ Neither blocks other work. Both have been raised with him and neither was answer
    rather than restructure this on its own initiative, and it did.
 2. **Where the platform plan lives.** The plan governing porchfest is at
    `docs/plans/2026-08-20-0830-feat-porchfest-platform-plan.md` **inside a worktree of a
-   different repository** (machine-local: `~/worktrees/woodshed-porchfest/`). Porchfest has
+   different repository** (its path is in the private copy). Porchfest has
    no `docs/plans/` of its own. This is the root cause of a machine-local path leaking into
    a committed handoff twice in one day, and it means a blank `ce-work` invocation cannot
    discover porchfest's own plan. Copying or moving the plan into porchfest would fix the
@@ -133,13 +133,13 @@ link, or regenerate from `docs/handoffs/` history.
 
 Two things that handoff records and a cockpit agent will need:
 
-- A worktree was prepared and left unused at `~/worktrees/cockpit-u3-learnings`
-  (machine-local), branch `docs/u3-review-learnings`, off `master`. It exists so the next
+- A worktree was prepared and left unused for that work (path in the private copy),
+  branch `docs/u3-review-learnings`, off `master`. It exists so the next
   agent does not write onto `fix/shared-sync-lock-validation`, which the main cockpit tree
   is currently sitting on.
 - Two cockpit convention violations were observed and **deliberately not touched**: the main
   tree is on a feature branch rather than `master`, and five worktrees live under
-  `cockpit/.worktrees/` rather than `~/worktrees/`. Both involve live branches; confirm with
+  the repo rather than the conventional external location. Both involve live branches; confirm with
   Damien before acting.
 
 ## Authoritative references
@@ -157,10 +157,9 @@ Two things that handoff records and a cockpit agent will need:
 - **Worker reports** — nine files under `docs/handoffs/worker-*.md`. Each records what one
   Codex worker changed and what it observed. `worker-fix-core-report.md` holds the six
   mutation observations from the final remediation.
-- **Review artifacts** — machine-local and OS-managed, so they may vanish:
-  `/tmp/compound-engineering-1000/ce-code-review/20260822-073501-c1ba0164/review.json`
-  (first review) and `/tmp/compound-engineering-1000/ce-code-review/20260822-110123-92ab300b/`
-  (second review, `final.json` plus per-reviewer artifacts).
+- **Review artifacts** — two `ce-code-review` run directories (first review and remediation
+  review), each holding the merged findings plus per-reviewer artifacts. Paths are in the
+  private copy; they are OS-managed temporary storage and may already be gone.
 
 ## Plausible next steps
 
