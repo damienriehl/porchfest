@@ -2,7 +2,7 @@
 artifact_contract: "ce-handoff/v1"
 created_at: "2026-08-22T22:10:00Z"
 title: "Porchfest U4 — adapter and core seam landed, signup forms in flight"
-summary: "U4a (anti-bot adapter) and U4c (R1 field model + transactional signup seam) are committed on feat/u4-signup-forms; U4b (public signup forms) is dispatched with an approved design direction. Nothing pushed."
+summary: "U4a, U4b and U4c are all committed on feat/u4-signup-forms. U4b (the signup forms) is committed but UNREVIEWED — its worker was killed mid-run. Nothing pushed."
 keywords:
   [
     "porchfest",
@@ -13,7 +13,7 @@ keywords:
     "ktd7",
     "core-executor",
   ]
-resume_focus: "Verify U4b's output, then ship U4"
+resume_focus: "Review fb83eef line by line, verify both forms in a browser, then ship U4"
 repository: "porchfest"
 branch: "feat/u4-signup-forms"
 ---
@@ -33,7 +33,14 @@ branch: "feat/u4-signup-forms"
   Per-IP limiting plus honeypot is the unconfigured default, and `X-Forwarded-For` is
   ignored entirely unless a trusted-proxy hop count is configured (KTD10).
 - `cd2c975` — **U4c, R1 field model and the creation seam.** See below.
-- **U4b is dispatched and running** as worker `pf-u4b-signup2`.
+- `fb83eef` — **U4b, the public signup forms. COMMITTED BUT NOT REVIEWED.** Its worker's
+  wrapper was killed mid-run and the process outlived it, so this landed on evidence
+  rather than a clean completion signal: the tree was unchanged for 11 minutes, all four
+  gates passed, all nine of the plan's test scenarios are covered by name plus five more,
+  and every route declares a trust tier. **What has not happened is a line-by-line review
+  of the diff or browser verification of the two forms at desktop and mobile widths.**
+  Both must happen before U4 ships. Treat this commit as a draft that passes its tests.
+- `fd80e4d` — this handoff.
 
 All six CI gates pass on the branch: `check:clean-room`, `check:boundaries`, `typecheck`,
 `test`, `lint`, `format:check`. **`format:check` is the one that gets forgotten** — it is a
