@@ -572,6 +572,81 @@ describe("season domain", () => {
     ).toEqual({ canonical_act_id: placeholder.id });
   });
 
+  it("allows act promotion when only the submission family is assigned", () => {
+    const season = insertSeason(2105, "assigning");
+    const venueId = insertVenue(season.id, "Submission-only Promotion Venue");
+    const slot = insertSlot(season.id, venueId);
+    const placeholder = insertVersionedAct(
+      season.id,
+      "Unassigned Placeholder",
+      true,
+    );
+    const submission = insertVersionedAct(
+      season.id,
+      "Assigned Legal Submission",
+    );
+    seasonRepository.assignSlot(slot.id, slot.version, submission.id);
+
+    const promoted = seasonRepository.promotePlaceholderAct(
+      placeholder.id,
+      placeholder.version,
+      submission.id,
+      submission.version,
+    );
+
+    expect(promoted).toMatchObject({
+      id: placeholder.id,
+      name: "Assigned Legal Submission",
+      placeholder: false,
+    });
+  });
+
+  it("allows act promotion when it does not worsen an existing duplicate target family", () => {
+    const season = insertSeason(2105, "assigning");
+    const venueId = insertVenue(season.id, "Non-worsening Promotion Venue");
+    const firstSlot = insertSlot(season.id, venueId);
+    const secondSlot = insertSlot(season.id, venueId, 2);
+    const placeholder = insertVersionedAct(
+      season.id,
+      "Already-duplicated Placeholder",
+      true,
+    );
+    const firstChild = insertVersionedAct(season.id, "First Existing Child");
+    const secondChild = insertVersionedAct(season.id, "Second Existing Child");
+    const submission = insertVersionedAct(
+      season.id,
+      "Non-worsening Submission",
+    );
+    sqlite
+      .prepare("update acts set canonical_act_id = ? where id in (?, ?)")
+      .run(placeholder.id, firstChild.id, secondChild.id);
+    sqlite
+      .prepare(
+        "insert into assignments (season_id, act_id, slot_id) values (?, ?, ?), (?, ?, ?)",
+      )
+      .run(
+        season.id,
+        firstChild.id,
+        firstSlot.id,
+        season.id,
+        secondChild.id,
+        secondSlot.id,
+      );
+
+    const promoted = seasonRepository.promotePlaceholderAct(
+      placeholder.id,
+      placeholder.version,
+      submission.id,
+      submission.version,
+    );
+
+    expect(promoted).toMatchObject({
+      id: placeholder.id,
+      name: "Non-worsening Submission",
+      placeholder: false,
+    });
+  });
+
   it("keeps descendant-family supersession collisions in the season wrapper", () => {
     const season = insertSeason(2105, "assigning");
     const venueId = insertVenue(season.id, "Descendant Collision Venue");
@@ -604,6 +679,38 @@ describe("season domain", () => {
 
     expect(() =>
       seasonRepository.supersedeAct(source.id, source.version, target.id),
+    ).toThrowError(
+      `canonical act ${target.id} is already assigned in season ${season.id}`,
+    );
+    expect(
+      sqlite
+        .prepare("select canonical_act_id, version from acts where id = ?")
+        .get(source.id),
+    ).toEqual({ canonical_act_id: null, version: source.version });
+  });
+
+  it("resolves a superseded target alias before checking assignment collisions", () => {
+    const season = insertSeason(2105, "assigning");
+    const venueId = insertVenue(season.id, "Target-alias Collision Venue");
+    const targetSlot = insertSlot(season.id, venueId);
+    const sourceSlot = insertSlot(season.id, venueId, 2);
+    const target = insertVersionedAct(season.id, "Canonical Alias Target");
+    const targetAlias = insertVersionedAct(season.id, "Target Alias");
+    const source = insertVersionedAct(season.id, "Alias-collision Source");
+    seasonRepository.assignSlot(targetSlot.id, targetSlot.version, target.id);
+    seasonRepository.supersedeAct(
+      targetAlias.id,
+      targetAlias.version,
+      target.id,
+    );
+    seasonRepository.assignSlot(sourceSlot.id, sourceSlot.version, source.id);
+
+    expect(() =>
+      seasonRepository.supersedeAct(
+        source.id,
+        source.version,
+        targetAlias.id,
+      ),
     ).toThrowError(
       `canonical act ${target.id} is already assigned in season ${season.id}`,
     );
@@ -671,6 +778,45 @@ describe("season domain", () => {
         )
         .get(venue.id),
     ).toEqual({ reach_via_contact_id: null, version: venue.version });
+  });
+
+  it("allows same-season contact links and clearing them with null", () => {
+    const season = insertSeason(2105, "setup");
+    const contactId = insertContact(season.id, "Same-season Contact");
+    const act = insertVersionedAct(season.id, "Same-season Contact Act");
+    const venue = insertVersionedVenue(season.id, "Same-season Contact Venue");
+
+    const linkedAct = seasonRepository.updateAct(act.id, act.version, {
+      reachViaContactId: contactId,
+    });
+    const linkedVenue = seasonRepository.updateVenue(
+      venue.id,
+      venue.version,
+      {
+        hostContactId: contactId,
+        reachViaContactId: contactId,
+      },
+    );
+    const clearedAct = seasonRepository.updateAct(
+      linkedAct.id,
+      linkedAct.version,
+      { reachViaContactId: null },
+    );
+    const clearedVenue = seasonRepository.updateVenue(
+      linkedVenue.id,
+      linkedVenue.version,
+      { hostContactId: null, reachViaContactId: null },
+    );
+
+    expect(clearedAct).toMatchObject({
+      reachViaContactId: null,
+      version: act.version + 2,
+    });
+    expect(clearedVenue).toMatchObject({
+      hostContactId: null,
+      reachViaContactId: null,
+      version: venue.version + 2,
+    });
   });
 
   it("excludes and refuses a canonical act already assigned under a superseded identity", () => {

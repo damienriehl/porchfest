@@ -76,8 +76,12 @@ export class RecordLifecycleError extends RepositoryLifecycleError {
 
 export type RecordRepositoryOptions = RepositoryOptions;
 
+type CoreTransaction = Parameters<
+  Parameters<CoreDatabase["transaction"]>[0]
+>[0];
+
 export function createRecordRepository(
-  db: CoreDatabase,
+  db: CoreDatabase | CoreTransaction,
   options: RecordRepositoryOptions = {},
 ) {
   const now = options.now ?? (() => new Date());

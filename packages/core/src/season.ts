@@ -201,12 +201,13 @@ export function createSeasonRepository(
   }
 
   function assertActFamilyMergeLegal(
+    reader: Pick<CoreDatabase, "select">,
     seasonId: number,
     sourceActId: number,
     targetActId: number,
     collisionMessage: (canonicalTargetId: number) => string,
   ): void {
-    const seasonActs = db
+    const seasonActs = reader
       .select({ id: acts.id, canonicalActId: acts.canonicalActId })
       .from(acts)
       .where(eq(acts.seasonId, seasonId))
@@ -214,7 +215,7 @@ export function createSeasonRepository(
     const canonicalActIdById = new Map(
       seasonActs.map((act) => [act.id, act.canonicalActId]),
     );
-    const assignedActs = db
+    const assignedActs = reader
       .select({ actId: assignments.actId })
       .from(assignments)
       .where(eq(assignments.seasonId, seasonId))
@@ -340,28 +341,34 @@ export function createSeasonRepository(
     submissionId: number,
     submissionVersion: number,
   ): Act {
-    const placeholder = getAct(placeholderId);
-    assertCorrectionLegal(placeholder.seasonId);
-    const submission = getAct(submissionId);
-    if (
-      placeholder.placeholder &&
-      !submission.placeholder &&
-      placeholder.seasonId === submission.seasonId &&
-      placeholder.canonicalActId === null &&
-      submission.canonicalActId === null
-    ) {
-      assertActFamilyMergeLegal(
-        placeholder.seasonId,
-        submission.id,
-        placeholder.id,
-        () => "act promotion would merge assignments",
-      );
-    }
-    return records.promotePlaceholderAct(
-      placeholderId,
-      placeholderVersion,
-      submissionId,
-      submissionVersion,
+    return db.transaction(
+      (tx) => {
+        const placeholder = getAct(placeholderId);
+        assertCorrectionLegal(placeholder.seasonId);
+        const submission = getAct(submissionId);
+        if (
+          placeholder.placeholder &&
+          !submission.placeholder &&
+          placeholder.seasonId === submission.seasonId &&
+          placeholder.canonicalActId === null &&
+          submission.canonicalActId === null
+        ) {
+          assertActFamilyMergeLegal(
+            tx,
+            placeholder.seasonId,
+            submission.id,
+            placeholder.id,
+            () => "act promotion would merge assignments",
+          );
+        }
+        return createRecordRepository(tx, options).promotePlaceholderAct(
+          placeholderId,
+          placeholderVersion,
+          submissionId,
+          submissionVersion,
+        );
+      },
+      { behavior: "immediate" },
     );
   }
 
@@ -385,19 +392,29 @@ export function createSeasonRepository(
     expectedVersion: number,
     canonicalId: number,
   ): Act {
-    const source = getAct(id);
-    assertCorrectionLegal(source.seasonId);
-    const target = getAct(canonicalId);
-    if (source.seasonId === target.seasonId && source.id !== target.id) {
-      assertActFamilyMergeLegal(
-        source.seasonId,
-        source.id,
-        target.id,
-        (canonicalTargetId) =>
-          `canonical act ${canonicalTargetId} is already assigned in season ${source.seasonId}`,
-      );
-    }
-    return records.supersedeAct(id, expectedVersion, canonicalId);
+    return db.transaction(
+      (tx) => {
+        const source = getAct(id);
+        assertCorrectionLegal(source.seasonId);
+        const target = getAct(canonicalId);
+        if (source.seasonId === target.seasonId && source.id !== target.id) {
+          assertActFamilyMergeLegal(
+            tx,
+            source.seasonId,
+            source.id,
+            target.id,
+            (canonicalTargetId) =>
+              `canonical act ${canonicalTargetId} is already assigned in season ${source.seasonId}`,
+          );
+        }
+        return createRecordRepository(tx, options).supersedeAct(
+          id,
+          expectedVersion,
+          canonicalId,
+        );
+      },
+      { behavior: "immediate" },
+    );
   }
 
   function supersedeVenue(
