@@ -102,10 +102,19 @@ docker exec \
     const Database = require("better-sqlite3");
     new Database(process.env.PORCHFEST_EMPTY_DATABASE_PATH).close();
   '
-if assert_schema_ready "$container" "$empty_database" >/dev/null 2>&1; then
+expected_empty_database_error="Missing migrated tables: acts, annotations, assignments, contacts, email_log, seasons, slots, venues"
+empty_database_probe_output=""
+if empty_database_probe_output="$(assert_schema_ready "$container" "$empty_database" 2>&1)"; then
   echo "ERROR: schema readiness probe accepted an empty database" >&2
   exit 1
 fi
+if [[ "$empty_database_probe_output" != *"$expected_empty_database_error"* ]]; then
+  echo "ERROR: schema readiness probe failed for a non-schema reason while checking an empty database" >&2
+  echo "Probe output:" >&2
+  printf '%s\n' "$empty_database_probe_output" >&2
+  exit 1
+fi
+printf '%s\n' "$empty_database_probe_output"
 
 docker run --rm --entrypoint node "$image" -e \
   "const fs=require('node:fs');const p=['core','web','email','antibot','geo'];if(p.some(x=>!fs.existsSync('/app/packages/'+x)))process.exit(1)"
