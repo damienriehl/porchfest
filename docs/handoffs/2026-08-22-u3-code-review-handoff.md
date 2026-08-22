@@ -7,7 +7,7 @@ Written 2026-08-22. The work is done and committed. What remains is one command.
     cd ~/Coding\ Projects/porchfest
     # then invoke the skill:
     ce-code-review mode:agent base:7d40d23 \
-      plan:/home/damienriehl/worktrees/woodshed-porchfest/docs/plans/2026-08-20-0830-feat-porchfest-platform-plan.md
+      plan:2026-08-20-0830-feat-porchfest-platform-plan.md  # porchfest platform plan in its own worktree
 
 Pass this structure pin into the invocation, because a reviewer optimizing for
 tidiness will propose exactly the change that breaks the guarantee:

@@ -9,6 +9,7 @@ const expectedTables = [
   "annotations",
   "assignments",
   "contacts",
+  "email_log",
   "seasons",
   "slots",
   "venues",
