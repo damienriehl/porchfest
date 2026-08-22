@@ -1,4 +1,5 @@
 import { NullAntibotAdapter } from "@porchfest/antibot";
+import type { UnconfiguredAntibotGuardOptions } from "@porchfest/antibot";
 import {
   CORE_DATABASE_FILENAME,
   createCore,
@@ -9,6 +10,7 @@ import {
 import { NullEmailAdapter } from "@porchfest/email";
 import { NullGeoAdapter } from "@porchfest/geo";
 import type { Hono } from "hono";
+import type { Context } from "hono";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { createApp } from "./app.js";
@@ -20,6 +22,8 @@ export interface RuntimeOptions {
   readonly authorize?: TrustAuthorizer;
   readonly dataDirectory?: string;
   readonly env?: Readonly<Record<string, string | undefined>>;
+  readonly resolveSocketPeerAddress?: (context: Context) => string | null;
+  readonly signupGuardOptions?: UnconfiguredAntibotGuardOptions;
 }
 
 export interface PorchfestRuntime {
@@ -55,6 +59,10 @@ export async function createRuntime(
     configuredSecret: configuredSecret || undefined,
   });
   const adapters = createAdapterSet(options.adapterOverrides);
+  const publicBaseUrl = parsePublicBaseUrl(env.PUBLIC_BASE_URL);
+  const trustedProxyHops = parseTrustedProxyHops(
+    env.PORCHFEST_TRUSTED_PROXY_HOPS,
+  );
   const databaseConnection = openCoreDatabase(
     join(dataDirectory, CORE_DATABASE_FILENAME),
   );
@@ -64,6 +72,11 @@ export async function createRuntime(
     const { fetch, request, routes } = createApp({
       core,
       authorize: options.authorize,
+      csrfSecret: sessionSecret,
+      publicBaseUrl,
+      resolveSocketPeerAddress: options.resolveSocketPeerAddress,
+      signupGuardOptions: options.signupGuardOptions,
+      trustedProxyHops,
     });
 
     return {
@@ -83,4 +96,40 @@ export async function createRuntime(
     }
     throw error;
   }
+}
+
+function parsePublicBaseUrl(value: string | undefined): string | null {
+  const configured = value?.trim();
+  if (!configured) return null;
+  let url: URL;
+  try {
+    url = new URL(configured);
+  } catch {
+    throw new TypeError("PUBLIC_BASE_URL must be an absolute http(s) URL.");
+  }
+  if (
+    (url.protocol !== "http:" && url.protocol !== "https:") ||
+    url.username ||
+    url.password ||
+    url.pathname !== "/" ||
+    url.search ||
+    url.hash
+  ) {
+    throw new TypeError(
+      "PUBLIC_BASE_URL must contain only an http(s) origin, with no credentials, path, query, or fragment.",
+    );
+  }
+  return url.origin;
+}
+
+function parseTrustedProxyHops(value: string | undefined): number | undefined {
+  const configured = value?.trim();
+  if (!configured) return undefined;
+  const hops = Number(configured);
+  if (!Number.isSafeInteger(hops) || hops < 0) {
+    throw new TypeError(
+      "PORCHFEST_TRUSTED_PROXY_HOPS must be a non-negative integer.",
+    );
+  }
+  return hops;
 }

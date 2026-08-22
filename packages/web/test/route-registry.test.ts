@@ -99,4 +99,150 @@ describe("central route registry", () => {
     expect(response.status).toBe(200);
     expect(await response.text()).toBe("organizer");
   });
+
+  it("centrally refuses a mutation from the wrong origin", async () => {
+    const app = new Hono();
+    const routes = new RouteRegistry(app, undefined, {
+      allowedOrigin: "https://porchfest.example",
+      validateCsrf: (token) => token === "valid-token",
+    });
+    routes.register({
+      method: "POST",
+      path: "/public-mutation",
+      tier: "public",
+      handler: (context: Context) => context.text("mutated"),
+    });
+
+    const response = await app.request(
+      "https://porchfest.example/public-mutation",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          origin: "https://marketing.example",
+        },
+        body: new URLSearchParams({ _csrf: "valid-token" }),
+      },
+    );
+
+    expect(response.status).toBe(403);
+  });
+
+  it("centrally refuses a mutation without its form CSRF token", async () => {
+    const app = new Hono();
+    const routes = new RouteRegistry(app, undefined, {
+      allowedOrigin: "https://porchfest.example",
+      validateCsrf: (token) => token === "valid-token",
+    });
+    routes.register({
+      method: "POST",
+      path: "/public-mutation",
+      tier: "public",
+      handler: (context: Context) => context.text("mutated"),
+    });
+
+    const response = await app.request(
+      "https://porchfest.example/public-mutation",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          origin: "https://porchfest.example",
+        },
+        body: new URLSearchParams(),
+      },
+    );
+
+    expect(response.status).toBe(403);
+  });
+
+  it("centrally refuses a simple text content type before the handler", async () => {
+    const app = new Hono();
+    const routes = new RouteRegistry(app, undefined, {
+      allowedOrigin: "https://porchfest.example",
+      validateCsrf: () => true,
+    });
+    routes.register({
+      method: "POST",
+      path: "/public-mutation",
+      tier: "public",
+      handler: (context: Context) => context.text("mutated"),
+    });
+
+    const response = await app.request(
+      "https://porchfest.example/public-mutation",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "text/plain",
+          origin: "https://porchfest.example",
+          "x-csrf-token": "valid-token",
+        },
+        body: "mutation",
+      },
+    );
+
+    expect(response.status).toBe(415);
+  });
+
+  it("centrally refuses an oversized mutation before parsing its form body", async () => {
+    const app = new Hono();
+    const routes = new RouteRegistry(app, undefined, {
+      allowedOrigin: "https://porchfest.example",
+      validateCsrf: () => true,
+    });
+    routes.register({
+      method: "POST",
+      path: "/public-mutation",
+      tier: "public",
+      handler: (context: Context) => context.text("mutated"),
+    });
+
+    const response = await app.request(
+      "https://porchfest.example/public-mutation",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          origin: "https://porchfest.example",
+        },
+        body: new URLSearchParams({
+          _csrf: "valid-token",
+          oversized: "x".repeat(65 * 1024),
+        }),
+      },
+    );
+
+    expect(response.status).toBe(413);
+  });
+
+  it("admits an exact-origin mutation carrying a valid form token", async () => {
+    const app = new Hono();
+    const routes = new RouteRegistry(app, undefined, {
+      allowedOrigin: "https://porchfest.example",
+      validateCsrf: (token, route) =>
+        token === "valid-token" && route.path === "/public-mutation",
+    });
+    routes.register({
+      method: "POST",
+      path: "/public-mutation",
+      tier: "public",
+      handler: (context: Context) => context.text("mutated"),
+    });
+
+    const response = await app.request(
+      "https://porchfest.example/public-mutation",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          origin: "https://porchfest.example",
+        },
+        body: new URLSearchParams({ _csrf: "valid-token" }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("mutated");
+  });
 });
