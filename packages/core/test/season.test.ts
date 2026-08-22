@@ -3,9 +3,13 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   SeasonActionError,
   SeasonConflictError,
+  SeasonLifecycleError,
   createSeasonRepository,
   isSeasonActionLegal,
+  type SeasonAction,
+  type SeasonState,
 } from "../src/season.js";
+import { seasonStates } from "../src/storage/schema.js";
 import { openTestDatabase, type TestDatabase } from "./support/db.js";
 
 describe("season domain", () => {
@@ -56,14 +60,23 @@ describe("season domain", () => {
     ).id;
   }
 
+  function insertVersionedAct(
+    seasonId: number,
+    name: string,
+    placeholder = false,
+  ): { id: number; version: number } {
+    return sqlite
+      .prepare(
+        "insert into acts (season_id, name, placeholder) values (?, ?, ?) returning id, version",
+      )
+      .get(seasonId, name, placeholder ? 1 : 0) as {
+      id: number;
+      version: number;
+    };
+  }
+
   function insertAct(seasonId: number, name: string): number {
-    return (
-      sqlite
-        .prepare(
-          "insert into acts (season_id, name) values (?, ?) returning id",
-        )
-        .get(seasonId, name) as { id: number }
-    ).id;
+    return insertVersionedAct(seasonId, name).id;
   }
 
   function insertSlot(
@@ -82,6 +95,38 @@ describe("season domain", () => {
       version: number;
     };
   }
+
+  it("matches the documented legality policy for every season state and action", () => {
+    const legalByAction: Readonly<
+      Record<SeasonAction, readonly SeasonState[]>
+    > = {
+      assignment: ["signups_open", "signups_closed", "assigning"],
+      hold: ["setup", "signups_open", "signups_closed", "assigning"],
+      hold_release: [
+        "setup",
+        "signups_open",
+        "signups_closed",
+        "assigning",
+        "locked",
+      ],
+      correction: [
+        "setup",
+        "signups_open",
+        "signups_closed",
+        "assigning",
+        "locked",
+      ],
+    };
+    const actions = Object.keys(legalByAction) as SeasonAction[];
+
+    for (const state of seasonStates) {
+      for (const action of actions) {
+        expect(isSeasonActionLegal(state, action)).toBe(
+          legalByAction[action].includes(state),
+        );
+      }
+    }
+  });
 
   it("reports an expired named hold as releasable but keeps it blocking until explicitly released", () => {
     const season = insertSeason(2105, "assigning");
@@ -151,6 +196,93 @@ describe("season domain", () => {
       state: "open",
       fallbackVenueId: null,
     });
+  });
+
+  it("refuses a stale slot version when placing a hold and leaves the row unchanged", () => {
+    const season = insertSeason(2105, "assigning");
+    const venueId = insertVenue(season.id, "Concurrent Hold Venue");
+    const slot = insertSlot(season.id, venueId);
+    sqlite
+      .prepare("update slots set version = version + 1 where id = ?")
+      .run(slot.id);
+    const before = sqlite
+      .prepare(
+        "select state, held_decide_by, held_for_name, fallback_venue_id, version from slots where id = ?",
+      )
+      .get(slot.id);
+
+    let thrown: unknown;
+    try {
+      seasonRepository.holdSlot(slot.id, slot.version, {
+        heldForName: "Stale Hold",
+        decideBy: new Date(pinnedNow.getTime() + 3600_000),
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(SeasonConflictError);
+    expect(thrown).toMatchObject({
+      recordType: "slot",
+      recordId: slot.id,
+      conflictingFields: [
+        "state",
+        "heldDecideBy",
+        "heldForName",
+        "fallbackVenueId",
+      ],
+    });
+    expect(
+      sqlite
+        .prepare(
+          "select state, held_decide_by, held_for_name, fallback_venue_id, version from slots where id = ?",
+        )
+        .get(slot.id),
+    ).toEqual(before);
+  });
+
+  it("refuses a stale slot version when releasing a hold and leaves the row unchanged", () => {
+    const season = insertSeason(2105, "assigning");
+    const venueId = insertVenue(season.id, "Concurrent Release Venue");
+    const slot = insertSlot(season.id, venueId);
+    const held = seasonRepository.holdSlot(slot.id, slot.version, {
+      heldForName: "Held Across Concurrent Write",
+      decideBy: new Date(pinnedNow.getTime() + 3600_000),
+    });
+    sqlite
+      .prepare("update slots set version = version + 1 where id = ?")
+      .run(slot.id);
+    const before = sqlite
+      .prepare(
+        "select state, held_decide_by, held_for_name, fallback_venue_id, version from slots where id = ?",
+      )
+      .get(slot.id);
+
+    let thrown: unknown;
+    try {
+      seasonRepository.releaseSlotHold(held.id, held.version);
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(SeasonConflictError);
+    expect(thrown).toMatchObject({
+      recordType: "slot",
+      recordId: slot.id,
+      conflictingFields: [
+        "state",
+        "heldDecideBy",
+        "heldForName",
+        "fallbackVenueId",
+      ],
+    });
+    expect(
+      sqlite
+        .prepare(
+          "select state, held_decide_by, held_for_name, fallback_venue_id, version from slots where id = ?",
+        )
+        .get(slot.id),
+    ).toEqual(before);
   });
 
   it("assigns while signups are open and applies the slot version guard", () => {
@@ -229,6 +361,136 @@ describe("season domain", () => {
         actId: oldActId,
       }),
     ).toThrowError(`assignment ${assignment.id} conflict: actId`);
+  });
+
+  it("refuses record corrections, promotions, and supersessions after archival", () => {
+    const season = insertSeason(2105, "archived");
+    const correctionTarget = insertVersionedAct(
+      season.id,
+      "Archived Correction Target",
+    );
+    const placeholder = insertVersionedAct(
+      season.id,
+      "Archived Placeholder",
+      true,
+    );
+    const submission = insertVersionedAct(season.id, "Archived Submission");
+    const supersessionSource = insertVersionedAct(
+      season.id,
+      "Archived Supersession Source",
+    );
+    const canonical = insertVersionedAct(season.id, "Archived Canonical Act");
+
+    expect(() =>
+      seasonRepository.updateAct(
+        correctionTarget.id,
+        correctionTarget.version,
+        { name: "Forbidden Correction" },
+      ),
+    ).toThrowError("season state archived refuses action correction");
+    expect(() =>
+      seasonRepository.promotePlaceholderAct(
+        placeholder.id,
+        placeholder.version,
+        submission.id,
+        submission.version,
+      ),
+    ).toThrowError("season state archived refuses action correction");
+    expect(() =>
+      seasonRepository.supersedeAct(
+        supersessionSource.id,
+        supersessionSource.version,
+        canonical.id,
+      ),
+    ).toThrowError("season state archived refuses action correction");
+    expect(
+      sqlite
+        .prepare("select name from acts where id = ?")
+        .get(correctionTarget.id),
+    ).toEqual({ name: "Archived Correction Target" });
+  });
+
+  it("excludes and refuses a canonical act already assigned under a superseded identity", () => {
+    const season = insertSeason(2105, "assigning");
+    const venueId = insertVenue(season.id, "Supersession Venue");
+    const assignedSlot = insertSlot(season.id, venueId);
+    const openSlot = insertSlot(season.id, venueId, 2);
+    const canonical = insertVersionedAct(season.id, "Canonical Band");
+    const superseded = insertVersionedAct(season.id, "Former Band Name");
+    seasonRepository.assignSlot(
+      assignedSlot.id,
+      assignedSlot.version,
+      superseded.id,
+    );
+    seasonRepository.supersedeAct(
+      superseded.id,
+      superseded.version,
+      canonical.id,
+    );
+
+    expect(seasonRepository.listAssignmentSuggestions(season.id)).toEqual([]);
+    expect(() =>
+      seasonRepository.assignSlot(openSlot.id, openSlot.version, canonical.id),
+    ).toThrowError(
+      `canonical act ${canonical.id} is already assigned in season ${season.id}`,
+    );
+    expect(
+      sqlite
+        .prepare("select state, version from slots where id = ?")
+        .get(openSlot.id),
+    ).toEqual({ state: "open", version: openSlot.version });
+    expect(
+      sqlite
+        .prepare(
+          "select count(*) as count from assignments where season_id = ?",
+        )
+        .get(season.id),
+    ).toEqual({ count: 1 });
+  });
+
+  it("refuses an assignment correction that would duplicate a canonical act", () => {
+    const season = insertSeason(2105, "assigning");
+    const venueId = insertVenue(season.id, "Correction Conflict Venue");
+    const firstSlot = insertSlot(season.id, venueId);
+    const secondSlot = insertSlot(season.id, venueId, 2);
+    const canonical = insertVersionedAct(season.id, "Canonical Correction Act");
+    const superseded = insertVersionedAct(season.id, "Old Correction Act");
+    const other = insertVersionedAct(season.id, "Other Assigned Act");
+    seasonRepository.assignSlot(firstSlot.id, firstSlot.version, superseded.id);
+    const otherAssignment = seasonRepository.assignSlot(
+      secondSlot.id,
+      secondSlot.version,
+      other.id,
+    );
+    seasonRepository.supersedeAct(
+      superseded.id,
+      superseded.version,
+      canonical.id,
+    );
+
+    let thrown: unknown;
+    try {
+      seasonRepository.correctAssignment(
+        otherAssignment.id,
+        otherAssignment.version,
+        { actId: canonical.id },
+      );
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(SeasonLifecycleError);
+    expect(thrown).toMatchObject({
+      message: `canonical act ${canonical.id} is already assigned in season ${season.id}`,
+    });
+    expect(
+      sqlite
+        .prepare("select act_id, version from assignments where id = ?")
+        .get(otherAssignment.id),
+    ).toEqual({
+      act_id: other.id,
+      version: otherAssignment.version,
+    });
   });
 
   it("keeps queues, assignments, suggestions, and email waves season-scoped", () => {
