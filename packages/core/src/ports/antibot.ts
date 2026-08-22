@@ -3,10 +3,15 @@ export interface AntibotRequest {
   readonly ipAddress: string;
 }
 
-export interface AntibotResult {
-  readonly status: "passed" | "failed" | "not-configured";
-  readonly reason?: string;
-}
+export type AntibotResult =
+  | {
+      readonly status: "passed";
+      readonly reason?: never;
+    }
+  | {
+      readonly status: "failed" | "not-configured" | "unavailable";
+      readonly reason: string;
+    };
 
 export interface AntibotPort {
   readonly name: string;
