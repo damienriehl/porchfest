@@ -1,5 +1,4 @@
 import { and, eq, isNull, sql } from "drizzle-orm";
-import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import {
   acts,
   contacts,
@@ -8,7 +7,13 @@ import {
   type Contact,
   type Venue,
 } from "./storage/schema.js";
-import * as schema from "./storage/schema.js";
+import {
+  type CoreDatabase,
+  RepositoryConflictError,
+  RepositoryLifecycleError,
+  type RepositoryOptions,
+  conflict as repositoryConflict,
+} from "./storage/repository-errors.js";
 
 export type ActChanges = Partial<
   Pick<
@@ -48,38 +53,25 @@ export interface RecordResolution<T> {
   superseded: T[];
 }
 
-export class RecordConflictError extends Error {
-  readonly recordType: "act" | "venue" | "contact";
-  readonly recordId: number;
-  readonly conflictingFields: readonly string[];
-
+export class RecordConflictError extends RepositoryConflictError<
+  "act" | "venue" | "contact"
+> {
   constructor(
     recordType: "act" | "venue" | "contact",
     recordId: number,
     conflictingFields: readonly string[],
   ) {
-    const fields =
-      conflictingFields.length > 0 ? conflictingFields : ["version"];
-    super(`${recordType} ${recordId} conflict: ${fields.join(", ")}`);
-    this.name = "RecordConflictError";
-    this.recordType = recordType;
-    this.recordId = recordId;
-    this.conflictingFields = fields;
+    super("RecordConflictError", recordType, recordId, conflictingFields);
   }
 }
 
-export class RecordLifecycleError extends Error {
+export class RecordLifecycleError extends RepositoryLifecycleError {
   constructor(message: string) {
-    super(message);
-    this.name = "RecordLifecycleError";
+    super("RecordLifecycleError", message);
   }
 }
 
-export interface RecordRepositoryOptions {
-  now?: () => Date;
-}
-
-type CoreDatabase = BetterSQLite3Database<typeof schema>;
+export type RecordRepositoryOptions = RepositoryOptions;
 
 export function createRecordRepository(
   db: CoreDatabase,
@@ -92,7 +84,12 @@ export function createRecordRepository(
     recordId: number,
     fields: readonly string[],
   ): never {
-    throw new RecordConflictError(recordType, recordId, fields);
+    return repositoryConflict(
+      RecordConflictError,
+      recordType,
+      recordId,
+      fields,
+    );
   }
 
   function getAct(id: number): Act {
@@ -336,7 +333,7 @@ export function createRecordRepository(
     });
   }
 
-  function resolveAct(id: number): RecordResolution<Act> {
+  function resolveCanonicalAct(id: number): Act {
     let canonical = getAct(id);
     const seen = new Set<number>();
     while (canonical.canonicalActId !== null) {
@@ -345,27 +342,36 @@ export function createRecordRepository(
       seen.add(canonical.id);
       canonical = getAct(canonical.canonicalActId);
     }
-    const family = db
+    return canonical;
+  }
+
+  function resolveAct(id: number): RecordResolution<Act> {
+    const canonical = resolveCanonicalAct(id);
+    const familyRows = db
       .select()
       .from(acts)
       .where(eq(acts.seasonId, canonical.seasonId))
-      .all()
-      .filter((candidate) => {
-        if (candidate.id === canonical.id) return false;
-        let current = candidate;
-        const candidateSeen = new Set<number>();
-        while (current.canonicalActId !== null) {
-          if (candidateSeen.has(current.id)) return false;
-          candidateSeen.add(current.id);
-          if (current.canonicalActId === canonical.id) return true;
-          current = getAct(current.canonicalActId);
-        }
-        return false;
-      });
+      .all();
+    const familyById = new Map(familyRows.map((record) => [record.id, record]));
+    familyById.set(canonical.id, canonical);
+    const family = familyRows.filter((candidate) => {
+      if (candidate.id === canonical.id) return false;
+      let current = candidate;
+      const candidateSeen = new Set<number>();
+      while (current.canonicalActId !== null) {
+        if (candidateSeen.has(current.id)) return false;
+        candidateSeen.add(current.id);
+        if (current.canonicalActId === canonical.id) return true;
+        current =
+          familyById.get(current.canonicalActId) ??
+          getAct(current.canonicalActId);
+      }
+      return false;
+    });
     return { canonical, superseded: family };
   }
 
-  function resolveVenue(id: number): RecordResolution<Venue> {
+  function resolveCanonicalVenue(id: number): Venue {
     let canonical = getVenue(id);
     const seen = new Set<number>();
     while (canonical.canonicalVenueId !== null) {
@@ -374,27 +380,36 @@ export function createRecordRepository(
       seen.add(canonical.id);
       canonical = getVenue(canonical.canonicalVenueId);
     }
-    const family = db
+    return canonical;
+  }
+
+  function resolveVenue(id: number): RecordResolution<Venue> {
+    const canonical = resolveCanonicalVenue(id);
+    const familyRows = db
       .select()
       .from(venues)
       .where(eq(venues.seasonId, canonical.seasonId))
-      .all()
-      .filter((candidate) => {
-        if (candidate.id === canonical.id) return false;
-        let current = candidate;
-        const candidateSeen = new Set<number>();
-        while (current.canonicalVenueId !== null) {
-          if (candidateSeen.has(current.id)) return false;
-          candidateSeen.add(current.id);
-          if (current.canonicalVenueId === canonical.id) return true;
-          current = getVenue(current.canonicalVenueId);
-        }
-        return false;
-      });
+      .all();
+    const familyById = new Map(familyRows.map((record) => [record.id, record]));
+    familyById.set(canonical.id, canonical);
+    const family = familyRows.filter((candidate) => {
+      if (candidate.id === canonical.id) return false;
+      let current = candidate;
+      const candidateSeen = new Set<number>();
+      while (current.canonicalVenueId !== null) {
+        if (candidateSeen.has(current.id)) return false;
+        candidateSeen.add(current.id);
+        if (current.canonicalVenueId === canonical.id) return true;
+        current =
+          familyById.get(current.canonicalVenueId) ??
+          getVenue(current.canonicalVenueId);
+      }
+      return false;
+    });
     return { canonical, superseded: family };
   }
 
-  function resolveContact(id: number): RecordResolution<Contact> {
+  function resolveCanonicalContact(id: number): Contact {
     let canonical = getContact(id);
     const seen = new Set<number>();
     while (canonical.canonicalContactId !== null) {
@@ -405,23 +420,32 @@ export function createRecordRepository(
       seen.add(canonical.id);
       canonical = getContact(canonical.canonicalContactId);
     }
-    const family = db
+    return canonical;
+  }
+
+  function resolveContact(id: number): RecordResolution<Contact> {
+    const canonical = resolveCanonicalContact(id);
+    const familyRows = db
       .select()
       .from(contacts)
       .where(eq(contacts.seasonId, canonical.seasonId))
-      .all()
-      .filter((candidate) => {
-        if (candidate.id === canonical.id) return false;
-        let current = candidate;
-        const candidateSeen = new Set<number>();
-        while (current.canonicalContactId !== null) {
-          if (candidateSeen.has(current.id)) return false;
-          candidateSeen.add(current.id);
-          if (current.canonicalContactId === canonical.id) return true;
-          current = getContact(current.canonicalContactId);
-        }
-        return false;
-      });
+      .all();
+    const familyById = new Map(familyRows.map((record) => [record.id, record]));
+    familyById.set(canonical.id, canonical);
+    const family = familyRows.filter((candidate) => {
+      if (candidate.id === canonical.id) return false;
+      let current = candidate;
+      const candidateSeen = new Set<number>();
+      while (current.canonicalContactId !== null) {
+        if (candidateSeen.has(current.id)) return false;
+        candidateSeen.add(current.id);
+        if (current.canonicalContactId === canonical.id) return true;
+        current =
+          familyById.get(current.canonicalContactId) ??
+          getContact(current.canonicalContactId);
+      }
+      return false;
+    });
     return { canonical, superseded: family };
   }
 
@@ -431,7 +455,7 @@ export function createRecordRepository(
     canonicalId: number,
   ): Act {
     const source = getAct(id);
-    const target = resolveAct(canonicalId).canonical;
+    const target = resolveCanonicalAct(canonicalId);
     if (source.seasonId !== target.seasonId)
       throw new RecordLifecycleError(
         "supersession records belong to different seasons",
@@ -457,7 +481,7 @@ export function createRecordRepository(
     canonicalId: number,
   ): Venue {
     const source = getVenue(id);
-    const target = resolveVenue(canonicalId).canonical;
+    const target = resolveCanonicalVenue(canonicalId);
     if (source.seasonId !== target.seasonId)
       throw new RecordLifecycleError(
         "supersession records belong to different seasons",
@@ -483,7 +507,7 @@ export function createRecordRepository(
     canonicalId: number,
   ): Contact {
     const source = getContact(id);
-    const target = resolveContact(canonicalId).canonical;
+    const target = resolveCanonicalContact(canonicalId);
     if (source.seasonId !== target.seasonId)
       throw new RecordLifecycleError(
         "supersession records belong to different seasons",
@@ -542,17 +566,17 @@ export function createRecordRepository(
     recordType: "act" | "venue",
     recordId: number,
   ): Contact[] {
-    const recipientIds =
-      recordType === "act"
-        ? [resolveAct(recordId).canonical.reachViaContactId]
-        : (() => {
-            const record = resolveVenue(recordId).canonical;
-            return [record.hostContactId, record.reachViaContactId];
-          })();
+    let recipientIds: (number | null)[];
+    if (recordType === "act") {
+      recipientIds = [resolveCanonicalAct(recordId).reachViaContactId];
+    } else {
+      const record = resolveCanonicalVenue(recordId);
+      recipientIds = [record.hostContactId, record.reachViaContactId];
+    }
     const resolved = new Map<number, Contact>();
     for (const contactId of recipientIds) {
       if (contactId === null) continue;
-      const canonical = resolveContact(contactId).canonical;
+      const canonical = resolveCanonicalContact(contactId);
       if (canonical.email !== null) resolved.set(canonical.id, canonical);
     }
     return [...resolved.values()];

@@ -66,7 +66,10 @@ export const contacts = sqliteTable(
     ),
     ...mutableColumns(),
   },
-  (table) => [index("contacts_season_id_idx").on(table.seasonId)],
+  (table) => [
+    index("contacts_season_id_idx").on(table.seasonId),
+    index("contacts_email_idx").on(table.email),
+  ],
 );
 
 export const venues = sqliteTable(
@@ -141,6 +144,7 @@ export const slots = sqliteTable(
   },
   (table) => [
     index("slots_season_id_idx").on(table.seasonId),
+    index("slots_season_id_state_idx").on(table.seasonId, table.state),
     check(
       "slots_state_check",
       sql`${table.state} in ('open', 'held', 'assigned')`,

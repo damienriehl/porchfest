@@ -1,11 +1,8 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { readFile } from "node:fs/promises";
 import Database from "better-sqlite3";
-import { drizzle } from "drizzle-orm/better-sqlite3";
-import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { seasonStates, slotStates } from "../src/storage/schema.js";
+import { openTestDatabase, type TestDatabase } from "./support/db.js";
 
 const expectedTables = [
   "acts",
@@ -18,22 +15,16 @@ const expectedTables = [
 ];
 
 describe("core schema migration", () => {
-  let temporaryDirectory: string;
+  let database: TestDatabase;
   let sqlite: Database.Database;
 
   beforeAll(async () => {
-    temporaryDirectory = await mkdtemp(join(tmpdir(), "porchfest-schema-"));
-    sqlite = new Database(join(temporaryDirectory, "schema.db"));
-    sqlite.pragma("foreign_keys = ON");
-
-    migrate(drizzle(sqlite), {
-      migrationsFolder: fileURLToPath(new URL("../drizzle", import.meta.url)),
-    });
+    database = await openTestDatabase("porchfest-schema-");
+    sqlite = database.sqlite;
   });
 
   afterAll(async () => {
-    sqlite.close();
-    await rm(temporaryDirectory, { recursive: true, force: true });
+    await database.close();
   });
 
   it("creates every domain table", () => {
@@ -66,6 +57,27 @@ describe("core schema migration", () => {
         )
         .run(season.id, venue.id, 4_102_444_800, 4_102_448_400, "invalid"),
     ).toThrow();
+  });
+
+  it("keeps migration state checks aligned with the schema state lists", async () => {
+    const migration = await readFile(
+      new URL("../drizzle/0000_overconfident_joseph.sql", import.meta.url),
+      "utf8",
+    );
+    const constraintValues = (constraintName: string): string[] => {
+      const values = migration.match(
+        new RegExp(
+          `CONSTRAINT "${constraintName}" CHECK\\([^\\n]*? in \\(([^)]*)\\)\\)`,
+        ),
+      )?.[1];
+      if (values === undefined) {
+        throw new Error(`migration constraint ${constraintName} not found`);
+      }
+      return values.split(",").map((value) => value.trim().replaceAll("'", ""));
+    };
+
+    expect(constraintValues("seasons_state_check")).toEqual(seasonStates);
+    expect(constraintValues("slots_state_check")).toEqual(slotStates);
   });
 
   it("defaults the optimistic-concurrency version to one", () => {

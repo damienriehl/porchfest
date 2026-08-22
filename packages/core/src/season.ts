@@ -1,5 +1,4 @@
 import { and, desc, eq, isNull, lt, lte, ne, sql } from "drizzle-orm";
-import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { createRecordRepository } from "./records.js";
 import {
   acts,
@@ -17,6 +16,13 @@ import {
   type Slot,
 } from "./storage/schema.js";
 import * as schema from "./storage/schema.js";
+import {
+  type CoreDatabase,
+  RepositoryConflictError,
+  RepositoryLifecycleError,
+  type RepositoryOptions,
+  conflict as repositoryConflict,
+} from "./storage/repository-errors.js";
 
 /*
  * Policy choices not fixed by the product requirements:
@@ -73,36 +79,25 @@ export class SeasonActionError extends Error {
   }
 }
 
-export class SeasonConflictError extends Error {
-  readonly recordType: "season" | "slot" | "assignment";
-  readonly recordId: number;
-  readonly conflictingFields: readonly string[];
-
+export class SeasonConflictError extends RepositoryConflictError<
+  "season" | "slot" | "assignment"
+> {
   constructor(
     recordType: "season" | "slot" | "assignment",
     recordId: number,
     conflictingFields: readonly string[],
   ) {
-    const fields =
-      conflictingFields.length > 0 ? conflictingFields : ["version"];
-    super(`${recordType} ${recordId} conflict: ${fields.join(", ")}`);
-    this.name = "SeasonConflictError";
-    this.recordType = recordType;
-    this.recordId = recordId;
-    this.conflictingFields = fields;
+    super("SeasonConflictError", recordType, recordId, conflictingFields);
   }
 }
 
-export class SeasonLifecycleError extends Error {
+export class SeasonLifecycleError extends RepositoryLifecycleError {
   constructor(message: string) {
-    super(message);
-    this.name = "SeasonLifecycleError";
+    super("SeasonLifecycleError", message);
   }
 }
 
-export interface SeasonRepositoryOptions {
-  now?: () => Date;
-}
+export type SeasonRepositoryOptions = RepositoryOptions;
 
 export interface SlotHold {
   heldForName: string;
@@ -127,8 +122,6 @@ export interface PriorSeasonContact {
 
 export type AssignmentCorrection = Partial<Pick<Assignment, "actId">>;
 
-type CoreDatabase = BetterSQLite3Database<typeof schema>;
-
 export function createSeasonRepository(
   db: CoreDatabase,
   options: SeasonRepositoryOptions = {},
@@ -141,7 +134,12 @@ export function createSeasonRepository(
     recordId: number,
     fields: readonly string[],
   ): never {
-    throw new SeasonConflictError(recordType, recordId, fields);
+    return repositoryConflict(
+      SeasonConflictError,
+      recordType,
+      recordId,
+      fields,
+    );
   }
 
   function getSeason(id: number): Season {

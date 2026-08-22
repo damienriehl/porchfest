@@ -1,10 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
-import { drizzle } from "drizzle-orm/better-sqlite3";
-import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   SeasonActionError,
@@ -12,30 +6,24 @@ import {
   createSeasonRepository,
   isSeasonActionLegal,
 } from "../src/season.js";
-import * as schema from "../src/storage/schema.js";
+import { openTestDatabase, type TestDatabase } from "./support/db.js";
 
 describe("season domain", () => {
-  let temporaryDirectory: string;
+  let database: TestDatabase;
   let sqlite: Database.Database;
   let seasonRepository: ReturnType<typeof createSeasonRepository>;
   const pinnedNow = new Date("2105-06-01T12:00:00.000Z");
 
   beforeEach(async () => {
-    temporaryDirectory = await mkdtemp(join(tmpdir(), "porchfest-season-"));
-    sqlite = new Database(join(temporaryDirectory, "season.db"));
-    sqlite.pragma("foreign_keys = ON");
-    const db = drizzle(sqlite, { schema });
-    migrate(db, {
-      migrationsFolder: fileURLToPath(new URL("../drizzle", import.meta.url)),
-    });
-    seasonRepository = createSeasonRepository(db, {
+    database = await openTestDatabase("porchfest-season-");
+    sqlite = database.sqlite;
+    seasonRepository = createSeasonRepository(database.db, {
       now: () => pinnedNow,
     });
   });
 
   afterEach(async () => {
-    sqlite.close();
-    await rm(temporaryDirectory, { recursive: true, force: true });
+    await database.close();
   });
 
   function insertSeason(

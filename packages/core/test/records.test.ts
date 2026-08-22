@@ -1,34 +1,24 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
-import { drizzle } from "drizzle-orm/better-sqlite3";
-import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { RecordConflictError, createRecordRepository } from "../src/records.js";
+import { openTestDatabase, type TestDatabase } from "./support/db.js";
 
 describe("record lifecycle", () => {
-  let temporaryDirectory: string;
+  let database: TestDatabase;
   let sqlite: Database.Database;
   let records: ReturnType<typeof createRecordRepository>;
   const pinnedNow = new Date("2102-06-01T12:00:00.123Z");
 
   beforeEach(async () => {
-    temporaryDirectory = await mkdtemp(join(tmpdir(), "porchfest-records-"));
-    sqlite = new Database(join(temporaryDirectory, "records.db"));
-    sqlite.pragma("foreign_keys = ON");
-    migrate(drizzle(sqlite), {
-      migrationsFolder: fileURLToPath(new URL("../drizzle", import.meta.url)),
-    });
-    records = createRecordRepository(drizzle(sqlite), {
+    database = await openTestDatabase("porchfest-records-");
+    sqlite = database.sqlite;
+    records = createRecordRepository(database.db, {
       now: () => pinnedNow,
     });
   });
 
   afterEach(async () => {
-    sqlite.close();
-    await rm(temporaryDirectory, { recursive: true, force: true });
+    await database.close();
   });
 
   function insertSeason(): number {
