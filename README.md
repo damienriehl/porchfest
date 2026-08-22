@@ -90,6 +90,20 @@ npm run check:boundaries
 npm run check:clean-room
 ```
 
+### Workspace packages
+
+- `@porchfest/core` — Domain and storage ports shared across the application.
+- `@porchfest/web` — Node HTTP server, composition root, and route registry.
+- `@porchfest/email` — Email provider seam and zero-configuration null adapter.
+- `@porchfest/geo` — Geocoding provider seam and zero-configuration null adapter.
+- `@porchfest/antibot` — Anti-bot provider seam and zero-configuration null adapter.
+- `@porchfest/map` — Interactive venue map with hour and genre filters, geographic sort, and
+  card-to-pin navigation, shipped as browser assets for a server package to mount; it requires
+  Leaflet on the host page and nothing else.
+
+The platform does not yet serve the map: there is no static-asset route and nothing serves venue
+JSON, so `@porchfest/map` is currently mountable but not mounted.
+
 `core` owns domain and storage ports and may never import an adapter package. `web` is the only
 composition root. Every HTTP route must enter through its central registry with one of three trust
 tiers: `public`, `participant`, or `organizer`. Missing and unknown tiers are rejected before the
