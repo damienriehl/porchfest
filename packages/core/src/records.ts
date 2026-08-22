@@ -17,7 +17,6 @@ import {
   type RepositoryOptions,
   conflict as repositoryConflict,
 } from "./storage/repository-errors.js";
-import { SeasonLifecycleError } from "./season.js";
 
 export type ActChanges = Partial<
   Pick<
@@ -212,19 +211,6 @@ export function createRecordRepository(
         throw new RecordLifecycleError(
           `act ${submissionId} is already superseded`,
         );
-      const placeholderAssignment = tx
-        .select({ id: assignments.id })
-        .from(assignments)
-        .where(eq(assignments.actId, placeholderId))
-        .get();
-      const submissionAssignment = tx
-        .select({ id: assignments.id })
-        .from(assignments)
-        .where(eq(assignments.actId, submissionId))
-        .get();
-      if (placeholderAssignment && submissionAssignment)
-        throw new RecordLifecycleError("act promotion would merge assignments");
-
       const placeholderResult = tx
         .update(acts)
         .set({
@@ -587,56 +573,6 @@ export function createRecordRepository(
       if (targetCheck.canonicalActId !== null)
         throw new RecordLifecycleError(
           `act ${target.id} is already superseded`,
-        );
-
-      const seasonActs = tx
-        .select({ id: acts.id, canonicalActId: acts.canonicalActId })
-        .from(acts)
-        .where(eq(acts.seasonId, source.seasonId))
-        .all();
-      const canonicalActIdById = new Map(
-        seasonActs.map((act) => [act.id, act.canonicalActId]),
-      );
-      const assignedActs = tx
-        .select({ actId: assignments.actId })
-        .from(assignments)
-        .where(eq(assignments.seasonId, source.seasonId))
-        .all();
-      const resolvesToTarget = (
-        actId: number,
-        applySupersession: boolean,
-      ): boolean => {
-        let currentId = actId;
-        const assignedSeen = new Set<number>();
-        while (currentId !== target.id) {
-          if (assignedSeen.has(currentId))
-            throw new RecordLifecycleError(
-              `act ${actId} has a supersession cycle`,
-            );
-          assignedSeen.add(currentId);
-          const nextId =
-            applySupersession && currentId === source.id
-              ? target.id
-              : canonicalActIdById.get(currentId);
-          if (nextId === undefined)
-            throw new RecordLifecycleError(`act ${currentId} does not exist`);
-          if (nextId === null) return false;
-          currentId = nextId;
-        }
-        return true;
-      };
-      const currentTargetAssignments = assignedActs.filter((assignment) =>
-        resolvesToTarget(assignment.actId, false),
-      ).length;
-      const supersededTargetAssignments = assignedActs.filter((assignment) =>
-        resolvesToTarget(assignment.actId, true),
-      ).length;
-      if (
-        supersededTargetAssignments > 1 &&
-        supersededTargetAssignments > currentTargetAssignments
-      )
-        throw new SeasonLifecycleError(
-          `canonical act ${target.id} is already assigned in season ${source.seasonId}`,
         );
 
       const result = tx

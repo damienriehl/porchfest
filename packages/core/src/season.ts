@@ -200,12 +200,99 @@ export function createSeasonRepository(
     }
   }
 
+  function assertActFamilyMergeLegal(
+    seasonId: number,
+    sourceActId: number,
+    targetActId: number,
+    collisionMessage: (canonicalTargetId: number) => string,
+  ): void {
+    const seasonActs = db
+      .select({ id: acts.id, canonicalActId: acts.canonicalActId })
+      .from(acts)
+      .where(eq(acts.seasonId, seasonId))
+      .all();
+    const canonicalActIdById = new Map(
+      seasonActs.map((act) => [act.id, act.canonicalActId]),
+    );
+    const assignedActs = db
+      .select({ actId: assignments.actId })
+      .from(assignments)
+      .where(eq(assignments.seasonId, seasonId))
+      .all();
+
+    let canonicalTargetId = targetActId;
+    const targetSeen = new Set<number>();
+    while (true) {
+      if (targetSeen.has(canonicalTargetId)) {
+        throw new SeasonLifecycleError(
+          `act ${targetActId} has a supersession cycle`,
+        );
+      }
+      targetSeen.add(canonicalTargetId);
+      const nextTargetId = canonicalActIdById.get(canonicalTargetId);
+      if (nextTargetId === undefined) {
+        throw new SeasonLifecycleError(
+          `act ${canonicalTargetId} does not exist`,
+        );
+      }
+      if (nextTargetId === null) break;
+      canonicalTargetId = nextTargetId;
+    }
+
+    const resolvesToTarget = (actId: number, applyMerge: boolean): boolean => {
+      let currentId = actId;
+      const assignedSeen = new Set<number>();
+      while (currentId !== canonicalTargetId) {
+        if (assignedSeen.has(currentId)) {
+          throw new SeasonLifecycleError(
+            `act ${actId} has a supersession cycle`,
+          );
+        }
+        assignedSeen.add(currentId);
+        const nextId =
+          applyMerge && currentId === sourceActId
+            ? canonicalTargetId
+            : canonicalActIdById.get(currentId);
+        if (nextId === undefined) {
+          throw new SeasonLifecycleError(`act ${currentId} does not exist`);
+        }
+        if (nextId === null) return false;
+        currentId = nextId;
+      }
+      return true;
+    };
+    const currentTargetAssignments = assignedActs.filter((assignment) =>
+      resolvesToTarget(assignment.actId, false),
+    ).length;
+    const mergedTargetAssignments = assignedActs.filter((assignment) =>
+      resolvesToTarget(assignment.actId, true),
+    ).length;
+    if (
+      mergedTargetAssignments > 1 &&
+      mergedTargetAssignments > currentTargetAssignments
+    ) {
+      throw new SeasonLifecycleError(collisionMessage(canonicalTargetId));
+    }
+  }
+
   function updateAct(
     id: number,
     expectedVersion: number,
     changes: ActChanges,
   ): Act {
-    assertCorrectionLegal(getAct(id).seasonId);
+    const act = getAct(id);
+    assertCorrectionLegal(act.seasonId);
+    if (
+      changes.reachViaContactId !== undefined &&
+      changes.reachViaContactId !== null
+    ) {
+      const contact = getContact(changes.reachViaContactId);
+      if (contact.seasonId !== act.seasonId) {
+        throw new SeasonLifecycleError(
+          "reach-via contact and act belong to different seasons",
+        );
+      }
+    }
     return records.updateAct(id, expectedVersion, changes);
   }
 
@@ -214,7 +301,27 @@ export function createSeasonRepository(
     expectedVersion: number,
     changes: VenueChanges,
   ): Venue {
-    assertCorrectionLegal(getVenue(id).seasonId);
+    const venue = getVenue(id);
+    assertCorrectionLegal(venue.seasonId);
+    if (changes.hostContactId !== undefined && changes.hostContactId !== null) {
+      const contact = getContact(changes.hostContactId);
+      if (contact.seasonId !== venue.seasonId) {
+        throw new SeasonLifecycleError(
+          "host contact and venue belong to different seasons",
+        );
+      }
+    }
+    if (
+      changes.reachViaContactId !== undefined &&
+      changes.reachViaContactId !== null
+    ) {
+      const contact = getContact(changes.reachViaContactId);
+      if (contact.seasonId !== venue.seasonId) {
+        throw new SeasonLifecycleError(
+          "reach-via contact and venue belong to different seasons",
+        );
+      }
+    }
     return records.updateVenue(id, expectedVersion, changes);
   }
 
@@ -233,7 +340,23 @@ export function createSeasonRepository(
     submissionId: number,
     submissionVersion: number,
   ): Act {
-    assertCorrectionLegal(getAct(placeholderId).seasonId);
+    const placeholder = getAct(placeholderId);
+    assertCorrectionLegal(placeholder.seasonId);
+    const submission = getAct(submissionId);
+    if (
+      placeholder.placeholder &&
+      !submission.placeholder &&
+      placeholder.seasonId === submission.seasonId &&
+      placeholder.canonicalActId === null &&
+      submission.canonicalActId === null
+    ) {
+      assertActFamilyMergeLegal(
+        placeholder.seasonId,
+        submission.id,
+        placeholder.id,
+        () => "act promotion would merge assignments",
+      );
+    }
     return records.promotePlaceholderAct(
       placeholderId,
       placeholderVersion,
@@ -262,7 +385,18 @@ export function createSeasonRepository(
     expectedVersion: number,
     canonicalId: number,
   ): Act {
-    assertCorrectionLegal(getAct(id).seasonId);
+    const source = getAct(id);
+    assertCorrectionLegal(source.seasonId);
+    const target = getAct(canonicalId);
+    if (source.seasonId === target.seasonId && source.id !== target.id) {
+      assertActFamilyMergeLegal(
+        source.seasonId,
+        source.id,
+        target.id,
+        (canonicalTargetId) =>
+          `canonical act ${canonicalTargetId} is already assigned in season ${source.seasonId}`,
+      );
+    }
     return records.supersedeAct(id, expectedVersion, canonicalId);
   }
 

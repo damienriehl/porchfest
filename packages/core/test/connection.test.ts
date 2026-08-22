@@ -1,8 +1,9 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import Database from "better-sqlite3";
 import { sql } from "drizzle-orm";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CORE_DATABASE_FILENAME, openCoreDatabase } from "../src/index.js";
 import { contacts } from "../src/storage/schema.js";
 
@@ -22,6 +23,7 @@ describe("core database connection", () => {
   let temporaryDirectory: string | undefined;
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     closeDatabase?.();
     if (temporaryDirectory) {
       await rm(temporaryDirectory, { recursive: true, force: true });
@@ -29,6 +31,8 @@ describe("core database connection", () => {
   });
 
   it("migrates a file database and enforces foreign keys", async () => {
+    const pragmaSpy = vi.spyOn(Database.prototype, "pragma");
+
     temporaryDirectory = await mkdtemp(join(tmpdir(), "porchfest-connection-"));
     const connection = openCoreDatabase(
       join(temporaryDirectory, CORE_DATABASE_FILENAME),
@@ -44,6 +48,7 @@ describe("core database connection", () => {
       sql`pragma foreign_keys`,
     );
 
+    expect(pragmaSpy).toHaveBeenCalledWith("foreign_keys = ON");
     expect(tableNames).toEqual(expect.arrayContaining(expectedTables));
     expect(foreignKeys).toEqual({ foreign_keys: 1 });
     expect(() =>

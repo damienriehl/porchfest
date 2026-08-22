@@ -435,9 +435,12 @@ describe("record lifecycle", () => {
         "insert into assignments (season_id, act_id, slot_id) values (?, ?, ?)",
       )
       .run(seasonId, submission.id, slot.id);
+    const seasonRecords = createSeasonRepository(database.db, {
+      now: () => pinnedNow,
+    });
 
     expect(() =>
-      records.promotePlaceholderAct(
+      seasonRecords.promotePlaceholderAct(
         placeholder.id,
         placeholder.version,
         submission.id,

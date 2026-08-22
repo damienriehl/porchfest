@@ -51,12 +51,27 @@ describe("season domain", () => {
   }
 
   function insertVenue(seasonId: number, title: string): number {
+    return insertVersionedVenue(seasonId, title).id;
+  }
+
+  function insertVersionedVenue(
+    seasonId: number,
+    title: string,
+  ): { id: number; version: number } {
+    return sqlite
+      .prepare(
+        "insert into venues (season_id, title) values (?, ?) returning id, version",
+      )
+      .get(seasonId, title) as { id: number; version: number };
+  }
+
+  function insertContact(seasonId: number, name: string): number {
     return (
       sqlite
         .prepare(
-          "insert into venues (season_id, title) values (?, ?) returning id",
+          "insert into contacts (season_id, name) values (?, ?) returning id",
         )
-        .get(seasonId, title) as { id: number }
+        .get(seasonId, name) as { id: number }
     ).id;
   }
 
@@ -408,6 +423,254 @@ describe("season domain", () => {
         .prepare("select name from acts where id = ?")
         .get(correctionTarget.id),
     ).toEqual({ name: "Archived Correction Target" });
+  });
+
+  it("refuses act promotion when an assigned superseded child belongs to the placeholder family", () => {
+    const season = insertSeason(2105, "assigning");
+    const venueId = insertVenue(
+      season.id,
+      "Placeholder-family Collision Venue",
+    );
+    const placeholderSlot = insertSlot(season.id, venueId);
+    const submissionSlot = insertSlot(season.id, venueId, 2);
+    const placeholder = insertVersionedAct(
+      season.id,
+      "Canonical Placeholder",
+      true,
+    );
+    const placeholderChild = insertVersionedAct(
+      season.id,
+      "Duplicate Placeholder Child",
+    );
+    const submission = insertVersionedAct(season.id, "Assigned Submission");
+    seasonRepository.assignSlot(
+      placeholderSlot.id,
+      placeholderSlot.version,
+      placeholderChild.id,
+    );
+    seasonRepository.supersedeAct(
+      placeholderChild.id,
+      placeholderChild.version,
+      placeholder.id,
+    );
+    seasonRepository.assignSlot(
+      submissionSlot.id,
+      submissionSlot.version,
+      submission.id,
+    );
+    const actsBefore = sqlite
+      .prepare(
+        "select id, name, placeholder, canonical_act_id, version from acts order by id",
+      )
+      .all();
+
+    expect(() =>
+      seasonRepository.promotePlaceholderAct(
+        placeholder.id,
+        placeholder.version,
+        submission.id,
+        submission.version,
+      ),
+    ).toThrowError("act promotion would merge assignments");
+    expect(
+      sqlite
+        .prepare(
+          "select id, name, placeholder, canonical_act_id, version from acts order by id",
+        )
+        .all(),
+    ).toEqual(actsBefore);
+  });
+
+  it("refuses act promotion when an assigned superseded child belongs to the submission family", () => {
+    const season = insertSeason(2105, "assigning");
+    const venueId = insertVenue(season.id, "Submission-family Collision Venue");
+    const placeholderSlot = insertSlot(season.id, venueId);
+    const submissionSlot = insertSlot(season.id, venueId, 2);
+    const placeholder = insertVersionedAct(
+      season.id,
+      "Assigned Placeholder",
+      true,
+    );
+    const submission = insertVersionedAct(season.id, "Canonical Submission");
+    const submissionChild = insertVersionedAct(
+      season.id,
+      "Duplicate Submission Child",
+    );
+    seasonRepository.assignSlot(
+      placeholderSlot.id,
+      placeholderSlot.version,
+      placeholder.id,
+    );
+    seasonRepository.assignSlot(
+      submissionSlot.id,
+      submissionSlot.version,
+      submissionChild.id,
+    );
+    seasonRepository.supersedeAct(
+      submissionChild.id,
+      submissionChild.version,
+      submission.id,
+    );
+
+    expect(() =>
+      seasonRepository.promotePlaceholderAct(
+        placeholder.id,
+        placeholder.version,
+        submission.id,
+        submission.version,
+      ),
+    ).toThrowError("act promotion would merge assignments");
+    expect(
+      sqlite
+        .prepare("select placeholder, version from acts where id = ?")
+        .get(placeholder.id),
+    ).toEqual({ placeholder: 1, version: placeholder.version });
+    expect(
+      sqlite
+        .prepare("select canonical_act_id, version from acts where id = ?")
+        .get(submission.id),
+    ).toEqual({ canonical_act_id: null, version: submission.version });
+  });
+
+  it("allows act promotion when only a superseded placeholder-family child is assigned", () => {
+    const season = insertSeason(2105, "assigning");
+    const venueId = insertVenue(season.id, "Legal Promotion Venue");
+    const slot = insertSlot(season.id, venueId);
+    const placeholder = insertVersionedAct(
+      season.id,
+      "Legal Canonical Placeholder",
+      true,
+    );
+    const placeholderChild = insertVersionedAct(
+      season.id,
+      "Legal Placeholder Child",
+    );
+    const submission = insertVersionedAct(season.id, "Legal Submission");
+    seasonRepository.assignSlot(slot.id, slot.version, placeholderChild.id);
+    seasonRepository.supersedeAct(
+      placeholderChild.id,
+      placeholderChild.version,
+      placeholder.id,
+    );
+
+    const promoted = seasonRepository.promotePlaceholderAct(
+      placeholder.id,
+      placeholder.version,
+      submission.id,
+      submission.version,
+    );
+
+    expect(promoted).toMatchObject({
+      id: placeholder.id,
+      name: "Legal Submission",
+      placeholder: false,
+    });
+    expect(
+      sqlite
+        .prepare("select canonical_act_id from acts where id = ?")
+        .get(submission.id),
+    ).toEqual({ canonical_act_id: placeholder.id });
+  });
+
+  it("keeps descendant-family supersession collisions in the season wrapper", () => {
+    const season = insertSeason(2105, "assigning");
+    const venueId = insertVenue(season.id, "Descendant Collision Venue");
+    const targetSlot = insertSlot(season.id, venueId);
+    const sourceSlot = insertSlot(season.id, venueId, 2);
+    const target = insertVersionedAct(season.id, "Target Family");
+    const targetChild = insertVersionedAct(season.id, "Target Child");
+    const source = insertVersionedAct(season.id, "Source Family");
+    const sourceChild = insertVersionedAct(season.id, "Source Child");
+    seasonRepository.assignSlot(
+      targetSlot.id,
+      targetSlot.version,
+      targetChild.id,
+    );
+    seasonRepository.supersedeAct(
+      targetChild.id,
+      targetChild.version,
+      target.id,
+    );
+    seasonRepository.assignSlot(
+      sourceSlot.id,
+      sourceSlot.version,
+      sourceChild.id,
+    );
+    seasonRepository.supersedeAct(
+      sourceChild.id,
+      sourceChild.version,
+      source.id,
+    );
+
+    expect(() =>
+      seasonRepository.supersedeAct(source.id, source.version, target.id),
+    ).toThrowError(
+      `canonical act ${target.id} is already assigned in season ${season.id}`,
+    );
+    expect(
+      sqlite
+        .prepare("select canonical_act_id, version from acts where id = ?")
+        .get(source.id),
+    ).toEqual({ canonical_act_id: null, version: source.version });
+  });
+
+  it("refuses an act correction that links a reach-via contact from another season", () => {
+    const first = insertSeason(2104, "setup");
+    const second = insertSeason(2105, "setup");
+    const act = insertVersionedAct(first.id, "First-season Act");
+    const secondContactId = insertContact(second.id, "Second-season Contact");
+
+    expect(() =>
+      seasonRepository.updateAct(act.id, act.version, {
+        reachViaContactId: secondContactId,
+      }),
+    ).toThrowError("reach-via contact and act belong to different seasons");
+    expect(
+      sqlite
+        .prepare("select reach_via_contact_id, version from acts where id = ?")
+        .get(act.id),
+    ).toEqual({ reach_via_contact_id: null, version: act.version });
+  });
+
+  it("refuses a venue correction that links a host contact from another season", () => {
+    const first = insertSeason(2104, "setup");
+    const second = insertSeason(2105, "setup");
+    const venue = insertVersionedVenue(first.id, "First-season Venue");
+    const secondContactId = insertContact(second.id, "Second-season Host");
+
+    expect(() =>
+      seasonRepository.updateVenue(venue.id, venue.version, {
+        hostContactId: secondContactId,
+      }),
+    ).toThrowError("host contact and venue belong to different seasons");
+    expect(
+      sqlite
+        .prepare("select host_contact_id, version from venues where id = ?")
+        .get(venue.id),
+    ).toEqual({ host_contact_id: null, version: venue.version });
+  });
+
+  it("refuses a venue correction that links a reach-via contact from another season", () => {
+    const first = insertSeason(2104, "setup");
+    const second = insertSeason(2105, "setup");
+    const venue = insertVersionedVenue(first.id, "First-season Reach Venue");
+    const secondContactId = insertContact(
+      second.id,
+      "Second-season Reach Contact",
+    );
+
+    expect(() =>
+      seasonRepository.updateVenue(venue.id, venue.version, {
+        reachViaContactId: secondContactId,
+      }),
+    ).toThrowError("reach-via contact and venue belong to different seasons");
+    expect(
+      sqlite
+        .prepare(
+          "select reach_via_contact_id, version from venues where id = ?",
+        )
+        .get(venue.id),
+    ).toEqual({ reach_via_contact_id: null, version: venue.version });
   });
 
   it("excludes and refuses a canonical act already assigned under a superseded identity", () => {
