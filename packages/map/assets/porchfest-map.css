@@ -1,0 +1,713 @@
+/* Extracted from sapporchfest.org — map filter styles */
+
+:root {
+  --color-bg: #f9f9f9;
+  --color-bg-section: #505050;
+  --color-bg-dark: #535459;
+  --color-bg-darker: #212121;
+  --color-text: #212121;
+  --color-text-secondary: #535459;
+  --color-text-light: #ffffff;
+  --color-heading: #212121;
+  --color-heading-light: #ffffff;
+  --color-border: #e0e0e0;
+  --color-border-dark: rgba(255,255,255,0.2);
+  --font-heading: 'Montserrat', sans-serif;
+  --font-body: 'Lato', sans-serif;
+  --max-width: 1100px;
+  --radius: 4px;
+  --color-accent: #c45d3c;      /* terracotta — FAQ eyebrow + underline only */
+  --color-accent-ink: #a8431f;  /* darker terracotta for eyebrow text (AA on #f9f9f9) */
+  --porchfest-filter-fade: 75%;
+}
+
+/* Full-bleed embedded map: break out of .container to span the viewport */
+.map-embed-fullbleed,
+.porchfest-map-fullbleed {
+  position: relative;
+  left: 50%;
+  right: 50%;
+  width: 100vw;
+  margin: 1.75rem -50vw;
+}
+
+.map-embed-fullbleed iframe,
+.porchfest-map-canvas,
+.porchfest-map-status {
+  width: 100%;
+  height: 70vh;
+  min-height: 480px;
+}
+
+/* Interactive Porchfest map and its accessible lineup */
+.porchfest-map-mount {
+  margin-bottom: 2.5rem;
+  text-align: left;
+}
+
+.porchfest-map-fullbleed {
+  background: #fff;
+  border-block: 1px solid var(--color-border);
+}
+
+.porchfest-map-status {
+  display: grid;
+  place-items: center;
+  padding: 2rem;
+  color: var(--color-text-secondary);
+  background: #fff;
+  font-family: var(--font-body);
+  font-size: 1.05rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.porchfest-map-status[hidden] {
+  display: none;
+}
+
+.porchfest-map-status.is-error,
+.porchfest-map-status.is-empty {
+  color: var(--color-text);
+}
+
+.porchfest-map-status.is-no-match {
+  height: auto;
+  min-height: 0;
+  padding: 0.75rem 1rem;
+}
+
+.porchfest-map-canvas {
+  background: #fff;
+  font-family: var(--font-body);
+}
+
+.porchfest-map-controls {
+  padding: 0.5rem;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg);
+}
+
+.porchfest-map-toolbar {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0.5rem;
+  overflow-x: auto;
+}
+
+.porchfest-hour-control {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  gap: 0.25rem;
+}
+
+.porchfest-filter-chip {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0.35rem 0.55rem;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--color-accent);
+  border-radius: var(--radius);
+  color: var(--color-accent-ink);
+  background: #fff;
+  cursor: pointer;
+  font-family: var(--font-heading);
+  font-size: 0.82rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.porchfest-filter-chip[aria-pressed="true"] {
+  color: #fff;
+  background: var(--color-accent);
+}
+
+.porchfest-filter-chip:focus-visible {
+  outline: 3px solid var(--color-text);
+  outline-offset: 3px;
+}
+
+.porchfest-genre-summary:focus-visible {
+  outline: 3px solid var(--color-text);
+  outline-offset: 3px;
+}
+
+.porchfest-genre-facet {
+  margin: 0.5rem 0 0;
+}
+
+.porchfest-genre-summary {
+  min-height: 44px;
+}
+
+.porchfest-genre-content {
+  padding: 0.75rem;
+}
+
+.porchfest-genre-chips {
+  display: flex;
+  gap: 0.35rem;
+  padding: 0 0 0.5rem;
+  overflow-x: auto;
+  scrollbar-color: var(--color-accent) var(--color-border);
+  scrollbar-width: auto;
+}
+
+.porchfest-genre-chips::-webkit-scrollbar {
+  height: 10px;
+}
+
+.porchfest-genre-chips::-webkit-scrollbar-track {
+  background: var(--color-border);
+}
+
+.porchfest-genre-chips::-webkit-scrollbar-thumb {
+  border: 2px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-accent);
+}
+
+.porchfest-map-canvas:focus-visible,
+.porchfest-map-canvas .leaflet-control a:focus-visible,
+.porchfest-map-canvas .leaflet-popup a:focus-visible,
+.porchfest-venue-list a:focus-visible,
+.porchfest-marker-shell:focus-visible {
+  outline: 3px solid var(--color-text);
+  outline-offset: 3px;
+}
+
+.porchfest-marker-shell {
+  position: relative;
+  width: 44px !important;
+  height: 44px !important;
+  margin: 0 !important;
+  border: 0;
+  background: transparent;
+}
+
+.porchfest-marker-pin {
+  position: absolute;
+  top: 4px;
+  left: 7px;
+  width: 30px;
+  height: 30px;
+  border: 3px solid #fff;
+  border-radius: 50% 50% 50% 0;
+  background: var(--color-accent);
+  box-shadow: 0 2px 6px rgba(33, 33, 33, 0.55);
+  transform: rotate(-45deg);
+}
+
+.porchfest-marker-note {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  display: block;
+  width: 18px;
+  height: 18px;
+  fill: #fff;
+  pointer-events: none;
+  transform: rotate(45deg);
+  transform-origin: center;
+}
+
+.porchfest-marker-shell.is-match .porchfest-marker-pin {
+  border-width: 4px;
+  box-shadow: 0 0 0 3px var(--color-accent-ink), 0 3px 8px rgba(33, 33, 33, 0.55);
+  transform: rotate(-45deg) scale(1.12);
+}
+
+.porchfest-marker-shell.is-dimmed .porchfest-marker-pin {
+  border-color: color-mix(in srgb, #fff, var(--color-bg) var(--porchfest-filter-fade));
+  background: color-mix(in srgb, var(--color-accent), var(--color-bg) var(--porchfest-filter-fade));
+  box-shadow: 0 2px 6px color-mix(
+    in srgb,
+    rgba(33, 33, 33, 0.55),
+    var(--color-bg) var(--porchfest-filter-fade)
+  );
+}
+
+.porchfest-marker-shell.is-dimmed .porchfest-marker-note {
+  fill: color-mix(in srgb, #fff, var(--color-bg) var(--porchfest-filter-fade));
+}
+
+.porchfest-map-canvas .leaflet-control-zoom a,
+.porchfest-map-canvas .leaflet-popup-close-button {
+  width: 44px;
+  height: 44px;
+  line-height: 44px;
+}
+
+.porchfest-map-canvas .leaflet-control-attribution a {
+  display: inline-flex;
+  min-width: 44px;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+}
+
+.porchfest-map-canvas .leaflet-popup-content-wrapper,
+.porchfest-map-canvas .leaflet-popup-tip {
+  background: var(--color-bg);
+}
+
+.porchfest-map-canvas .leaflet-popup-content-wrapper {
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  color: var(--color-text);
+  box-shadow: 0 4px 18px rgba(33, 33, 33, 0.24);
+  overflow: hidden;
+}
+
+.porchfest-map-canvas .leaflet-popup-content {
+  max-width: calc(100vw - 66px);
+  max-height: 60vh;
+  margin: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  font-family: var(--font-body);
+  font-size: 0.95rem;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.porchfest-map-popup {
+  padding: 0;
+  background: #fff;
+}
+
+.porchfest-map-popup,
+.porchfest-act-links,
+.porchfest-act-links li,
+.porchfest-act-links a {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.porchfest-map-popup h3,
+.porchfest-map-popup h4,
+.porchfest-venue-list h2,
+.porchfest-venue-list h3,
+.porchfest-venue-list h4 {
+  font-family: var(--font-heading);
+}
+
+.porchfest-map-popup .porchfest-venue-title,
+.porchfest-venue-list .porchfest-venue-title {
+  margin: 0 0 0.25rem;
+  color: var(--color-text);
+  font-size: 1.1rem;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.porchfest-venue-address {
+  margin: 0 0 0.25rem;
+  color: var(--color-text-secondary);
+  font-style: normal;
+}
+
+.porchfest-venue-band {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 0.5rem;
+  padding: 1.1rem;
+  align-items: start;
+  background: var(--color-bg-dark);
+  color: var(--color-text-light);
+}
+
+.porchfest-map-popup .porchfest-venue-band {
+  padding-right: 3rem;
+}
+
+.porchfest-venue-band .porchfest-venue-title {
+  grid-column: 1;
+  grid-row: 1;
+  color: var(--color-heading-light);
+}
+
+.porchfest-venue-band .porchfest-venue-address {
+  grid-column: 1;
+  grid-row: 2;
+  min-width: 0;
+}
+
+.porchfest-show-on-map {
+  display: inline-flex;
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  min-width: 44px;
+  min-height: 44px;
+  margin-top: 0;
+  padding: 0.35rem 0.65rem;
+  align-items: center;
+  align-self: start;
+  justify-content: center;
+  justify-self: end;
+  border: 2px solid var(--color-accent);
+  border-radius: var(--radius);
+  color: var(--color-accent-ink);
+  background: #fff;
+  cursor: pointer;
+  font-family: var(--font-heading);
+  font-size: 0.88rem;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.porchfest-show-on-map:focus-visible {
+  outline: 3px solid var(--color-text);
+  outline-offset: 3px;
+  box-shadow: 0 0 0 3px #fff;
+}
+
+:is(.porchfest-map-popup, .porchfest-venue-card) .porchfest-venue-band .porchfest-venue-address,
+:is(.porchfest-map-popup, .porchfest-venue-card) .porchfest-venue-band strong {
+  color: var(--color-text-light);
+}
+
+.porchfest-venue-acts,
+.porchfest-act-links,
+.porchfest-venue-list-items {
+  padding: 0;
+  list-style: none;
+}
+
+.porchfest-venue-acts {
+  margin: 0 !important;
+  padding: 0 1.1rem 1.1rem;
+  background: #fff;
+  color: var(--color-text);
+}
+
+.porchfest-act {
+  margin: 0;
+  padding: 0.9rem 0;
+  border-top: 1px solid var(--color-border);
+}
+
+.porchfest-act:last-child {
+  padding-bottom: 0;
+}
+
+.porchfest-act-slot {
+  display: inline-block;
+  margin: 0 0 0.4rem !important;
+  padding: 0.3rem 0.55rem;
+  border: 2px solid var(--color-accent);
+  border-radius: var(--radius);
+  color: var(--color-accent-ink) !important;
+  background: #fff;
+  font-family: var(--font-heading);
+  font-size: 0.88rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  line-height: 1.2;
+}
+
+.porchfest-map-popup .porchfest-act-name,
+.porchfest-venue-list .porchfest-act-name {
+  margin: 0 0 0.35rem;
+  color: var(--color-text);
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.porchfest-act-genre,
+.porchfest-act-description,
+.porchfest-act-note {
+  margin: 0 0 0.55rem !important;
+  color: var(--color-text) !important;
+}
+
+.porchfest-act-note {
+  color: var(--color-text-secondary) !important;
+}
+
+.porchfest-act-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.9rem;
+  margin: 0 0 0.45rem !important;
+}
+
+.porchfest-act-links li {
+  margin: 0;
+}
+
+.page-content .porchfest-act-links a {
+  display: inline-flex;
+  min-width: 44px;
+  min-height: 44px;
+  align-items: center;
+  color: var(--color-accent-ink);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+  text-underline-offset: 3px;
+  word-break: break-word;
+}
+
+.page-content .porchfest-act-links a:hover {
+  color: var(--color-text);
+}
+
+.porchfest-venue-list {
+  margin: 2.75rem 0 0;
+}
+
+.page-content .porchfest-venue-list > h2 {
+  margin: 0 0 1rem;
+  color: var(--color-text);
+  font-size: 1.6rem;
+  font-weight: 700;
+  text-align: left;
+}
+
+.porchfest-venue-list-items {
+  column-gap: 1rem;
+  margin: 0 !important;
+}
+
+.porchfest-venue-card {
+  margin: 0 !important;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: #fff;
+  overflow: hidden;
+}
+
+.porchfest-venue-card .porchfest-venue-acts {
+  max-height: 100rem;
+  transition: max-height 240ms ease;
+}
+
+.porchfest-venue-card.is-match {
+  border-color: var(--color-accent-ink);
+  box-shadow: none;
+}
+
+.porchfest-venue-card.is-match .porchfest-venue-band {
+  background: var(--color-accent-ink);
+  color: var(--color-text-light);
+}
+
+.porchfest-venue-card.is-match .porchfest-venue-band .porchfest-venue-title,
+.porchfest-venue-card.is-match .porchfest-venue-band .porchfest-venue-address,
+.porchfest-venue-card.is-match .porchfest-venue-band strong {
+  color: var(--color-text-light) !important;
+}
+
+.porchfest-venue-card.is-collapsed {
+  min-height: 44px;
+}
+
+.porchfest-venue-card.is-collapsed .porchfest-venue-acts {
+  max-height: 26px;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 0, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 0, transparent 100%);
+}
+
+.porchfest-venue-card.is-collapsed:focus-within .porchfest-venue-acts {
+  max-height: 100rem;
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+
+.porchfest-venue-card.is-collapsed .porchfest-venue-band {
+  padding: 0.35rem 0.5rem;
+  background: color-mix(
+    in srgb,
+    var(--color-bg-dark),
+    var(--color-bg) var(--porchfest-filter-fade)
+  );
+  color: var(--color-text);
+}
+
+.porchfest-venue-card.is-collapsed .porchfest-venue-title {
+  margin-bottom: 0;
+}
+
+.porchfest-venue-card.is-collapsed .porchfest-venue-address {
+  margin-bottom: 0;
+}
+
+.porchfest-venue-card.is-collapsed .porchfest-show-on-map {
+  min-width: 44px;
+  min-height: 44px;
+  margin-top: 0;
+  justify-self: end;
+  border: 1px solid var(--color-text-secondary);
+  color: var(--color-text-secondary);
+  background: transparent;
+  font-weight: 700;
+}
+
+.porchfest-venue-card.is-collapsed .porchfest-venue-band .porchfest-venue-title,
+.porchfest-venue-card.is-collapsed .porchfest-venue-band .porchfest-venue-address,
+.porchfest-venue-card.is-collapsed .porchfest-venue-band strong {
+  color: var(--color-text) !important;
+}
+
+.porchfest-map-noscript {
+  padding: 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: #fff;
+  color: var(--color-text);
+  text-align: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal-on-scroll {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+
+  .porchfest-venue-card .porchfest-venue-acts {
+    transition: none;
+  }
+}
+
+@media (max-width: 768px) {
+  .nav-toggle { display: flex; }
+
+  .site-header {
+    padding: 0.6rem 0;
+  }
+
+  .header-inner {
+    flex-direction: row;
+    justify-content: space-between;
+    padding: 0 1rem;
+  }
+
+  .header-brand {
+    margin-bottom: 0;
+  }
+
+  .site-logo-img {
+    height: 50px;
+  }
+
+  .site-nav {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: #fff;
+    border-bottom: 1px solid var(--color-border);
+    border-top: none;
+    padding: 0.8rem;
+  }
+  .site-nav.open { display: block; }
+  .site-nav ul { flex-direction: column; gap: 0; }
+  .site-nav a { display: block; padding: 0.6rem 1rem; color: var(--color-text-secondary); }
+
+  .hero-grid { grid-template-columns: 1fr; gap: 1.5rem; }
+  .about-grid { grid-template-columns: 1fr; gap: 2rem; }
+  .form-row { grid-template-columns: 1fr; }
+  .footer-grid { grid-template-columns: 1fr; gap: 1.2rem; }
+
+  .hero {
+    min-height: 90vh;
+    padding-bottom: 3rem;
+  }
+
+  .hero h2 {
+    font-size: 1.5rem;
+  }
+
+  .hero-date-large {
+    font-size: clamp(2.2rem, 8vw, 3rem);
+  }
+
+  .hero-time-large {
+    font-size: clamp(1.6rem, 6vw, 2.2rem);
+  }
+
+  .hero-tagline {
+    font-size: 1rem;
+  }
+
+  .hero-right p {
+    font-size: 0.95rem;
+  }
+
+  .countdown { gap: 0.6rem; }
+  .countdown-item { min-width: 70px; padding: 0.8rem 1rem; }
+  .countdown-item span { font-size: 1.6rem; }
+
+  /* Footer nav wraps at mobile */
+  .footer-nav ul {
+    flex-wrap: wrap;
+    gap: 0.6rem 1rem;
+  }
+
+  .porchfest-venue-list-items {
+    column-gap: 0;
+  }
+
+  .porchfest-venue-card + .porchfest-venue-card {
+    margin-top: 1rem !important;
+  }
+
+  .porchfest-venue-card.is-collapsed + .porchfest-venue-card.is-collapsed {
+    margin-top: 0.5rem !important;
+  }
+}
+
+@media (max-width: 480px) {
+  body { font-size: 15px; }
+
+  .hero {
+    min-height: 85vh;
+    padding-bottom: 2.5rem;
+  }
+
+  .hero h2 {
+    font-size: 1.3rem;
+  }
+
+  .hero-date-large {
+    font-size: clamp(2rem, 9vw, 2.8rem);
+  }
+
+  .hero-time-large {
+    font-size: clamp(1.4rem, 7vw, 2rem);
+  }
+
+  .page-header h1 { font-size: 1.6rem; }
+
+  .map-title { font-size: 1.9rem; }
+
+  .porchfest-map-canvas .leaflet-popup-content {
+    max-height: 55vh;
+    font-size: 0.92rem;
+  }
+
+  .porchfest-map-canvas .leaflet-popup-content-wrapper {
+    max-width: calc(100vw - 34px);
+  }
+
+  /* Accordion text fully readable at small screens */
+  .accordion-item-header {
+    font-size: 0.9rem;
+    padding: 0.6rem 2.2rem 0.6rem 0.8rem;
+  }
+}
