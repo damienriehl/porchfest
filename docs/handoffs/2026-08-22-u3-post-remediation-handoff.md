@@ -3,7 +3,16 @@ artifact_contract: "ce-handoff/v1"
 created_at: "2026-08-22T16:35:19Z"
 title: "Porchfest U3 after the remediation review"
 summary: "U3 is implemented, reviewed twice, remediated twice, and fully committed on feat/u3-schema; four residual P2s and two owner decisions remain, and nothing has been pushed."
-keywords: ["porchfest", "u3", "code-review", "remediation", "compare-and-swap", "mutation-testing", "boot-connection"]
+keywords:
+  [
+    "porchfest",
+    "u3",
+    "code-review",
+    "remediation",
+    "compare-and-swap",
+    "mutation-testing",
+    "boot-connection",
+  ]
 cwd: "porchfest repository root"
 resume_focus: "Clear the four residual P2s, get Damien's two decisions, then ship U3 or start the next unit"
 repository: "porchfest"
@@ -36,7 +45,7 @@ The full container smoke test passes end to end.
    again. This is the important one: **the fixes had introduced real defects of their
    own.** 17 findings merged to 13; the validator confirmed 8 of 9 P1s.
 4. **Second remediation** — three Codex workers, committed as `ccd7223` and a follow-up.
-   Note: `ccd7223` captured a green but *partial* state of the core worker, because its
+   Note: `ccd7223` captured a green but _partial_ state of the core worker, because its
    report file was mistaken for a completion signal while the process was still alive.
    The follow-up commit completes that work. A worker's report file is not a done signal;
    only the process exiting is.
@@ -49,7 +58,7 @@ common configuration, and a test that could not detect the thing it named.
 
 This branch's own learning doc is `docs/solutions/conventions/mutation-testing-for-silent-guard-failures.md`.
 Its claim: for a guard whose failure mode is silent, a green suite is not evidence of
-coverage — only breaking the guard and watching a *named* test fail is.
+coverage — only breaking the guard and watching a _named_ test fail is.
 
 That standard was applied to every guard added in the second remediation: each was
 neutralized, its named test observed failing, restored, and `sha256sum` confirmed
@@ -69,7 +78,7 @@ cleanly while context lasted. None is urgent.
 
 1. **Smoke probe accepts a malformed migrated schema** — `scripts/container-smoke.sh`.
    Found only by the cross-model reviewer. The probe uses `arrayContaining` semantics, so
-   it checks the eight tables are *present*, not that their columns are right. A migration
+   it checks the eight tables are _present_, not that their columns are right. A migration
    that created a table with the wrong shape would pass.
 2. **Three hand-copied table lists must move in lockstep** — `packages/core/test/schema.test.ts:7`,
    `packages/core/test/connection.test.ts:9`, `scripts/container-smoke.sh:36`. Nothing
@@ -156,7 +165,7 @@ Two things that handoff records and a cockpit agent will need:
   `records.ts` line citations drift 1–2 lines against the current tree; the substance is
   correct.
 - **Domain vocabulary** — `CONCEPTS.md`. Three entries were corrected during this session
-  after a grounding validator found they described the *plan* rather than the code; trust it
+  after a grounding validator found they described the _plan_ rather than the code; trust it
   now, but verify any behavioural claim against source before relying on it.
 - **Worker reports** — nine files under `docs/handoffs/worker-*.md`. Each records what one
   Codex worker changed and what it observed. `worker-fix-core-report.md` holds the six

@@ -54,15 +54,15 @@ That baseline covers the initial guard mutations. After moving the snapshot and 
 
 Each mutation was applied alone, its named test was run, the mutation was restored, and `sha256sum` matched the baseline before the next mutation:
 
-| Mutated guard | Named failure observed |
-| --- | --- |
-| Neutralized promotion wrapper entry into the act-family check | Both `refuses act promotion when an assigned superseded child...` tests failed (2 failed, 19 skipped) |
-| Neutralized supersession wrapper entry into the act-family check | `keeps descendant-family supersession collisions in the season wrapper` failed (1 failed, 20 skipped) |
-| Neutralized the shared projected-family count verdict | Both promotion reproductions and the descendant-family supersession test failed (3 failed, 18 skipped) |
-| Neutralized `updateAct` contact-season comparison | `refuses an act correction that links a reach-via contact from another season` failed (1 failed, 20 skipped) |
-| Neutralized `updateVenue` host-contact season comparison | `refuses a venue correction that links a host contact from another season` failed (1 failed, 20 skipped) |
-| Neutralized `updateVenue` reach-via-contact season comparison | `refuses a venue correction that links a reach-via contact from another season` failed (1 failed, 20 skipped) |
-| Neutralized `mergedTargetAssignments > 1` only | `allows act promotion when only the submission family is assigned` failed with `act promotion would merge assignments` (1 failed, 24 skipped); restoration matched the new baseline byte-for-byte |
+| Mutated guard                                                         | Named failure observed                                                                                                                                                                                            |
+| --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Neutralized promotion wrapper entry into the act-family check         | Both `refuses act promotion when an assigned superseded child...` tests failed (2 failed, 19 skipped)                                                                                                             |
+| Neutralized supersession wrapper entry into the act-family check      | `keeps descendant-family supersession collisions in the season wrapper` failed (1 failed, 20 skipped)                                                                                                             |
+| Neutralized the shared projected-family count verdict                 | Both promotion reproductions and the descendant-family supersession test failed (3 failed, 18 skipped)                                                                                                            |
+| Neutralized `updateAct` contact-season comparison                     | `refuses an act correction that links a reach-via contact from another season` failed (1 failed, 20 skipped)                                                                                                      |
+| Neutralized `updateVenue` host-contact season comparison              | `refuses a venue correction that links a host contact from another season` failed (1 failed, 20 skipped)                                                                                                          |
+| Neutralized `updateVenue` reach-via-contact season comparison         | `refuses a venue correction that links a reach-via contact from another season` failed (1 failed, 20 skipped)                                                                                                     |
+| Neutralized `mergedTargetAssignments > 1` only                        | `allows act promotion when only the submission family is assigned` failed with `act promotion would merge assignments` (1 failed, 24 skipped); restoration matched the new baseline byte-for-byte                 |
 | Neutralized `mergedTargetAssignments > currentTargetAssignments` only | `allows act promotion when it does not worsen an existing duplicate target family` failed with `act promotion would merge assignments` (1 failed, 24 skipped); restoration matched the new baseline byte-for-byte |
 
 Final post-restoration focused run: 44/44 passing.

@@ -3,10 +3,10 @@ Porchfest U3 hygiene report
 Handoff path change
 
 Before:
-plan:<home>/worktrees/woodshed-porchfest/docs/plans/2026-08-20-0830-feat-porchfest-platform-plan.md  (operator home path redacted for this committed copy)
+plan:<home>/worktrees/woodshed-porchfest/docs/plans/2026-08-20-0830-feat-porchfest-platform-plan.md (operator home path redacted for this committed copy)
 
 After:
-plan:2026-08-20-0830-feat-porchfest-platform-plan.md  # porchfest platform plan in its own worktree
+plan:2026-08-20-0830-feat-porchfest-platform-plan.md # porchfest platform plan in its own worktree
 
 The rest of the handoff contains no other absolute home-directory path or path outside this repo. The conventional ~/Coding\ Projects/porchfest references on lines 7 and 26 were reviewed and intentionally left unchanged as directed.
 
