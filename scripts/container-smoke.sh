@@ -24,6 +24,43 @@ compose() {
     docker compose -p "$compose_project" "$@"
 }
 
+assert_schema_ready() {
+  local target_container="$1"
+  local database_path="$2"
+
+  docker exec \
+    -e PORCHFEST_SCHEMA_PROBE_PATH="$database_path" \
+    "$target_container" \
+    node -e '
+      const Database = require("better-sqlite3");
+      const expected = [
+        "acts",
+        "annotations",
+        "assignments",
+        "contacts",
+        "email_log",
+        "seasons",
+        "slots",
+        "venues",
+      ];
+      const database = new Database(process.env.PORCHFEST_SCHEMA_PROBE_PATH, {
+        readonly: true,
+      });
+      const actual = new Set(
+        database
+          .prepare("select name from sqlite_master where type = ?")
+          .all("table")
+          .map(({ name }) => name),
+      );
+      database.close();
+      const missing = expected.filter((name) => !actual.has(name));
+      if (missing.length > 0) {
+        console.error(`Missing migrated tables: ${missing.join(", ")}`);
+        process.exit(1);
+      }
+    '
+}
+
 cleanup() {
   if [[ -n "$tls_response_file" ]]; then
     rm -f -- "$tls_response_file"
@@ -55,6 +92,20 @@ for _ in $(seq 1 30); do
   sleep 1
 done
 curl --fail --silent "http://127.0.0.1:${port}/health" | grep -q '"ok":true'
+assert_schema_ready "$container" "/data/porchfest.db"
+
+empty_database="/tmp/porchfest-deliberately-empty.db"
+docker exec \
+  -e PORCHFEST_EMPTY_DATABASE_PATH="$empty_database" \
+  "$container" \
+  node -e '
+    const Database = require("better-sqlite3");
+    new Database(process.env.PORCHFEST_EMPTY_DATABASE_PATH).close();
+  '
+if assert_schema_ready "$container" "$empty_database" >/dev/null 2>&1; then
+  echo "ERROR: schema readiness probe accepted an empty database" >&2
+  exit 1
+fi
 
 docker run --rm --entrypoint node "$image" -e \
   "const fs=require('node:fs');const p=['core','web','email','antibot','geo'];if(p.some(x=>!fs.existsSync('/app/packages/'+x)))process.exit(1)"
@@ -102,4 +153,4 @@ if ((tls_curl_status != 0)) || \
   exit 1
 fi
 
-echo "OK: container boots empty, contains all workspaces, and serves TLS health"
+echo "OK: container migrates an empty data volume, contains all workspaces, and serves TLS health"
