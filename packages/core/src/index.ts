@@ -10,13 +10,44 @@ export type {
   GeocodeRequest,
   GeoPort,
 } from "./ports/index.js";
+export {
+  CORE_DATABASE_FILENAME,
+  openCoreDatabase,
+  type CoreDatabaseConnection,
+} from "./storage/connection.js";
+export {
+  createSeasonRepository,
+  isSeasonActionLegal,
+  SeasonActionError,
+  SeasonConflictError,
+  SeasonLifecycleError,
+  type AssignmentCorrection,
+  type AssignmentSuggestion,
+  type PriorSeasonContact,
+  type ReleasedSlotHold,
+  type SeasonAction,
+  type SeasonRepositoryOptions,
+  type SeasonState,
+  type SlotHold,
+} from "./season.js";
 
 import type { AdapterPorts } from "./ports/index.js";
+import { createSeasonRepository } from "./season.js";
+import type { CoreDatabase } from "./storage/repository-errors.js";
+
+export type SeasonRepository = ReturnType<typeof createSeasonRepository>;
 
 export interface CoreRuntime {
   readonly ports: AdapterPorts;
+  readonly seasons: SeasonRepository;
 }
 
-export function createCore(ports: AdapterPorts): CoreRuntime {
-  return Object.freeze({ ports: Object.freeze({ ...ports }) });
+export function createCore(
+  ports: AdapterPorts,
+  database: CoreDatabase,
+): CoreRuntime {
+  return Object.freeze({
+    ports: Object.freeze({ ...ports }),
+    seasons: createSeasonRepository(database),
+  });
 }

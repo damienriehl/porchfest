@@ -10,6 +10,32 @@ if (!Number.isInteger(parsedPort) || parsedPort < 1 || parsedPort > 65_535) {
 
 const runtime = await createRuntime();
 
-serve({ fetch: runtime.fetch, hostname, port: parsedPort }, (info) => {
-  console.log(`Porchfest listening on http://${hostname}:${info.port}`);
-});
+const server = serve(
+  { fetch: runtime.fetch, hostname, port: parsedPort },
+  (info) => {
+    console.log(`Porchfest listening on http://${hostname}:${info.port}`);
+  },
+);
+
+let shutdownStarted = false;
+function shutdown(): void {
+  if (shutdownStarted) return;
+  shutdownStarted = true;
+
+  server.close((serverError) => {
+    if (serverError) {
+      console.error("Failed to stop the Porchfest HTTP server", serverError);
+      process.exitCode = 1;
+    }
+
+    try {
+      runtime.close();
+    } catch (closeError) {
+      console.error("Failed to close the Porchfest runtime", closeError);
+      process.exitCode = 1;
+    }
+  });
+}
+
+process.once("SIGTERM", shutdown);
+process.once("SIGINT", shutdown);

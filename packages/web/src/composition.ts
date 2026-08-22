@@ -1,12 +1,16 @@
 import { NullAntibotAdapter } from "@porchfest/antibot";
 import {
+  CORE_DATABASE_FILENAME,
   createCore,
+  openCoreDatabase,
   type AdapterPorts,
   type CoreRuntime,
 } from "@porchfest/core";
 import { NullEmailAdapter } from "@porchfest/email";
 import { NullGeoAdapter } from "@porchfest/geo";
 import type { Hono } from "hono";
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
 import { createApp } from "./app.js";
 import { loadSessionSecret } from "./config/session-secret.js";
 import type { RouteRegistry, TrustAuthorizer } from "./router/registry.js";
@@ -21,6 +25,7 @@ export interface RuntimeOptions {
 export interface PorchfestRuntime {
   readonly adapters: AdapterPorts;
   readonly core: CoreRuntime;
+  readonly close: () => void;
   readonly fetch: Hono["fetch"];
   readonly request: Hono["request"];
   readonly routes: RouteRegistry;
@@ -43,17 +48,39 @@ export async function createRuntime(
   const env = options.env ?? process.env;
   const dataDirectory =
     options.dataDirectory ?? env.PORCHFEST_DATA_DIR ?? "./data";
+  await mkdir(dataDirectory, { recursive: true, mode: 0o700 });
   const configuredSecret = env.PORCHFEST_SESSION_SECRET?.trim();
   const sessionSecret = await loadSessionSecret({
     dataDirectory,
     configuredSecret: configuredSecret || undefined,
   });
   const adapters = createAdapterSet(options.adapterOverrides);
-  const core = createCore(adapters);
-  const { fetch, request, routes } = createApp({
-    core,
-    authorize: options.authorize,
-  });
+  const databaseConnection = openCoreDatabase(
+    join(dataDirectory, CORE_DATABASE_FILENAME),
+  );
 
-  return { adapters, core, fetch, request, routes, sessionSecret };
+  try {
+    const core = createCore(adapters, databaseConnection.database);
+    const { fetch, request, routes } = createApp({
+      core,
+      authorize: options.authorize,
+    });
+
+    return {
+      adapters,
+      close: databaseConnection.close,
+      core,
+      fetch,
+      request,
+      routes,
+      sessionSecret,
+    };
+  } catch (error) {
+    try {
+      databaseConnection.close();
+    } catch {
+      // Preserve the composition error that made boot fail.
+    }
+    throw error;
+  }
 }

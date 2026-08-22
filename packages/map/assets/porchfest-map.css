@@ -11,13 +11,13 @@
   --color-heading: #212121;
   --color-heading-light: #ffffff;
   --color-border: #e0e0e0;
-  --color-border-dark: rgba(255,255,255,0.2);
-  --font-heading: 'Montserrat', sans-serif;
-  --font-body: 'Lato', sans-serif;
+  --color-border-dark: rgba(255, 255, 255, 0.2);
+  --font-heading: "Montserrat", sans-serif;
+  --font-body: "Lato", sans-serif;
   --max-width: 1100px;
   --radius: 4px;
-  --color-accent: #c45d3c;      /* terracotta — FAQ eyebrow + underline only */
-  --color-accent-ink: #a8431f;  /* darker terracotta for eyebrow text (AA on #f9f9f9) */
+  --color-accent: #c45d3c; /* terracotta — FAQ eyebrow + underline only */
+  --color-accent-ink: #a8431f; /* darker terracotta for eyebrow text (AA on #f9f9f9) */
   --porchfest-filter-fade: 75%;
 }
 
@@ -221,18 +221,29 @@
 
 .porchfest-marker-shell.is-match .porchfest-marker-pin {
   border-width: 4px;
-  box-shadow: 0 0 0 3px var(--color-accent-ink), 0 3px 8px rgba(33, 33, 33, 0.55);
+  box-shadow:
+    0 0 0 3px var(--color-accent-ink),
+    0 3px 8px rgba(33, 33, 33, 0.55);
   transform: rotate(-45deg) scale(1.12);
 }
 
 .porchfest-marker-shell.is-dimmed .porchfest-marker-pin {
-  border-color: color-mix(in srgb, #fff, var(--color-bg) var(--porchfest-filter-fade));
-  background: color-mix(in srgb, var(--color-accent), var(--color-bg) var(--porchfest-filter-fade));
-  box-shadow: 0 2px 6px color-mix(
+  border-color: color-mix(
     in srgb,
-    rgba(33, 33, 33, 0.55),
+    #fff,
     var(--color-bg) var(--porchfest-filter-fade)
   );
+  background: color-mix(
+    in srgb,
+    var(--color-accent),
+    var(--color-bg) var(--porchfest-filter-fade)
+  );
+  box-shadow: 0 2px 6px
+    color-mix(
+      in srgb,
+      rgba(33, 33, 33, 0.55),
+      var(--color-bg) var(--porchfest-filter-fade)
+    );
 }
 
 .porchfest-marker-shell.is-dimmed .porchfest-marker-note {
@@ -372,7 +383,9 @@
   box-shadow: 0 0 0 3px #fff;
 }
 
-:is(.porchfest-map-popup, .porchfest-venue-card) .porchfest-venue-band .porchfest-venue-address,
+:is(.porchfest-map-popup, .porchfest-venue-card)
+  .porchfest-venue-band
+  .porchfest-venue-address,
 :is(.porchfest-map-popup, .porchfest-venue-card) .porchfest-venue-band strong {
   color: var(--color-text-light);
 }
@@ -557,7 +570,9 @@
 }
 
 .porchfest-venue-card.is-collapsed .porchfest-venue-band .porchfest-venue-title,
-.porchfest-venue-card.is-collapsed .porchfest-venue-band .porchfest-venue-address,
+.porchfest-venue-card.is-collapsed
+  .porchfest-venue-band
+  .porchfest-venue-address,
 .porchfest-venue-card.is-collapsed .porchfest-venue-band strong {
   color: var(--color-text) !important;
 }
@@ -584,7 +599,9 @@
 }
 
 @media (max-width: 768px) {
-  .nav-toggle { display: flex; }
+  .nav-toggle {
+    display: flex;
+  }
 
   .site-header {
     padding: 0.6rem 0;
@@ -615,14 +632,34 @@
     border-top: none;
     padding: 0.8rem;
   }
-  .site-nav.open { display: block; }
-  .site-nav ul { flex-direction: column; gap: 0; }
-  .site-nav a { display: block; padding: 0.6rem 1rem; color: var(--color-text-secondary); }
+  .site-nav.open {
+    display: block;
+  }
+  .site-nav ul {
+    flex-direction: column;
+    gap: 0;
+  }
+  .site-nav a {
+    display: block;
+    padding: 0.6rem 1rem;
+    color: var(--color-text-secondary);
+  }
 
-  .hero-grid { grid-template-columns: 1fr; gap: 1.5rem; }
-  .about-grid { grid-template-columns: 1fr; gap: 2rem; }
-  .form-row { grid-template-columns: 1fr; }
-  .footer-grid { grid-template-columns: 1fr; gap: 1.2rem; }
+  .hero-grid {
+    grid-template-columns: 1fr;
+    gap: 1.5rem;
+  }
+  .about-grid {
+    grid-template-columns: 1fr;
+    gap: 2rem;
+  }
+  .form-row {
+    grid-template-columns: 1fr;
+  }
+  .footer-grid {
+    grid-template-columns: 1fr;
+    gap: 1.2rem;
+  }
 
   .hero {
     min-height: 90vh;
@@ -649,9 +686,16 @@
     font-size: 0.95rem;
   }
 
-  .countdown { gap: 0.6rem; }
-  .countdown-item { min-width: 70px; padding: 0.8rem 1rem; }
-  .countdown-item span { font-size: 1.6rem; }
+  .countdown {
+    gap: 0.6rem;
+  }
+  .countdown-item {
+    min-width: 70px;
+    padding: 0.8rem 1rem;
+  }
+  .countdown-item span {
+    font-size: 1.6rem;
+  }
 
   /* Footer nav wraps at mobile */
   .footer-nav ul {
@@ -673,7 +717,9 @@
 }
 
 @media (max-width: 480px) {
-  body { font-size: 15px; }
+  body {
+    font-size: 15px;
+  }
 
   .hero {
     min-height: 85vh;
@@ -692,9 +738,13 @@
     font-size: clamp(1.4rem, 7vw, 2rem);
   }
 
-  .page-header h1 { font-size: 1.6rem; }
+  .page-header h1 {
+    font-size: 1.6rem;
+  }
 
-  .map-title { font-size: 1.9rem; }
+  .map-title {
+    font-size: 1.9rem;
+  }
 
   .porchfest-map-canvas .leaflet-popup-content {
     max-height: 55vh;
