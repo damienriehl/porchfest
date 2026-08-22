@@ -115,6 +115,7 @@ describe("season domain", () => {
     const legalByAction: Readonly<
       Record<SeasonAction, readonly SeasonState[]>
     > = {
+      signup: ["signups_open", "assigning"],
       assignment: ["signups_open", "signups_closed", "assigning"],
       hold: ["setup", "signups_open", "signups_closed", "assigning"],
       hold_release: [
@@ -141,6 +142,352 @@ describe("season domain", () => {
         );
       }
     }
+  });
+
+  it("creates a complete host signup and exposes it in the activity queue", () => {
+    const season = insertSeason(2105, "signups_open");
+
+    const signup = seasonRepository.createHostSignup({
+      seasonId: season.id,
+      contact: {
+        name: "Host Person",
+        email: "host@example.invalid",
+        phone: "synthetic-host-phone",
+      },
+      venue: {
+        title: "Host Person's Porch",
+        address: "123 Example Ave",
+        spaceDescription: "Front porch, yard, and driveway",
+        hasPower: true,
+        rainBackup: false,
+        notes: "Please use the side gate.",
+      },
+      gear: ["pa", "microphone", "extension_cord"],
+      drinks: ["water", "non_alcoholic"],
+      amenities: ["seating", "shade", "accessible_entry"],
+    });
+
+    expect(signup.contact).toMatchObject({
+      seasonId: season.id,
+      name: "Host Person",
+      email: "host@example.invalid",
+      phone: "synthetic-host-phone",
+    });
+    expect(signup.venue).toMatchObject({
+      seasonId: season.id,
+      title: "Host Person's Porch",
+      address: "123 Example Ave",
+      spaceDescription: "Front porch, yard, and driveway",
+      hasPower: true,
+      rainBackup: false,
+      notes: "Please use the side gate.",
+      hostContactId: signup.contact.id,
+      placeholder: false,
+    });
+    expect(signup.gear.map(({ value }) => value)).toEqual([
+      "pa",
+      "microphone",
+      "extension_cord",
+    ]);
+    expect(signup.drinks.map(({ value }) => value)).toEqual([
+      "water",
+      "non_alcoholic",
+    ]);
+    expect(signup.amenities.map(({ value }) => value)).toEqual([
+      "seating",
+      "shade",
+      "accessible_entry",
+    ]);
+    expect(seasonRepository.listActivityQueue(season.id)).toEqual(
+      expect.arrayContaining([
+        { recordType: "contact", record: signup.contact },
+        { recordType: "venue", record: signup.venue },
+      ]),
+    );
+  });
+
+  it("creates a complete performer signup and exposes it in the activity queue", () => {
+    const season = insertSeason(2105, "signups_open");
+    const firstStartsAt = new Date("2105-06-01T14:00:00.000Z");
+    const firstEndsAt = new Date("2105-06-01T14:45:00.000Z");
+    const secondStartsAt = new Date("2105-06-01T16:00:00.000Z");
+    const secondEndsAt = new Date("2105-06-01T16:45:00.000Z");
+
+    const signup = seasonRepository.createPerformerSignup({
+      seasonId: season.id,
+      contact: {
+        name: "Performer Person",
+        email: "performer@example.invalid",
+        phone: "synthetic-performer-phone",
+      },
+      act: {
+        name: "The Typed Columns",
+        durationMinutes: 45,
+        requiresAmplification: true,
+        genre: "Folk, rock",
+        description: "Songs with harmonies.",
+        links: "https://example.invalid/the-typed-columns",
+        housePreference: "Near the park",
+        canLendGear: true,
+      },
+      availabilities: [
+        { startsAt: firstStartsAt, endsAt: firstEndsAt },
+        { startsAt: secondStartsAt, endsAt: secondEndsAt },
+      ],
+    });
+
+    expect(signup.contact).toMatchObject({
+      seasonId: season.id,
+      name: "Performer Person",
+      email: "performer@example.invalid",
+      phone: "synthetic-performer-phone",
+    });
+    expect(signup.act).toMatchObject({
+      seasonId: season.id,
+      name: "The Typed Columns",
+      durationMinutes: 45,
+      requiresAmplification: true,
+      genre: "Folk, rock",
+      description: "Songs with harmonies.",
+      links: "https://example.invalid/the-typed-columns",
+      housePreference: "Near the park",
+      canLendGear: true,
+      reachViaContactId: signup.contact.id,
+      placeholder: false,
+    });
+    expect(signup.availabilities).toEqual([
+      expect.objectContaining({
+        seasonId: season.id,
+        actId: signup.act.id,
+        startsAt: firstStartsAt,
+        endsAt: firstEndsAt,
+      }),
+      expect.objectContaining({
+        seasonId: season.id,
+        actId: signup.act.id,
+        startsAt: secondStartsAt,
+        endsAt: secondEndsAt,
+      }),
+    ]);
+    expect(seasonRepository.listActivityQueue(season.id)).toEqual(
+      expect.arrayContaining([
+        { recordType: "contact", record: signup.contact },
+        { recordType: "act", record: signup.act },
+      ]),
+    );
+  });
+
+  it("creates host and performer signups while assigning with empty child sets", () => {
+    const season = insertSeason(2106, "assigning");
+
+    const host = seasonRepository.createHostSignup({
+      seasonId: season.id,
+      contact: { name: "Rolling Host" },
+      venue: {
+        title: "Rolling Host Venue",
+        address: "789 Rolling Signup Road",
+        spaceDescription: "A venue with no selected extras",
+        hasPower: false,
+        rainBackup: false,
+        notes: null,
+      },
+      gear: [],
+      drinks: [],
+      amenities: [],
+    });
+    const performer = seasonRepository.createPerformerSignup({
+      seasonId: season.id,
+      contact: { name: "Rolling Performer" },
+      act: {
+        name: "The Late Additions",
+        durationMinutes: 30,
+        requiresAmplification: false,
+        genre: "",
+        description: "",
+        links: "",
+        housePreference: null,
+        canLendGear: false,
+      },
+      availabilities: [],
+    });
+
+    expect(host.gear).toEqual([]);
+    expect(host.drinks).toEqual([]);
+    expect(host.amenities).toEqual([]);
+    expect(performer.availabilities).toEqual([]);
+    expect(seasonRepository.listActivityQueue(season.id)).toEqual(
+      expect.arrayContaining([
+        { recordType: "contact", record: host.contact },
+        { recordType: "venue", record: host.venue },
+        { recordType: "contact", record: performer.contact },
+        { recordType: "act", record: performer.act },
+      ]),
+    );
+  });
+
+  it("refuses host and performer signup creation in closed states and persists nothing", () => {
+    for (const state of seasonStates.filter(
+      (candidate) => !["signups_open", "assigning"].includes(candidate),
+    )) {
+      const season = insertSeason(2200 + seasonStates.indexOf(state), state);
+
+      expect(() =>
+        seasonRepository.createHostSignup({
+          seasonId: season.id,
+          contact: { name: `Refused ${state}` },
+          venue: {
+            title: `Refused ${state} Venue`,
+            address: "Not persisted",
+            spaceDescription: "Not persisted",
+            hasPower: false,
+            rainBackup: false,
+            notes: null,
+          },
+          gear: [],
+          drinks: [],
+          amenities: [],
+        }),
+      ).toThrowError(`season state ${state} refuses action signup`);
+
+      expect(() =>
+        seasonRepository.createPerformerSignup({
+          seasonId: season.id,
+          contact: { name: `Refused performer ${state}` },
+          act: {
+            name: `Refused ${state} Act`,
+            durationMinutes: 30,
+            requiresAmplification: false,
+            genre: "",
+            description: "",
+            links: "",
+            housePreference: null,
+            canLendGear: false,
+          },
+          availabilities: [],
+        }),
+      ).toThrowError(`season state ${state} refuses action signup`);
+    }
+
+    expect(
+      sqlite.prepare("select count(*) as count from contacts").get(),
+    ).toEqual({ count: 0 });
+    expect(
+      sqlite.prepare("select count(*) as count from venues").get(),
+    ).toEqual({ count: 0 });
+    expect(sqlite.prepare("select count(*) as count from acts").get()).toEqual({
+      count: 0,
+    });
+    for (const table of [
+      "venue_gear",
+      "venue_drinks",
+      "venue_amenities",
+      "act_availabilities",
+    ]) {
+      expect(
+        sqlite.prepare(`select count(*) as count from ${table}`).get(),
+      ).toEqual({ count: 0 });
+    }
+  });
+
+  it("rolls back a signup when a delegated child-row write fails", () => {
+    const season = insertSeason(2105, "signups_open");
+    const delegatedFailure = new Error("delegated signup write failed");
+    let timestampCalls = 0;
+    const atomicRepository = createSeasonRepository(database.db, {
+      now: () => {
+        timestampCalls += 1;
+        if (timestampCalls === 3) {
+          sqlite
+            .prepare("update seasons set state = 'archived' where id = ?")
+            .run(season.id);
+          throw delegatedFailure;
+        }
+        return pinnedNow;
+      },
+    });
+
+    expect(() =>
+      atomicRepository.createHostSignup({
+        seasonId: season.id,
+        contact: { name: "Atomic Host" },
+        venue: {
+          title: "Atomic Venue",
+          address: "456 Rollback Road",
+          spaceDescription: "A space that must not persist",
+          hasPower: true,
+          rainBackup: true,
+          notes: null,
+        },
+        gear: ["pa"],
+        drinks: [],
+        amenities: [],
+      }),
+    ).toThrow(delegatedFailure);
+    expect(
+      sqlite.prepare("select state from seasons where id = ?").get(season.id),
+    ).toEqual({ state: "signups_open" });
+    expect(
+      sqlite.prepare("select count(*) as count from contacts").get(),
+    ).toEqual({ count: 0 });
+    expect(
+      sqlite.prepare("select count(*) as count from venues").get(),
+    ).toEqual({ count: 0 });
+    expect(
+      sqlite.prepare("select count(*) as count from venue_gear").get(),
+    ).toEqual({ count: 0 });
+  });
+
+  it("rolls back a performer signup when a delegated availability write fails", () => {
+    const season = insertSeason(2105, "signups_open");
+    const delegatedFailure = new Error("delegated availability write failed");
+    let timestampCalls = 0;
+    const atomicRepository = createSeasonRepository(database.db, {
+      now: () => {
+        timestampCalls += 1;
+        if (timestampCalls === 3) {
+          sqlite
+            .prepare("update seasons set state = 'archived' where id = ?")
+            .run(season.id);
+          throw delegatedFailure;
+        }
+        return pinnedNow;
+      },
+    });
+
+    expect(() =>
+      atomicRepository.createPerformerSignup({
+        seasonId: season.id,
+        contact: { name: "Atomic Performer" },
+        act: {
+          name: "Atomic Act",
+          durationMinutes: 45,
+          requiresAmplification: false,
+          genre: "Folk",
+          description: "Must not persist",
+          links: "https://example.invalid/atomic-act",
+          housePreference: null,
+          canLendGear: false,
+        },
+        availabilities: [
+          {
+            startsAt: new Date("2105-06-01T14:00:00.000Z"),
+            endsAt: new Date("2105-06-01T14:45:00.000Z"),
+          },
+        ],
+      }),
+    ).toThrow(delegatedFailure);
+    expect(
+      sqlite.prepare("select state from seasons where id = ?").get(season.id),
+    ).toEqual({ state: "signups_open" });
+    expect(
+      sqlite.prepare("select count(*) as count from contacts").get(),
+    ).toEqual({ count: 0 });
+    expect(sqlite.prepare("select count(*) as count from acts").get()).toEqual({
+      count: 0,
+    });
+    expect(
+      sqlite.prepare("select count(*) as count from act_availabilities").get(),
+    ).toEqual({ count: 0 });
   });
 
   it("reports an expired named hold as releasable but keeps it blocking until explicitly released", () => {

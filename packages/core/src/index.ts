@@ -16,6 +16,11 @@ export {
   type CoreDatabaseConnection,
 } from "./storage/connection.js";
 export {
+  venueAmenityValues,
+  venueDrinkValues,
+  venueGearValues,
+} from "./storage/schema.js";
+export {
   createSeasonRepository,
   isSeasonActionLegal,
   SeasonActionError,
@@ -30,6 +35,13 @@ export {
   type SeasonState,
   type SlotHold,
 } from "./season.js";
+export type {
+  HostSignup,
+  HostSignupInput,
+  PerformerSignup,
+  PerformerSignupInput,
+  SignupContactInput,
+} from "./records.js";
 
 import type { AdapterPorts } from "./ports/index.js";
 import { createSeasonRepository } from "./season.js";

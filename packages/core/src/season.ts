@@ -3,6 +3,10 @@ import {
   createRecordRepository,
   type ActChanges,
   type ContactChanges,
+  type HostSignup,
+  type HostSignupInput,
+  type PerformerSignup,
+  type PerformerSignupInput,
   type VenueChanges,
 } from "./records.js";
 import {
@@ -44,11 +48,12 @@ import {
 
 export type SeasonState = (typeof schema.seasonStates)[number];
 export type SeasonAction =
-  "assignment" | "hold" | "hold_release" | "correction";
+  "signup" | "assignment" | "hold" | "hold_release" | "correction";
 
 const stateOrder: readonly SeasonState[] = schema.seasonStates;
 
 const legalStates: Readonly<Record<SeasonAction, readonly SeasonState[]>> = {
+  signup: ["signups_open", "assigning"],
   assignment: ["signups_open", "signups_closed", "assigning"],
   hold: ["setup", "signups_open", "signups_closed", "assigning"],
   hold_release: [
@@ -193,6 +198,26 @@ export function createSeasonRepository(
     executor: CoreExecutor = db,
   ): void {
     assertLegal(getSeason(seasonId, executor), "correction");
+  }
+
+  function createHostSignup(input: HostSignupInput): HostSignup {
+    return db.transaction(
+      (tx) => {
+        assertLegal(getSeason(input.seasonId, tx), "signup");
+        return createRecordRepository(tx, options).createHostSignup(input);
+      },
+      { behavior: "immediate" },
+    );
+  }
+
+  function createPerformerSignup(input: PerformerSignupInput): PerformerSignup {
+    return db.transaction(
+      (tx) => {
+        assertLegal(getSeason(input.seasonId, tx), "signup");
+        return createRecordRepository(tx, options).createPerformerSignup(input);
+      },
+      { behavior: "immediate" },
+    );
   }
 
   type SeasonActIdentity = Pick<Act, "id" | "canonicalActId">;
@@ -932,6 +957,8 @@ export function createSeasonRepository(
 
   return Object.freeze({
     getSeason,
+    createHostSignup,
+    createPerformerSignup,
     updateAct,
     updateVenue,
     updateContact,

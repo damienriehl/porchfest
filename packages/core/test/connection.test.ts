@@ -4,7 +4,13 @@ import { join } from "node:path";
 import Database from "better-sqlite3";
 import { sql } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CORE_DATABASE_FILENAME, openCoreDatabase } from "../src/index.js";
+import {
+  CORE_DATABASE_FILENAME,
+  openCoreDatabase,
+  venueAmenityValues,
+  venueDrinkValues,
+  venueGearValues,
+} from "../src/index.js";
 import { contacts, schemaTableNames } from "../src/storage/schema.js";
 
 describe("core database connection", () => {
@@ -17,6 +23,12 @@ describe("core database connection", () => {
     if (temporaryDirectory) {
       await rm(temporaryDirectory, { recursive: true, force: true });
     }
+  });
+
+  it("exports signup option vocabularies from the package entry point", () => {
+    expect(venueGearValues).toContain("pa");
+    expect(venueDrinkValues).toContain("water");
+    expect(venueAmenityValues).toContain("accessible_entry");
   });
 
   it("migrates a file database and enforces foreign keys", async () => {
