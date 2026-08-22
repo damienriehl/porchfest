@@ -317,13 +317,12 @@
   font-style: normal;
 }
 
-.porchfest-venue-schedule {
-  margin: 0;
-  color: var(--color-text);
-}
-
 .porchfest-venue-band {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 0.5rem;
   padding: 1.1rem;
+  align-items: start;
   background: var(--color-bg-dark);
   color: var(--color-text-light);
 }
@@ -333,16 +332,29 @@
 }
 
 .porchfest-venue-band .porchfest-venue-title {
+  grid-column: 1;
+  grid-row: 1;
   color: var(--color-heading-light);
+}
+
+.porchfest-venue-band .porchfest-venue-address {
+  grid-column: 1;
+  grid-row: 2;
+  min-width: 0;
 }
 
 .porchfest-show-on-map {
   display: inline-flex;
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  min-width: 44px;
   min-height: 44px;
-  margin-top: 0.75rem;
+  margin-top: 0;
   padding: 0.35rem 0.65rem;
   align-items: center;
+  align-self: start;
   justify-content: center;
+  justify-self: end;
   border: 2px solid var(--color-accent);
   border-radius: var(--radius);
   color: var(--color-accent-ink);
@@ -361,7 +373,6 @@
 }
 
 :is(.porchfest-map-popup, .porchfest-venue-card) .porchfest-venue-band .porchfest-venue-address,
-:is(.porchfest-map-popup, .porchfest-venue-card) .porchfest-venue-band .porchfest-venue-schedule,
 :is(.porchfest-map-popup, .porchfest-venue-card) .porchfest-venue-band strong {
   color: var(--color-text-light);
 }
@@ -465,9 +476,7 @@
 }
 
 .porchfest-venue-list-items {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1rem;
+  column-gap: 1rem;
   margin: 0 !important;
 }
 
@@ -497,7 +506,6 @@
 
 .porchfest-venue-card.is-match .porchfest-venue-band .porchfest-venue-title,
 .porchfest-venue-card.is-match .porchfest-venue-band .porchfest-venue-address,
-.porchfest-venue-card.is-match .porchfest-venue-band .porchfest-venue-schedule,
 .porchfest-venue-card.is-match .porchfest-venue-band strong {
   color: var(--color-text-light) !important;
 }
@@ -520,9 +528,6 @@
 }
 
 .porchfest-venue-card.is-collapsed .porchfest-venue-band {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  column-gap: 0.5rem;
   padding: 0.35rem 0.5rem;
   background: color-mix(
     in srgb,
@@ -533,24 +538,14 @@
 }
 
 .porchfest-venue-card.is-collapsed .porchfest-venue-title {
-  grid-column: 1;
-  grid-row: 1;
   margin-bottom: 0;
 }
 
 .porchfest-venue-card.is-collapsed .porchfest-venue-address {
-  grid-column: 1 / -1;
-  grid-row: 2;
   margin-bottom: 0;
 }
 
-.porchfest-venue-card.is-collapsed .porchfest-venue-schedule {
-  display: none;
-}
-
 .porchfest-venue-card.is-collapsed .porchfest-show-on-map {
-  grid-column: 2;
-  grid-row: 1;
   min-width: 44px;
   min-height: 44px;
   margin-top: 0;
@@ -563,7 +558,6 @@
 
 .porchfest-venue-card.is-collapsed .porchfest-venue-band .porchfest-venue-title,
 .porchfest-venue-card.is-collapsed .porchfest-venue-band .porchfest-venue-address,
-.porchfest-venue-card.is-collapsed .porchfest-venue-band .porchfest-venue-schedule,
 .porchfest-venue-card.is-collapsed .porchfest-venue-band strong {
   color: var(--color-text) !important;
 }
@@ -666,8 +660,7 @@
   }
 
   .porchfest-venue-list-items {
-    grid-template-columns: 1fr;
-    row-gap: 0;
+    column-gap: 0;
   }
 
   .porchfest-venue-card + .porchfest-venue-card {

@@ -20,7 +20,9 @@ const instrumentedScriptSource = scriptSource.replace(/\n\}\)\(\);\s*$/, `
     },
     getMarkersByVenueKey: function () {
       return typeof markersByVenueKey === 'undefined' ? undefined : markersByVenueKey;
-    }
+    },
+    layoutVenueCards: typeof layoutVenueCards === 'function' ? layoutVenueCards : undefined,
+    scheduleVenueLayout: typeof scheduleVenueLayout === 'function' ? scheduleVenueLayout : undefined
   };
 })();`);
 assert.notStrictEqual(
@@ -31,6 +33,20 @@ assert.notStrictEqual(
 const stylesheetPath = path.join(import.meta.dirname, '..', 'assets', 'porchfest-map.css');
 const stylesheetSource = fs.readFileSync(stylesheetPath, 'utf8');
 const FALLBACK = 'The interactive map could not be loaded. Please use the current official Google map below.';
+
+class TestStyle {
+  constructor() {
+    this.position = '';
+    this.height = '';
+    this.width = '';
+    this.left = '';
+    this.top = '';
+  }
+
+  removeProperty(name) {
+    this[name.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())] = '';
+  }
+}
 
 class TestNode {
   constructor(tagName, ownerDocument) {
@@ -43,6 +59,9 @@ class TestNode {
     this.className = '';
     this.hidden = false;
     this.tabIndex = -1;
+    this.clientWidth = 0;
+    this.offsetHeight = 0;
+    this.style = new TestStyle();
     this._text = '';
     this._listeners = {};
     this.classList = {
@@ -236,6 +255,7 @@ function createLeaflet(document) {
         element,
         options,
         removed: false,
+        hasView: false,
         fitBoundsArgs: null,
         flyToCalls: [],
         invalidateSizeCalls: 0,
@@ -243,7 +263,13 @@ function createLeaflet(document) {
         onceCalls: [],
         onceListeners: {},
         fitBounds(bounds, fitOptions) {
+          this.hasView = true;
           this.fitBoundsArgs = { bounds, options: fitOptions };
+          return this;
+        },
+        setView() {
+          this.hasView = true;
+          return this;
         },
         flyTo(coordinates, zoom, flyOptions) {
           this.flyToCalls.push({ coordinates, zoom, options: flyOptions });
@@ -328,7 +354,7 @@ function createLeaflet(document) {
           return this;
         },
         getElement() {
-          return element;
+          return this.map && this.map.hasView ? element : null;
         },
         bindPopup(factory, popupOptions) {
           this.popupFactory = factory;
@@ -430,6 +456,12 @@ async function runScript(options = {}) {
     requestAnimationFrame(callback) {
       animationFrames.push(callback);
       return animationFrames.length;
+    },
+    matchMedia(query) {
+      return { matches: query === '(max-width: 768px)' && this.innerWidth <= 768 };
+    },
+    getComputedStyle() {
+      return { columnGap: '16px' };
     }
   };
 
@@ -443,6 +475,7 @@ async function runScript(options = {}) {
   });
   vm.runInContext(instrumentedScriptSource, context, { filename: scriptPath });
   await settlePromises();
+  while (animationFrames.length) animationFrames.shift()();
   return {
     document,
     nodes,
@@ -454,6 +487,10 @@ async function runScript(options = {}) {
     windowListeners,
     testApi: window.__porchfestMapTest
   };
+}
+
+function flushAnimationFrames(run) {
+  while (run.animationFrames.length) run.animationFrames.shift()();
 }
 
 function assertFailure(nodes) {
@@ -577,11 +614,8 @@ test('collapsed card CSS keeps an auto-height band above a smaller clipped perfo
   assert.doesNotMatch(collapsedRule[1], /(?:^|[;\s])opacity\s*:/i);
 });
 
-test('collapsed card CSS hides the schedule', () => {
-  assert.match(
-    stylesheetSource,
-    /\.porchfest-venue-card\.is-collapsed \.porchfest-venue-schedule\s*\{[^}]*display:\s*none/s
-  );
+test('venue band CSS has no obsolete schedule selector', () => {
+  assert.doesNotMatch(stylesheetSource, /porchfest-venue-schedule/);
 });
 
 test('collapsed card CSS keeps the map control at least 44px in both dimensions', () => {
@@ -594,7 +628,19 @@ test('collapsed card CSS keeps the map control at least 44px in both dimensions'
   assert.ok(parseFloat(controlRule[1].match(/min-height:\s*([\d.]+)px/)[1]) >= 44);
 });
 
-test('collapsed card CSS puts the map control beside the title and tightens band padding', () => {
+test('venue band CSS puts the map control beside the title at every viewport', () => {
+  const baseBandRule = stylesheetSource.match(
+    /\.porchfest-venue-band\s*\{([^}]*)\}/
+  );
+  const baseTitleRule = stylesheetSource.match(
+    /\.porchfest-venue-band \.porchfest-venue-title\s*\{([^}]*)\}/
+  );
+  const baseAddressRule = stylesheetSource.match(
+    /\.porchfest-venue-band \.porchfest-venue-address\s*\{([^}]*)\}/
+  );
+  const baseControlRule = stylesheetSource.match(
+    /\.porchfest-show-on-map\s*\{([^}]*)\}/
+  );
   const bandRule = stylesheetSource.match(
     /\.porchfest-venue-card\.is-collapsed \.porchfest-venue-band\s*\{([^}]*)\}/
   );
@@ -608,17 +654,28 @@ test('collapsed card CSS puts the map control beside the title and tightens band
     /\.porchfest-venue-card\.is-collapsed \.porchfest-show-on-map\s*\{([^}]*)\}/
   );
 
+  assert.ok(baseBandRule);
+  assert.ok(baseTitleRule);
+  assert.ok(baseAddressRule);
+  assert.ok(baseControlRule);
+  assert.match(baseBandRule[1], /display:\s*grid/);
+  assert.match(baseBandRule[1], /grid-template-columns:\s*minmax\(0,\s*1fr\) auto/);
+  assert.match(baseBandRule[1], /align-items:\s*start/);
+  assert.match(baseTitleRule[1], /grid-column:\s*1/);
+  assert.match(baseTitleRule[1], /grid-row:\s*1/);
+  assert.match(baseAddressRule[1], /grid-column:\s*1/);
+  assert.match(baseAddressRule[1], /grid-row:\s*2/);
+  assert.match(baseAddressRule[1], /min-width:\s*0/);
+  assert.match(baseControlRule[1], /grid-column:\s*2/);
+  assert.match(baseControlRule[1], /grid-row:\s*1/);
+  assert.match(baseControlRule[1], /align-self:\s*start/);
+  assert.match(baseControlRule[1], /margin-top:\s*0/);
   assert.ok(bandRule);
   assert.ok(titleRule);
   assert.ok(addressRule);
   assert.ok(controlRule);
-  assert.match(bandRule[1], /display:\s*grid/);
-  assert.match(bandRule[1], /grid-template-columns:\s*minmax\(0,\s*1fr\) auto/);
   assert.match(bandRule[1], /padding:\s*0\.35rem 0\.5rem/);
-  assert.match(titleRule[1], /grid-row:\s*1/);
-  assert.match(addressRule[1], /grid-row:\s*2/);
   assert.match(addressRule[1], /margin-bottom:\s*0/);
-  assert.match(controlRule[1], /grid-row:\s*1/);
   assert.match(controlRule[1], /margin-top:\s*0/);
   assert.match(controlRule[1], /border:\s*1px solid var\(--color-text-secondary\)/);
   assert.match(controlRule[1], /color:\s*var\(--color-text-secondary\)/);
@@ -631,7 +688,7 @@ test('collapsed card CSS expands for focus and disables motion when requested', 
   assert.match(stylesheetSource, /@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*?\.porchfest-venue-card \.porchfest-venue-acts\s*\{[^}]*transition:\s*none/s);
 });
 
-test('consecutive collapsed cards use a smaller nonnegative gap without overlap', () => {
+test('single-column cards use normal-flow margins with a smaller collapsed gap', () => {
   const listRule = stylesheetSource.match(/@media\s*\(max-width:\s*768px\)[\s\S]*?\.porchfest-venue-list-items\s*\{([^}]*)\}/);
   const normalGapRule = stylesheetSource.match(/\.porchfest-venue-card\s*\+\s*\.porchfest-venue-card\s*\{([^}]*)\}/);
   const stackRule = stylesheetSource.match(/\.porchfest-venue-card\.is-collapsed\s*\+\s*\.porchfest-venue-card\.is-collapsed\s*\{([^}]*)\}/);
@@ -639,7 +696,7 @@ test('consecutive collapsed cards use a smaller nonnegative gap without overlap'
   assert.ok(listRule);
   assert.ok(normalGapRule);
   assert.ok(stackRule);
-  assert.match(listRule[1], /row-gap:\s*0/);
+  assert.match(listRule[1], /column-gap:\s*0/);
   assert.match(normalGapRule[1], /margin-top:\s*1rem\s*!important/);
   assert.match(stackRule[1], /margin-top:\s*0\.5rem\s*!important/);
   assert.doesNotMatch(stackRule[1], /margin[^:]*:\s*-/);
@@ -658,7 +715,7 @@ test('neutral venue bands use the existing dark-ground and light-text tokens', (
 
 test('matched venue bands use the AA terracotta ink token with white text', () => {
   assert.match(stylesheetSource, /\.porchfest-venue-card\.is-match \.porchfest-venue-band\s*\{[^}]*background:\s*var\(--color-accent-ink\)[^}]*color:\s*var\(--color-text-light\)/s);
-  assert.match(stylesheetSource, /\.porchfest-venue-card\.is-match \.porchfest-venue-band \.porchfest-venue-title,[^{]*\.porchfest-venue-address,[^{]*\.porchfest-venue-schedule,[^{]*\.porchfest-venue-band strong\s*\{[^}]*color:\s*var\(--color-text-light\) !important/s);
+  assert.match(stylesheetSource, /\.porchfest-venue-card\.is-match \.porchfest-venue-band \.porchfest-venue-title,[^{]*\.porchfest-venue-address,[^{]*\.porchfest-venue-band strong\s*\{[^}]*color:\s*var\(--color-text-light\) !important/s);
   assert.ok(contrastRatio(cssToken('--color-accent'), '#ffffff') < 4.5);
   assert.ok(contrastRatio(cssToken('--color-accent-ink'), '#ffffff') >= 4.5);
 });
@@ -669,7 +726,7 @@ test('a collapsed venue band lightens past midpoint and flips to the dark text t
 
   assert.ok(fadeWeight > 0.5);
   assert.match(stylesheetSource, /\.porchfest-venue-card\.is-collapsed \.porchfest-venue-band\s*\{[^}]*background:\s*color-mix\(\s*in srgb,\s*var\(--color-bg-dark\),\s*var\(--color-bg\) var\(--porchfest-filter-fade\)\s*\)[^}]*color:\s*var\(--color-text\)/s);
-  assert.match(stylesheetSource, /\.porchfest-venue-card\.is-collapsed \.porchfest-venue-band \.porchfest-venue-title,[^{]*\.porchfest-venue-address,[^{]*\.porchfest-venue-schedule,[^{]*\.porchfest-venue-band strong\s*\{[^}]*color:\s*var\(--color-text\) !important/s);
+  assert.match(stylesheetSource, /\.porchfest-venue-card\.is-collapsed \.porchfest-venue-band \.porchfest-venue-title,[^{]*\.porchfest-venue-address,[^{]*\.porchfest-venue-band strong\s*\{[^}]*color:\s*var\(--color-text\) !important/s);
   assert.ok(contrastRatio(fadedBand, cssToken('--color-text')) >= 4.5);
 });
 
@@ -705,6 +762,125 @@ test('re-appending an attached child moves it without changing the child count',
   assert.equal(parent.children.length, 2);
   assert.deepEqual(parent.children, [second, first]);
   assert.equal(first.parentNode, parent);
+});
+
+test('staggered relayout preserves the exact venue card node objects', async () => {
+  const venues = [
+    venue({ title: 'First Stage', lat: 44.97 }),
+    venue({ title: 'Second Stage', lat: 44.98 }),
+    venue({ title: 'Third Stage', lat: 44.99 })
+  ];
+  const run = await runScript({ fetch: () => Promise.resolve(response({ venues })) });
+  const cardsBefore = run.nodes.list.children.slice();
+
+  run.testApi.scheduleVenueLayout(run.nodes.listSection);
+  flushAnimationFrames(run);
+
+  assert.deepEqual(run.nodes.list.children, cardsBefore);
+  run.nodes.list.children.forEach((card, index) => {
+    assert.equal(card, cardsBefore[index]);
+  });
+});
+
+test('hour and genre filter changes each schedule a relayout', async () => {
+  const venues = [
+    venue({ title: 'Folk Stage', acts: [{ slot: '6-7', name: 'Folk Act', genre: 'Folk' }] }),
+    venue({ title: 'Rock Stage', lat: 44.99, acts: [{ slot: '7-8', name: 'Rock Act', genre: 'Rock' }] })
+  ];
+  const run = await runScript({ fetch: () => Promise.resolve(response({ venues })) });
+  const hourButton = run.nodes.fullbleed.querySelector('.porchfest-hour-control').querySelectorAll('button')[1];
+  const genreButton = run.nodes.fullbleed
+    .querySelector('.porchfest-genre-chips')
+    .querySelectorAll('button')
+    .find((button) => button.textContent === 'Folk');
+
+  hourButton.dispatchEvent({ type: 'click' });
+  assert.equal(run.animationFrames.length, 1);
+  flushAnimationFrames(run);
+
+  genreButton.dispatchEvent({ type: 'click' });
+  assert.equal(run.animationFrames.length, 1);
+});
+
+test('sort changes schedule a relayout after existing cards move', async () => {
+  const run = await runScript({
+    fetch: () => Promise.resolve(response({
+      venues: [venue({ lat: 44.97 }), venue({ title: 'North Stage', lat: 44.99 })]
+    }))
+  });
+  const cardsBefore = run.nodes.list.children.slice();
+  const sortButton = run.nodes.fullbleed.querySelector('.porchfest-sort-button');
+
+  sortButton.dispatchEvent({ type: 'click' });
+
+  assert.equal(run.animationFrames.length, 1);
+  assert.deepEqual(run.nodes.list.children, cardsBefore.slice().reverse());
+});
+
+test('focus entering and leaving the venue list each schedules a relayout', async () => {
+  const run = await runScript();
+
+  run.nodes.list.dispatchEvent({ type: 'focusin' });
+  assert.equal(run.animationFrames.length, 1);
+  flushAnimationFrames(run);
+
+  run.nodes.list.dispatchEvent({ type: 'focusout' });
+  assert.equal(run.animationFrames.length, 1);
+});
+
+test('max-height transition completion schedules one relayout and preserves card nodes', async () => {
+  const venues = [venue(), venue({ title: 'Second Stage', lat: 44.99 })];
+  const run = await runScript({ fetch: () => Promise.resolve(response({ venues })) });
+  const cardsBefore = run.nodes.list.children.slice();
+
+  run.nodes.list.dispatchEvent({ type: 'transitionend', propertyName: 'opacity' });
+  assert.equal(run.animationFrames.length, 0);
+
+  run.nodes.list.dispatchEvent({ type: 'transitionend', propertyName: 'max-height' });
+  run.nodes.list.dispatchEvent({ type: 'transitionend', propertyName: 'max-height' });
+  assert.equal(run.animationFrames.length, 1);
+  flushAnimationFrames(run);
+
+  assert.deepEqual(run.nodes.list.children, cardsBefore);
+  run.nodes.list.children.forEach((card, index) => {
+    assert.equal(card, cardsBefore[index]);
+  });
+});
+
+test('single-column relayout clears every inline positioning style', async () => {
+  const run = await runScript({
+    fetch: () => Promise.resolve(response({ venues: [venue(), venue({ title: 'Second Stage' })] }))
+  });
+
+  assert.equal(run.nodes.list.style.position, 'relative');
+  assert.equal(run.nodes.list.children[0].style.position, 'absolute');
+
+  run.window.innerWidth = 600;
+  run.nodes.list.dispatchEvent({ type: 'focusin' });
+  flushAnimationFrames(run);
+
+  assert.equal(run.nodes.list.style.position, '');
+  assert.equal(run.nodes.list.style.height, '');
+  run.nodes.list.children.forEach((card) => {
+    assert.equal(card.style.position, '');
+    assert.equal(card.style.width, '');
+    assert.equal(card.style.left, '');
+    assert.equal(card.style.top, '');
+  });
+});
+
+test('window resize relayout is debounced for 150ms', async () => {
+  const run = await runScript();
+  const timerCountBefore = run.timers.length;
+
+  run.window.dispatchEvent({ type: 'resize' });
+  run.window.dispatchEvent({ type: 'resize' });
+
+  assert.equal(run.timers.length, timerCountBefore + 2);
+  assert.equal(run.timers.at(-1).delay, 150);
+  assert.ok(run.clearedTimers.length >= 2);
+  run.timers.at(-1).callback();
+  assert.equal(run.animationFrames.length, 1);
 });
 
 test('classList methods stay synchronized with className', () => {
@@ -797,7 +973,7 @@ test('a reordered card resolves its marker through the venue-keyed lookup', asyn
   );
 });
 
-test('each venue card has an accessible native Show on map control', async () => {
+test('each venue card has an accessible native Map control', async () => {
   const run = await runScript({
     fetch: () => Promise.resolve(response({
       venues: [
@@ -809,13 +985,13 @@ test('each venue card has an accessible native Show on map control', async () =>
   const buttons = run.nodes.list.querySelectorAll('button.porchfest-show-on-map');
 
   assert.equal(buttons.length, 2);
-  buttons.forEach((button) => {
+  buttons.forEach((button, index) => {
     assert.equal(button.tagName, 'BUTTON');
     assert.equal(button.getAttribute('type'), 'button');
-    assert.equal(button.textContent, 'Show on map');
-    assert.match(button.getAttribute('aria-label'), /^Show .+ on map$/);
+    assert.equal(button.textContent, 'Map');
+    assert.equal(button.getAttribute('aria-label'), 'Show ' + ['First Stage', 'Second Stage'][index] + ' on map');
   });
-  assert.match(stylesheetSource, /\.porchfest-show-on-map\s*\{[^}]*min-height:\s*44px/s);
+  assert.match(stylesheetSource, /\.porchfest-show-on-map\s*\{[^}]*min-width:\s*44px[^}]*min-height:\s*44px/s);
   assert.match(stylesheetSource, /\.porchfest-show-on-map:focus-visible\s*\{[^}]*outline:/s);
 });
 
@@ -1559,6 +1735,20 @@ test('renders an accessible 44px marker with a decorative SVG musical note', asy
   assert.match(stylesheetSource, /\.porchfest-marker-note\s*\{[^}]*fill:\s*#fff/s);
 });
 
+test('labels every rendered marker with its venue title', async () => {
+  const venues = [
+    venue({ title: 'Garden Stage' }),
+    venue({ title: 'Oak Stage', lat: 44.99, lng: -93.18 })
+  ];
+  const { leaflet } = await runScript({
+    fetch: () => Promise.resolve(response({ venues }))
+  });
+
+  leaflet.records.markers.forEach((marker, index) => {
+    assert.match(marker.element.getAttribute('aria-label'), new RegExp(venues[index].title));
+  });
+});
+
 test('renders a 6-8 act and preserves the producer order for two-act venues', async () => {
   const twoActVenue = venue({
     title: 'Two Act Stage',
@@ -1585,7 +1775,7 @@ test('renders a 6-8 act and preserves the producer order for two-act venues', as
   );
 });
 
-test('appendVenueContent emits one venue band with a card-only map control', async () => {
+test('appendVenueContent emits a schedule-free venue band with a card-only map control', async () => {
   const { nodes, leaflet } = await runScript();
   const card = nodes.list.querySelector('.porchfest-venue-card');
   const popup = leaflet.records.markers[0].popupFactory();
@@ -1597,11 +1787,11 @@ test('appendVenueContent emits one venue band with a card-only map control', asy
     assert.equal(bands.length, 1);
     const expectedChildren = [
       'porchfest-venue-title',
-      'porchfest-venue-address',
-      'porchfest-venue-schedule'
+      'porchfest-venue-address'
     ];
     if (container === card) expectedChildren.push('porchfest-show-on-map');
     assert.deepEqual(band.children.map((child) => child.className), expectedChildren);
+    assert.equal(band.querySelectorAll('.porchfest-venue-schedule').length, 0);
     assert.equal(container.children.length, 2);
     assert.equal(container.children[0], band);
     assert.equal(container.children[1].className, 'porchfest-venue-acts');

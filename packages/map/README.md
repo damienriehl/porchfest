@@ -42,6 +42,8 @@ The module fetches `/data/venues-2026.json`. That file follows the
 
 Each act's `slot` is `"6-7"`, `"7-8"`, or `"6-8"`. All other text fields are
 strings, coordinates are numbers, and `links` and `acts` are arrays.
+The `schedule` field remains part of the `venues-map.v1` contract, although the
+current venue band does not render a separate schedule line.
 
 ## Mount the assets
 
@@ -69,11 +71,19 @@ on the page and has no other dependency.
 ## Behaviour
 
 The interface provides hour and genre filters. Matching venues receive a
-highlighted state, while non-matches collapse to a small performer peek instead
-of disappearing. Venue cards are sorted south to north initially, with a control
-to reverse the order. A card's **Show on map** control navigates to its matching
-pin and opens the popup. Venue bands have three visual states: neutral,
-filter-match, and collapsed non-match.
+highlighted state, while non-matches collapse to a compact performer peek with a
+masked fade instead of fading in place. Venue cards are sorted south to north
+initially, with a control to reverse the order.
+
+Each venue band shows the venue name and address without a schedule line. Its
+**Map** button sits in the top-right corner, navigates to the matching pin, and
+opens the popup. Venue bands have three visual states: neutral, filter-match,
+and collapsed non-match.
+
+On wider viewports, the module places each card in whichever lineup column is
+currently shorter, avoiding dead space below short cards while preserving a
+reading order that runs across the columns. Consumers must allow the module to
+manage the lineup container's layout and must not apply CSS grid to it.
 
 ## License
 

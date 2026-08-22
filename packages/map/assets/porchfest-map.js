@@ -10,6 +10,8 @@
   var map = null;
   var markersByVenueKey = Object.create(null);
   var pendingCardPopupHandler = null;
+  var venueLayoutAnimationFrameId = null;
+  var venueLayoutResizeTimeoutId = null;
   var viewState = {
     hour: 'all',
     genre: 'all',
@@ -262,6 +264,7 @@
           viewState.hour = option.value;
           updatePressedButtons(hourControl, viewState.hour);
           applyView(status, listSection, venues, markerLookup);
+          scheduleVenueLayout(listSection);
         }
       ));
     });
@@ -313,6 +316,7 @@
           viewState.genre = genre;
           updatePressedButtons(chips, viewState.genre);
           applyView(status, listSection, venues, markerLookup);
+          scheduleVenueLayout(listSection);
         }
       ));
     });
@@ -338,6 +342,86 @@
     });
   }
 
+  function clearVenueLayout(list) {
+    list.style.removeProperty('position');
+    list.style.removeProperty('height');
+    list.querySelectorAll('.porchfest-venue-card').forEach(function (card) {
+      card.style.removeProperty('position');
+      card.style.removeProperty('width');
+      card.style.removeProperty('left');
+      card.style.removeProperty('top');
+    });
+  }
+
+  function usesSingleVenueColumn() {
+    if (window.matchMedia) return window.matchMedia('(max-width: 768px)').matches;
+    return Number(window.innerWidth) <= 768;
+  }
+
+  function layoutVenueCards(listSection) {
+    var list = listSection.querySelector('.porchfest-venue-list-items');
+    var cards = list.querySelectorAll('.porchfest-venue-card');
+    var listWidth;
+    var gap;
+    var columnWidth;
+    var columnHeights;
+
+    clearVenueLayout(list);
+    if (usesSingleVenueColumn() || cards.length === 0) return;
+
+    listWidth = Number(list.clientWidth) || 0;
+    gap = parseFloat(window.getComputedStyle(list).columnGap) || 0;
+    columnWidth = Math.max(0, (listWidth - gap) / 2);
+    columnHeights = [0, 0];
+    list.style.position = 'relative';
+
+    cards.forEach(function (card) {
+      var column = columnHeights[0] <= columnHeights[1] ? 0 : 1;
+      card.style.position = 'absolute';
+      card.style.width = columnWidth + 'px';
+      card.style.left = column * (columnWidth + gap) + 'px';
+      card.style.top = columnHeights[column] + 'px';
+      columnHeights[column] += (Number(card.offsetHeight) || 0) + gap;
+    });
+
+    list.style.height = Math.max(0, Math.max.apply(Math, columnHeights) - gap) + 'px';
+  }
+
+  function scheduleVenueLayout(listSection) {
+    if (venueLayoutAnimationFrameId !== null) return;
+
+    venueLayoutAnimationFrameId = window.requestAnimationFrame(function () {
+      venueLayoutAnimationFrameId = null;
+      layoutVenueCards(listSection);
+    });
+  }
+
+  function watchVenueLayout(listSection) {
+    var list = listSection.querySelector('.porchfest-venue-list-items');
+
+    window.addEventListener('resize', function () {
+      if (venueLayoutResizeTimeoutId !== null) {
+        window.clearTimeout(venueLayoutResizeTimeoutId);
+      }
+      venueLayoutResizeTimeoutId = window.setTimeout(function () {
+        venueLayoutResizeTimeoutId = null;
+        scheduleVenueLayout(listSection);
+      }, 150);
+    });
+    list.addEventListener('focusin', function () {
+      scheduleVenueLayout(listSection);
+    });
+    list.addEventListener('focusout', function () {
+      scheduleVenueLayout(listSection);
+    });
+    list.addEventListener('transitionend', function (event) {
+      if (event.propertyName === 'max-height') {
+        scheduleVenueLayout(listSection);
+      }
+    });
+    scheduleVenueLayout(listSection);
+  }
+
   function updateSortButton(button) {
     var isSouthToNorth = viewState.sortDirection === 'asc';
     button.setAttribute('aria-pressed', String(isSouthToNorth));
@@ -359,6 +443,7 @@
       viewState.sortDirection = viewState.sortDirection === 'asc' ? 'desc' : 'asc';
       sortVenueCards(listSection, venues, viewState.sortDirection);
       updateSortButton(button);
+      scheduleVenueLayout(listSection);
     });
     return button;
   }
@@ -399,7 +484,7 @@
     button.className = 'porchfest-show-on-map';
     button.setAttribute('type', 'button');
     button.setAttribute('aria-label', 'Show ' + title + ' on map');
-    button.textContent = 'Show on map';
+    button.textContent = 'Map';
     button.addEventListener('click', function () {
       showVenueOnMap(venue);
     });
@@ -423,8 +508,6 @@
     if (address && normalizedWhitespace(address) !== normalizedWhitespace(title)) {
       appendTextElement(venueBand, 'address', 'porchfest-venue-address', address);
     }
-    appendLabelledText(venueBand, 'porchfest-venue-schedule', 'Schedule:', venue.schedule);
-
     var acts = document.createElement('ul');
     acts.className = 'porchfest-venue-acts';
     venueActs(venue).forEach(function (act) {
@@ -525,19 +608,6 @@
         markers.push(marker);
         markerLookup[venueKey(venue)] = marker;
 
-        var markerElement = marker.getElement();
-        if (markerElement) {
-          markerElement.setAttribute('role', 'button');
-          markerElement.setAttribute('aria-label', venueTitle + ': show lineup');
-          markerElement.tabIndex = 0;
-          markerElement.addEventListener('keydown', function (event) {
-            if (event.key === ' ' || event.key === 'Spacebar') {
-              event.preventDefault();
-              marker.openPopup();
-            }
-          });
-        }
-
         bounds.extend([venue.lat, venue.lng]);
       });
 
@@ -558,6 +628,21 @@
       renderedMap.fitBounds(bounds, {
         padding: [28, 28],
         maxZoom: 16
+      });
+      markers.forEach(function (marker, index) {
+        var markerElement = marker.getElement();
+        if (!markerElement) return;
+
+        var venueTitle = cleanText(venues[index].title) || 'Porchfest venue';
+        markerElement.setAttribute('role', 'button');
+        markerElement.setAttribute('aria-label', venueTitle + ': show lineup');
+        markerElement.tabIndex = 0;
+        markerElement.addEventListener('keydown', function (event) {
+          if (event.key === ' ' || event.key === 'Spacebar') {
+            event.preventDefault();
+            marker.openPopup();
+          }
+        });
       });
       return {
         map: renderedMap,
@@ -662,6 +747,7 @@
         markersByVenueKey = rendered.markersByVenueKey;
         renderMapControls(mapElement, status, listSection, venues, markersByVenueKey);
         applyView(status, listSection, venues, markersByVenueKey);
+        watchVenueLayout(listSection);
       })
       .catch(function () {
         showState(
