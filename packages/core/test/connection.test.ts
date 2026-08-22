@@ -5,18 +5,7 @@ import Database from "better-sqlite3";
 import { sql } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CORE_DATABASE_FILENAME, openCoreDatabase } from "../src/index.js";
-import { contacts } from "../src/storage/schema.js";
-
-const expectedTables = [
-  "acts",
-  "annotations",
-  "assignments",
-  "contacts",
-  "email_log",
-  "seasons",
-  "slots",
-  "venues",
-];
+import { contacts, schemaTableNames } from "../src/storage/schema.js";
 
 describe("core database connection", () => {
   let closeDatabase: (() => void) | undefined;
@@ -49,7 +38,7 @@ describe("core database connection", () => {
     );
 
     expect(pragmaSpy).toHaveBeenCalledWith("foreign_keys = ON");
-    expect(tableNames).toEqual(expect.arrayContaining(expectedTables));
+    expect(tableNames).toEqual(expect.arrayContaining([...schemaTableNames]));
     expect(foreignKeys).toEqual({ foreign_keys: 1 });
     expect(() =>
       connection.database

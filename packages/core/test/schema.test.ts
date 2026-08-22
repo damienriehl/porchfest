@@ -1,19 +1,10 @@
 import { readFile } from "node:fs/promises";
 import Database from "better-sqlite3";
+import { getTableName, is } from "drizzle-orm";
+import { SQLiteTable } from "drizzle-orm/sqlite-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { seasonStates, slotStates } from "../src/storage/schema.js";
+import * as schema from "../src/storage/schema.js";
 import { openTestDatabase, type TestDatabase } from "./support/db.js";
-
-const expectedTables = [
-  "acts",
-  "annotations",
-  "assignments",
-  "contacts",
-  "email_log",
-  "seasons",
-  "slots",
-  "venues",
-];
 
 describe("core schema migration", () => {
   let database: TestDatabase;
@@ -28,7 +19,16 @@ describe("core schema migration", () => {
     await database.close();
   });
 
-  it("creates every domain table", () => {
+  it("includes every exported schema table in canonical metadata", () => {
+    const exportedTableNames = Object.values(schema)
+      .filter((value) => is(value, SQLiteTable))
+      .map((table) => getTableName(table))
+      .sort();
+
+    expect(schema.schemaTableNames).toEqual(exportedTableNames);
+  });
+
+  it("creates every domain table with its canonical columns", () => {
     const tableNames = sqlite
       .prepare(
         "select name from sqlite_master where type = 'table' and name not like 'sqlite_%'",
@@ -36,7 +36,17 @@ describe("core schema migration", () => {
       .all()
       .map((row) => (row as { name: string }).name);
 
-    expect(tableNames).toEqual(expect.arrayContaining(expectedTables));
+    expect(tableNames).toEqual(
+      expect.arrayContaining([...schema.schemaTableNames]),
+    );
+    for (const table of schema.schemaTableDefinitions) {
+      const columnNames = sqlite
+        .prepare("select name from pragma_table_info(?) order by name")
+        .all(table.name)
+        .map((row) => (row as { name: string }).name);
+
+      expect(columnNames, table.name).toEqual(table.columns);
+    }
   });
 
   it("rejects a slot state outside the supported state machine", () => {
@@ -77,8 +87,10 @@ describe("core schema migration", () => {
       return values.split(",").map((value) => value.trim().replaceAll("'", ""));
     };
 
-    expect(constraintValues("seasons_state_check")).toEqual(seasonStates);
-    expect(constraintValues("slots_state_check")).toEqual(slotStates);
+    expect(constraintValues("seasons_state_check")).toEqual(
+      schema.seasonStates,
+    );
+    expect(constraintValues("slots_state_check")).toEqual(schema.slotStates);
   });
 
   it("defaults the optimistic-concurrency version to one", () => {

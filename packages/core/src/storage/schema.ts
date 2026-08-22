@@ -1,4 +1,4 @@
-import { sql } from "drizzle-orm";
+import { getTableColumns, getTableName, sql } from "drizzle-orm";
 import {
   type AnySQLiteColumn,
   check,
@@ -216,6 +216,36 @@ export const annotations = sqliteTable(
     ...mutableColumns(),
   },
   (table) => [index("annotations_season_id_idx").on(table.seasonId)],
+);
+
+const schemaTables = [
+  seasons,
+  contacts,
+  venues,
+  acts,
+  slots,
+  assignments,
+  emailLog,
+  annotations,
+] as const;
+
+export const schemaTableDefinitions = Object.freeze(
+  schemaTables
+    .map((table) =>
+      Object.freeze({
+        name: getTableName(table),
+        columns: Object.freeze(
+          Object.values(getTableColumns(table))
+            .map((column) => column.name)
+            .sort(),
+        ),
+      }),
+    )
+    .sort((left, right) => left.name.localeCompare(right.name)),
+);
+
+export const schemaTableNames = Object.freeze(
+  schemaTableDefinitions.map(({ name }) => name),
 );
 
 export type Season = typeof seasons.$inferSelect;
