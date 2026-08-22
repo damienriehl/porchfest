@@ -175,6 +175,30 @@ export const assignments = sqliteTable(
   ],
 );
 
+export const emailLog = sqliteTable(
+  "email_log",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    seasonId: integer("season_id")
+      .notNull()
+      .references(() => seasons.id),
+    recordType: text("record_type").notNull(),
+    recordId: integer("record_id").notNull(),
+    waveLabel: text("wave_label").notNull(),
+    recipientContactId: integer("recipient_contact_id")
+      .notNull()
+      .references(() => contacts.id),
+    sentAt: integer("sent_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (table) => [
+    index("email_log_season_id_idx").on(table.seasonId),
+    index("email_log_record_idx").on(table.recordType, table.recordId),
+    index("email_log_recipient_contact_id_idx").on(table.recipientContactId),
+  ],
+);
+
 export const annotations = sqliteTable(
   "annotations",
   {
@@ -202,5 +226,7 @@ export type Slot = typeof slots.$inferSelect;
 export type NewSlot = typeof slots.$inferInsert;
 export type Assignment = typeof assignments.$inferSelect;
 export type NewAssignment = typeof assignments.$inferInsert;
+export type EmailLogEntry = typeof emailLog.$inferSelect;
+export type NewEmailLogEntry = typeof emailLog.$inferInsert;
 export type Annotation = typeof annotations.$inferSelect;
 export type NewAnnotation = typeof annotations.$inferInsert;
