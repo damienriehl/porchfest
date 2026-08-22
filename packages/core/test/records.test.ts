@@ -1,10 +1,7 @@
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { RecordConflictError, createRecordRepository } from "../src/records.js";
-import {
-  SeasonLifecycleError,
-  createSeasonRepository,
-} from "../src/season.js";
+import { SeasonLifecycleError, createSeasonRepository } from "../src/season.js";
 import { openTestDatabase, type TestDatabase } from "./support/db.js";
 
 describe("record lifecycle", () => {
@@ -148,7 +145,7 @@ describe("record lifecycle", () => {
     });
   });
 
-  it("promotes a placeholder act without losing its assignment or email history", () => {
+  it("promotes a placeholder act without losing assignment, email, or annotation history", () => {
     const seasonId = insertSeason();
     const contact = sqlite
       .prepare(
@@ -195,6 +192,9 @@ describe("record lifecycle", () => {
         "Submitted description",
         "https://example.invalid/submission",
       ) as { id: number; version: number };
+    const unrelatedAct = sqlite
+      .prepare("insert into acts (season_id, name) values (?, ?) returning id")
+      .get(seasonId, "Unrelated Act") as { id: number };
     const assignment = sqlite
       .prepare(
         "insert into assignments (season_id, act_id, slot_id) values (?, ?, ?) returning id, version",
@@ -215,6 +215,27 @@ describe("record lifecycle", () => {
         contact.id,
         4_180_304_000,
       ) as { id: number };
+    const annotation = sqlite
+      .prepare(
+        "insert into annotations (season_id, record_type, record_id, note) values (?, ?, ?, ?) returning id",
+      )
+      .get(seasonId, "act", submission.id, "Submission note") as {
+      id: number;
+    };
+    const otherTypeAnnotation = sqlite
+      .prepare(
+        "insert into annotations (season_id, record_type, record_id, note) values (?, ?, ?, ?) returning id",
+      )
+      .get(seasonId, "venue", submission.id, "Same id, other type") as {
+      id: number;
+    };
+    const otherActAnnotation = sqlite
+      .prepare(
+        "insert into annotations (season_id, record_type, record_id, note) values (?, ?, ?, ?) returning id",
+      )
+      .get(seasonId, "act", unrelatedAct.id, "Other act note") as {
+      id: number;
+    };
 
     const promoted = records.promotePlaceholderAct(
       placeholder.id,
@@ -239,6 +260,21 @@ describe("record lifecycle", () => {
         .prepare("select record_type, record_id from email_log where id = ?")
         .get(email.id),
     ).toEqual({ record_type: "act", record_id: promoted.id });
+    expect(
+      sqlite
+        .prepare("select record_type, record_id from annotations where id = ?")
+        .get(annotation.id),
+    ).toEqual({ record_type: "act", record_id: promoted.id });
+    expect(
+      sqlite
+        .prepare("select record_type, record_id from annotations where id = ?")
+        .get(otherTypeAnnotation.id),
+    ).toEqual({ record_type: "venue", record_id: submission.id });
+    expect(
+      sqlite
+        .prepare("select record_type, record_id from annotations where id = ?")
+        .get(otherActAnnotation.id),
+    ).toEqual({ record_type: "act", record_id: unrelatedAct.id });
     expect(
       sqlite
         .prepare("select canonical_act_id from acts where id = ?")
@@ -772,9 +808,7 @@ describe("record lifecycle", () => {
       superseded: [expect.objectContaining({ id: oldVenue.id })],
     });
     expect(
-      sqlite
-        .prepare("select id, venue_id from slots order by id")
-        .all(),
+      sqlite.prepare("select id, venue_id from slots order by id").all(),
     ).toEqual([canonicalSlot, oldVenueSlot]);
   });
 
@@ -823,11 +857,7 @@ describe("record lifecycle", () => {
     const seasonRecords = createSeasonRepository(database.db, {
       now: () => pinnedNow,
     });
-    seasonRecords.assignSlot(
-      firstSlot.id,
-      firstSlot.version,
-      canonical.id,
-    );
+    seasonRecords.assignSlot(firstSlot.id, firstSlot.version, canonical.id);
     seasonRecords.assignSlot(secondSlot.id, secondSlot.version, source.id);
     const assignmentsBefore = sqlite
       .prepare(
@@ -835,18 +865,12 @@ describe("record lifecycle", () => {
       )
       .all();
     const slotsBefore = sqlite
-      .prepare(
-        "select id, state, version, updated_at from slots order by id",
-      )
+      .prepare("select id, state, version, updated_at from slots order by id")
       .all();
 
     let thrown: unknown;
     try {
-      seasonRecords.supersedeAct(
-        source.id,
-        source.version,
-        canonical.id,
-      );
+      seasonRecords.supersedeAct(source.id, source.version, canonical.id);
     } catch (error) {
       thrown = error;
     }

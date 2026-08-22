@@ -1,4 +1,8 @@
-import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
+import type { ExtractTablesWithRelations } from "drizzle-orm";
+import type {
+  BetterSQLite3Database,
+  BetterSQLiteTransaction,
+} from "drizzle-orm/better-sqlite3";
 import * as schema from "./schema.js";
 
 export class RepositoryConflictError<RecordType extends string> extends Error {
@@ -34,6 +38,11 @@ export interface RepositoryOptions {
 }
 
 export type CoreDatabase = BetterSQLite3Database<typeof schema>;
+export type CoreTransaction = BetterSQLiteTransaction<
+  typeof schema,
+  ExtractTablesWithRelations<typeof schema>
+>;
+export type CoreExecutor = CoreDatabase | CoreTransaction;
 
 type ConflictErrorConstructor<RecordType extends string> = new (
   recordType: RecordType,

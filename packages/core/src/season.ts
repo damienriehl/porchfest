@@ -24,6 +24,7 @@ import {
 import * as schema from "./storage/schema.js";
 import {
   type CoreDatabase,
+  type CoreExecutor,
   RepositoryConflictError,
   RepositoryLifecycleError,
   type RepositoryOptions,
@@ -148,26 +149,34 @@ export function createSeasonRepository(
     );
   }
 
-  function getSeason(id: number): Season {
-    const season = db.select().from(seasons).where(eq(seasons.id, id)).get();
+  function getSeason(id: number, executor: CoreExecutor = db): Season {
+    const season = executor
+      .select()
+      .from(seasons)
+      .where(eq(seasons.id, id))
+      .get();
     if (!season) throw new SeasonLifecycleError(`season ${id} does not exist`);
     return season;
   }
 
-  function getAct(id: number): Act {
-    const act = db.select().from(acts).where(eq(acts.id, id)).get();
+  function getAct(id: number, executor: CoreExecutor = db): Act {
+    const act = executor.select().from(acts).where(eq(acts.id, id)).get();
     if (!act) throw new SeasonLifecycleError(`act ${id} does not exist`);
     return act;
   }
 
-  function getVenue(id: number): Venue {
-    const venue = db.select().from(venues).where(eq(venues.id, id)).get();
+  function getVenue(id: number, executor: CoreExecutor = db): Venue {
+    const venue = executor.select().from(venues).where(eq(venues.id, id)).get();
     if (!venue) throw new SeasonLifecycleError(`venue ${id} does not exist`);
     return venue;
   }
 
-  function getContact(id: number): Contact {
-    const contact = db.select().from(contacts).where(eq(contacts.id, id)).get();
+  function getContact(id: number, executor: CoreExecutor = db): Contact {
+    const contact = executor
+      .select()
+      .from(contacts)
+      .where(eq(contacts.id, id))
+      .get();
     if (!contact)
       throw new SeasonLifecycleError(`contact ${id} does not exist`);
     return contact;
@@ -179,19 +188,50 @@ export function createSeasonRepository(
     }
   }
 
-  function assertCorrectionLegal(seasonId: number): void {
-    assertLegal(getSeason(seasonId), "correction");
+  function assertCorrectionLegal(
+    seasonId: number,
+    executor: CoreExecutor = db,
+  ): void {
+    assertLegal(getSeason(seasonId, executor), "correction");
+  }
+
+  type SeasonActIdentity = Pick<Act, "id" | "canonicalActId">;
+
+  function resolveCanonicalSeasonAct(
+    actId: number,
+    seasonActsById: ReadonlyMap<number, SeasonActIdentity>,
+    executor: CoreExecutor,
+  ): SeasonActIdentity {
+    let canonical = seasonActsById.get(actId) ?? getAct(actId, executor);
+    const seen = new Set<number>();
+    while (canonical.canonicalActId !== null) {
+      if (seen.has(canonical.id)) {
+        throw new SeasonLifecycleError(`act ${actId} has a supersession cycle`);
+      }
+      seen.add(canonical.id);
+      canonical =
+        seasonActsById.get(canonical.canonicalActId) ??
+        getAct(canonical.canonicalActId, executor);
+    }
+    return canonical;
   }
 
   function assertCanonicalActUnassigned(
     seasonId: number,
     actId: number,
     assignedActs: readonly { actId: number }[],
+    seasonActsById: ReadonlyMap<number, SeasonActIdentity>,
+    executor: CoreExecutor,
   ): void {
-    const canonicalAct = records.resolveAct(actId).canonical;
+    const canonicalAct = resolveCanonicalSeasonAct(
+      actId,
+      seasonActsById,
+      executor,
+    );
     const canonicalActAlreadyAssigned = assignedActs.some(
       (assignment) =>
-        records.resolveAct(assignment.actId).canonical.id === canonicalAct.id,
+        resolveCanonicalSeasonAct(assignment.actId, seasonActsById, executor)
+          .id === canonicalAct.id,
     );
     if (canonicalActAlreadyAssigned) {
       throw new SeasonLifecycleError(
@@ -281,20 +321,29 @@ export function createSeasonRepository(
     expectedVersion: number,
     changes: ActChanges,
   ): Act {
-    const act = getAct(id);
-    assertCorrectionLegal(act.seasonId);
-    if (
-      changes.reachViaContactId !== undefined &&
-      changes.reachViaContactId !== null
-    ) {
-      const contact = getContact(changes.reachViaContactId);
-      if (contact.seasonId !== act.seasonId) {
-        throw new SeasonLifecycleError(
-          "reach-via contact and act belong to different seasons",
+    return db.transaction(
+      (tx) => {
+        const act = getAct(id, tx);
+        assertCorrectionLegal(act.seasonId, tx);
+        if (
+          changes.reachViaContactId !== undefined &&
+          changes.reachViaContactId !== null
+        ) {
+          const contact = getContact(changes.reachViaContactId, tx);
+          if (contact.seasonId !== act.seasonId) {
+            throw new SeasonLifecycleError(
+              "reach-via contact and act belong to different seasons",
+            );
+          }
+        }
+        return createRecordRepository(tx, options).updateAct(
+          id,
+          expectedVersion,
+          changes,
         );
-      }
-    }
-    return records.updateAct(id, expectedVersion, changes);
+      },
+      { behavior: "immediate" },
+    );
   }
 
   function updateVenue(
@@ -302,28 +351,40 @@ export function createSeasonRepository(
     expectedVersion: number,
     changes: VenueChanges,
   ): Venue {
-    const venue = getVenue(id);
-    assertCorrectionLegal(venue.seasonId);
-    if (changes.hostContactId !== undefined && changes.hostContactId !== null) {
-      const contact = getContact(changes.hostContactId);
-      if (contact.seasonId !== venue.seasonId) {
-        throw new SeasonLifecycleError(
-          "host contact and venue belong to different seasons",
+    return db.transaction(
+      (tx) => {
+        const venue = getVenue(id, tx);
+        assertCorrectionLegal(venue.seasonId, tx);
+        if (
+          changes.hostContactId !== undefined &&
+          changes.hostContactId !== null
+        ) {
+          const contact = getContact(changes.hostContactId, tx);
+          if (contact.seasonId !== venue.seasonId) {
+            throw new SeasonLifecycleError(
+              "host contact and venue belong to different seasons",
+            );
+          }
+        }
+        if (
+          changes.reachViaContactId !== undefined &&
+          changes.reachViaContactId !== null
+        ) {
+          const contact = getContact(changes.reachViaContactId, tx);
+          if (contact.seasonId !== venue.seasonId) {
+            throw new SeasonLifecycleError(
+              "reach-via contact and venue belong to different seasons",
+            );
+          }
+        }
+        return createRecordRepository(tx, options).updateVenue(
+          id,
+          expectedVersion,
+          changes,
         );
-      }
-    }
-    if (
-      changes.reachViaContactId !== undefined &&
-      changes.reachViaContactId !== null
-    ) {
-      const contact = getContact(changes.reachViaContactId);
-      if (contact.seasonId !== venue.seasonId) {
-        throw new SeasonLifecycleError(
-          "reach-via contact and venue belong to different seasons",
-        );
-      }
-    }
-    return records.updateVenue(id, expectedVersion, changes);
+      },
+      { behavior: "immediate" },
+    );
   }
 
   function updateContact(
@@ -331,8 +392,17 @@ export function createSeasonRepository(
     expectedVersion: number,
     changes: ContactChanges,
   ): Contact {
-    assertCorrectionLegal(getContact(id).seasonId);
-    return records.updateContact(id, expectedVersion, changes);
+    return db.transaction(
+      (tx) => {
+        assertCorrectionLegal(getContact(id, tx).seasonId, tx);
+        return createRecordRepository(tx, options).updateContact(
+          id,
+          expectedVersion,
+          changes,
+        );
+      },
+      { behavior: "immediate" },
+    );
   }
 
   function promotePlaceholderAct(
@@ -343,9 +413,9 @@ export function createSeasonRepository(
   ): Act {
     return db.transaction(
       (tx) => {
-        const placeholder = getAct(placeholderId);
-        assertCorrectionLegal(placeholder.seasonId);
-        const submission = getAct(submissionId);
+        const placeholder = getAct(placeholderId, tx);
+        assertCorrectionLegal(placeholder.seasonId, tx);
+        const submission = getAct(submissionId, tx);
         if (
           placeholder.placeholder &&
           !submission.placeholder &&
@@ -378,12 +448,17 @@ export function createSeasonRepository(
     submissionId: number,
     submissionVersion: number,
   ): Venue {
-    assertCorrectionLegal(getVenue(placeholderId).seasonId);
-    return records.promotePlaceholderVenue(
-      placeholderId,
-      placeholderVersion,
-      submissionId,
-      submissionVersion,
+    return db.transaction(
+      (tx) => {
+        assertCorrectionLegal(getVenue(placeholderId, tx).seasonId, tx);
+        return createRecordRepository(tx, options).promotePlaceholderVenue(
+          placeholderId,
+          placeholderVersion,
+          submissionId,
+          submissionVersion,
+        );
+      },
+      { behavior: "immediate" },
     );
   }
 
@@ -394,9 +469,9 @@ export function createSeasonRepository(
   ): Act {
     return db.transaction(
       (tx) => {
-        const source = getAct(id);
-        assertCorrectionLegal(source.seasonId);
-        const target = getAct(canonicalId);
+        const source = getAct(id, tx);
+        assertCorrectionLegal(source.seasonId, tx);
+        const target = getAct(canonicalId, tx);
         if (source.seasonId === target.seasonId && source.id !== target.id) {
           assertActFamilyMergeLegal(
             tx,
@@ -422,8 +497,17 @@ export function createSeasonRepository(
     expectedVersion: number,
     canonicalId: number,
   ): Venue {
-    assertCorrectionLegal(getVenue(id).seasonId);
-    return records.supersedeVenue(id, expectedVersion, canonicalId);
+    return db.transaction(
+      (tx) => {
+        assertCorrectionLegal(getVenue(id, tx).seasonId, tx);
+        return createRecordRepository(tx, options).supersedeVenue(
+          id,
+          expectedVersion,
+          canonicalId,
+        );
+      },
+      { behavior: "immediate" },
+    );
   }
 
   function supersedeContact(
@@ -431,8 +515,17 @@ export function createSeasonRepository(
     expectedVersion: number,
     canonicalId: number,
   ): Contact {
-    assertCorrectionLegal(getContact(id).seasonId);
-    return records.supersedeContact(id, expectedVersion, canonicalId);
+    return db.transaction(
+      (tx) => {
+        assertCorrectionLegal(getContact(id, tx).seasonId, tx);
+        return createRecordRepository(tx, options).supersedeContact(
+          id,
+          expectedVersion,
+          canonicalId,
+        );
+      },
+      { behavior: "immediate" },
+    );
   }
 
   function transitionSeason(
@@ -647,7 +740,21 @@ export function createSeasonRepository(
         .from(assignments)
         .where(eq(assignments.seasonId, season.id))
         .all();
-      assertCanonicalActUnassigned(season.id, actId, assignedActs);
+      const seasonActs = tx
+        .select({ id: acts.id, canonicalActId: acts.canonicalActId })
+        .from(acts)
+        .where(eq(acts.seasonId, season.id))
+        .all();
+      const seasonActsById = new Map(
+        seasonActs.map((seasonAct) => [seasonAct.id, seasonAct]),
+      );
+      assertCanonicalActUnassigned(
+        season.id,
+        actId,
+        assignedActs,
+        seasonActsById,
+        tx,
+      );
       return tx
         .insert(assignments)
         .values({ seasonId: slot.seasonId, actId, slotId })
@@ -722,7 +829,21 @@ export function createSeasonRepository(
             ),
           )
           .all();
-        assertCanonicalActUnassigned(season.id, changes.actId, assignedActs);
+        const seasonActs = tx
+          .select({ id: acts.id, canonicalActId: acts.canonicalActId })
+          .from(acts)
+          .where(eq(acts.seasonId, season.id))
+          .all();
+        const seasonActsById = new Map(
+          seasonActs.map((seasonAct) => [seasonAct.id, seasonAct]),
+        );
+        assertCanonicalActUnassigned(
+          season.id,
+          changes.actId,
+          assignedActs,
+          seasonActsById,
+          tx,
+        );
       }
       const corrected = tx
         .select()

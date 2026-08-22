@@ -1,6 +1,7 @@
 import { and, eq, isNull, or, sql } from "drizzle-orm";
 import {
   acts,
+  annotations,
   assignments,
   contacts,
   emailLog,
@@ -11,7 +12,8 @@ import {
   type Venue,
 } from "./storage/schema.js";
 import {
-  type CoreDatabase,
+  type CoreExecutor,
+  type CoreTransaction,
   RepositoryConflictError,
   RepositoryLifecycleError,
   type RepositoryOptions,
@@ -76,12 +78,8 @@ export class RecordLifecycleError extends RepositoryLifecycleError {
 
 export type RecordRepositoryOptions = RepositoryOptions;
 
-type CoreTransaction = Parameters<
-  Parameters<CoreDatabase["transaction"]>[0]
->[0];
-
 export function createRecordRepository(
-  db: CoreDatabase | CoreTransaction,
+  db: CoreExecutor,
   options: RecordRepositoryOptions = {},
 ) {
   const now = options.now ?? (() => new Date());
@@ -180,7 +178,7 @@ export function createRecordRepository(
     submissionId: number,
     submissionVersion: number,
   ): Act {
-    return db.transaction((tx) => {
+    return db.transaction((tx: CoreTransaction) => {
       const placeholder = tx
         .select()
         .from(acts)
@@ -252,6 +250,15 @@ export function createRecordRepository(
           ),
         )
         .run();
+      tx.update(annotations)
+        .set({ recordId: placeholderId })
+        .where(
+          and(
+            eq(annotations.recordType, "act"),
+            eq(annotations.recordId, submissionId),
+          ),
+        )
+        .run();
 
       const submissionResult = tx
         .update(acts)
@@ -284,7 +291,7 @@ export function createRecordRepository(
     submissionId: number,
     submissionVersion: number,
   ): Venue {
-    return db.transaction((tx) => {
+    return db.transaction((tx: CoreTransaction) => {
       const placeholder = tx
         .select()
         .from(venues)
@@ -438,9 +445,11 @@ export function createRecordRepository(
       .from(acts)
       .where(eq(acts.seasonId, canonical.seasonId))
       .all();
-    const familyById = new Map(familyRows.map((record) => [record.id, record]));
+    const familyById = new Map(
+      familyRows.map((record: Act) => [record.id, record]),
+    );
     familyById.set(canonical.id, canonical);
-    const family = familyRows.filter((candidate) => {
+    const family = familyRows.filter((candidate: Act) => {
       if (candidate.id === canonical.id) return false;
       let current = candidate;
       const candidateSeen = new Set<number>();
@@ -476,9 +485,11 @@ export function createRecordRepository(
       .from(venues)
       .where(eq(venues.seasonId, canonical.seasonId))
       .all();
-    const familyById = new Map(familyRows.map((record) => [record.id, record]));
+    const familyById = new Map(
+      familyRows.map((record: Venue) => [record.id, record]),
+    );
     familyById.set(canonical.id, canonical);
-    const family = familyRows.filter((candidate) => {
+    const family = familyRows.filter((candidate: Venue) => {
       if (candidate.id === canonical.id) return false;
       let current = candidate;
       const candidateSeen = new Set<number>();
@@ -516,9 +527,11 @@ export function createRecordRepository(
       .from(contacts)
       .where(eq(contacts.seasonId, canonical.seasonId))
       .all();
-    const familyById = new Map(familyRows.map((record) => [record.id, record]));
+    const familyById = new Map(
+      familyRows.map((record: Contact) => [record.id, record]),
+    );
     familyById.set(canonical.id, canonical);
-    const family = familyRows.filter((candidate) => {
+    const family = familyRows.filter((candidate: Contact) => {
       if (candidate.id === canonical.id) return false;
       let current = candidate;
       const candidateSeen = new Set<number>();
@@ -540,7 +553,7 @@ export function createRecordRepository(
     expectedVersion: number,
     canonicalId: number,
   ): Act {
-    return db.transaction((tx) => {
+    return db.transaction((tx: CoreTransaction) => {
       const source = tx.select().from(acts).where(eq(acts.id, id)).get();
       if (!source) throw new RecordLifecycleError(`act ${id} does not exist`);
 
@@ -601,7 +614,7 @@ export function createRecordRepository(
     expectedVersion: number,
     canonicalId: number,
   ): Venue {
-    return db.transaction((tx) => {
+    return db.transaction((tx: CoreTransaction) => {
       const source = tx.select().from(venues).where(eq(venues.id, id)).get();
       if (!source) throw new RecordLifecycleError(`venue ${id} does not exist`);
 
@@ -673,7 +686,7 @@ export function createRecordRepository(
     expectedVersion: number,
     canonicalId: number,
   ): Contact {
-    return db.transaction((tx) => {
+    return db.transaction((tx: CoreTransaction) => {
       const source = tx
         .select()
         .from(contacts)
@@ -756,7 +769,10 @@ export function createRecordRepository(
         .from(acts)
         .where(and(eq(acts.seasonId, seasonId), isNull(acts.canonicalActId)))
         .all()
-        .map((record): ActivityQueueItem => ({ recordType: "act", record })),
+        .map((record: Act): ActivityQueueItem => ({
+          recordType: "act",
+          record,
+        })),
       ...db
         .select()
         .from(venues)
@@ -764,7 +780,10 @@ export function createRecordRepository(
           and(eq(venues.seasonId, seasonId), isNull(venues.canonicalVenueId)),
         )
         .all()
-        .map((record): ActivityQueueItem => ({ recordType: "venue", record })),
+        .map((record: Venue): ActivityQueueItem => ({
+          recordType: "venue",
+          record,
+        })),
       ...db
         .select()
         .from(contacts)
@@ -775,7 +794,7 @@ export function createRecordRepository(
           ),
         )
         .all()
-        .map((record): ActivityQueueItem => ({
+        .map((record: Contact): ActivityQueueItem => ({
           recordType: "contact",
           record,
         })),

@@ -425,6 +425,32 @@ describe("season domain", () => {
     ).toEqual({ name: "Archived Correction Target" });
   });
 
+  it("rolls back season state changed during a failed delegated record write", () => {
+    const season = insertSeason(2105, "setup");
+    const act = insertVersionedAct(season.id, "Atomic Correction Target");
+    const delegatedFailure = new Error("delegated write failed");
+    const atomicRepository = createSeasonRepository(database.db, {
+      now: () => {
+        sqlite
+          .prepare("update seasons set state = 'archived' where id = ?")
+          .run(season.id);
+        throw delegatedFailure;
+      },
+    });
+
+    expect(() =>
+      atomicRepository.updateAct(act.id, act.version, {
+        name: "Uncommitted Correction",
+      }),
+    ).toThrow(delegatedFailure);
+    expect(
+      sqlite.prepare("select state from seasons where id = ?").get(season.id),
+    ).toEqual({ state: "setup" });
+    expect(
+      sqlite.prepare("select name from acts where id = ?").get(act.id),
+    ).toEqual({ name: "Atomic Correction Target" });
+  });
+
   it("refuses act promotion when an assigned superseded child belongs to the placeholder family", () => {
     const season = insertSeason(2105, "assigning");
     const venueId = insertVenue(
@@ -706,11 +732,7 @@ describe("season domain", () => {
     seasonRepository.assignSlot(sourceSlot.id, sourceSlot.version, source.id);
 
     expect(() =>
-      seasonRepository.supersedeAct(
-        source.id,
-        source.version,
-        targetAlias.id,
-      ),
+      seasonRepository.supersedeAct(source.id, source.version, targetAlias.id),
     ).toThrowError(
       `canonical act ${target.id} is already assigned in season ${season.id}`,
     );
@@ -789,14 +811,10 @@ describe("season domain", () => {
     const linkedAct = seasonRepository.updateAct(act.id, act.version, {
       reachViaContactId: contactId,
     });
-    const linkedVenue = seasonRepository.updateVenue(
-      venue.id,
-      venue.version,
-      {
-        hostContactId: contactId,
-        reachViaContactId: contactId,
-      },
-    );
+    const linkedVenue = seasonRepository.updateVenue(venue.id, venue.version, {
+      hostContactId: contactId,
+      reachViaContactId: contactId,
+    });
     const clearedAct = seasonRepository.updateAct(
       linkedAct.id,
       linkedAct.version,
@@ -855,6 +873,28 @@ describe("season domain", () => {
         )
         .get(season.id),
     ).toEqual({ count: 1 });
+  });
+
+  it("refuses assignment through a supersession cycle without changing the slot", () => {
+    const season = insertSeason(2105, "assigning");
+    const venueId = insertVenue(season.id, "Cycle Venue");
+    const slot = insertSlot(season.id, venueId);
+    const first = insertVersionedAct(season.id, "Cycle Act One");
+    const second = insertVersionedAct(season.id, "Cycle Act Two");
+    sqlite
+      .prepare(
+        "update acts set canonical_act_id = case id when ? then ? else ? end where id in (?, ?)",
+      )
+      .run(first.id, second.id, first.id, first.id, second.id);
+
+    expect(() =>
+      seasonRepository.assignSlot(slot.id, slot.version, first.id),
+    ).toThrowError(`act ${first.id} has a supersession cycle`);
+    expect(
+      sqlite
+        .prepare("select state, version from slots where id = ?")
+        .get(slot.id),
+    ).toEqual({ state: "open", version: slot.version });
   });
 
   it("refuses an assignment correction that would duplicate a canonical act", () => {
