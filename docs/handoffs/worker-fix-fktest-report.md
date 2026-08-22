@@ -18,7 +18,7 @@
 The proof used this isolated copy beneath the task's required scratchpad:
 
 ```text
-/tmp/claude-1000/-home-damienriehl-Coding-Projects/98d3091c-90ea-46f7-b9f5-1818a3426ef0/scratchpad/fk-test-proof/
+<session scratchpad>/fk-test-proof/   (machine-local; path in the private handoff copy)
 ```
 
 1. **Pragma removed in the scratch copy: FAIL.** I commented only the scratch
