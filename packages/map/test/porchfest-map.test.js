@@ -46,7 +46,9 @@ const stylesheetPath = path.join(
 );
 const stylesheetSource = fs.readFileSync(stylesheetPath, "utf8");
 const FALLBACK =
-  "The interactive map could not be loaded. Please use the current official Google map below.";
+  "The interactive map could not be loaded. Please refresh the page and try again.";
+const EMPTY_STATE =
+  "The 2026 lineup is not on the interactive map yet. Please check back soon.";
 
 class TestStyle {
   constructor() {
@@ -2092,10 +2094,7 @@ test("shows the empty state when no venue has an act", async () => {
   });
   assert.equal(nodes.status.hidden, false);
   assert.equal(nodes.status.className, "porchfest-map-status is-empty");
-  assert.match(
-    nodes.status.textContent,
-    /lineup is not on the interactive map yet/i,
-  );
+  assert.equal(nodes.status.textContent, EMPTY_STATE);
   assert.equal(nodes.mapElement.hidden, true);
   assert.equal(nodes.listSection.hidden, true);
   assert.equal(
@@ -2106,6 +2105,14 @@ test("shows the empty state when no venue has an act", async () => {
     nodes.mount.querySelectorAll(".porchfest-genre-facet").length,
     0,
   );
+});
+
+test("no state message points readers at a Google map the page no longer embeds", () => {
+  // sapporchfest.org dropped the My Maps iframe from /map/. Copy that still sends
+  // readers "below" to a Google map is a dangling pointer, and showState() also
+  // hides the venue list -- so a stale message leaves a failed load with no way forward.
+  assert.doesNotMatch(scriptSource, /google/i);
+  assert.doesNotMatch(scriptSource, /map below/i);
 });
 
 test("shows the fallback and no partial list for invalid coordinates", async () => {
