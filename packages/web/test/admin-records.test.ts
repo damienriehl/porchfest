@@ -119,6 +119,30 @@ async function post(
   });
 }
 
+function createPerformer(
+  runtime: PorchfestRuntime,
+  seasonId: number,
+  name: string,
+  email: string,
+) {
+  return runtime.core.seasons.createPerformerSignup({
+    seasonId,
+    contact: { name: `${name} contact`, email, phone: null },
+    act: {
+      name,
+      durationMinutes: 45,
+      requiresAmplification: false,
+      genre: "Test genre",
+      description: `${name} description`,
+      links: "",
+      housePreference: null,
+      canLendGear: false,
+      notes: null,
+    },
+    availabilities: [],
+  });
+}
+
 /** A page can carry several forms, each with its own path-bound token, so pick
  *  the one belonging to the form under test rather than the first on the page. */
 async function csrfFrom(response: Response, action?: string) {
@@ -140,6 +164,8 @@ describe("the activity queue", () => {
     expect(page.status).toBe(200);
     expect(html).toContain("The Test Porch");
     expect(html).toContain("need your review");
+    expect(html).toContain("/admin/placeholders/act/new");
+    expect(html).toContain("/admin/placeholders/venue/new");
   });
 
   it("clears an item for one organizer without hiding it from another", async () => {
@@ -208,6 +234,390 @@ describe("the activity queue", () => {
     );
 
     expect(page.status).toBe(401);
+  });
+});
+
+describe("placeholder and supersession actions", () => {
+  it("creates a host-reached act and promotes its real submission", async () => {
+    const { runtime, season, alice, signup } = await boot();
+    const createPage = await get(
+      runtime,
+      `/admin/placeholders/act/new?season=${season.id}`,
+      alice,
+    );
+    const createHtml = await createPage.clone().text();
+
+    expect(createPage.status).toBe(200);
+    expect(createPage.headers.get("cache-control")).toBe("no-store, private");
+    expect(createHtml).toContain('action="/admin/placeholders/act"');
+    expect(createHtml).toContain('name="manual_email"');
+    expect(createHtml).toContain(`value="${signup.contact.id}"`);
+
+    const created = await post(
+      runtime,
+      "/admin/placeholders/act",
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(createPage, "/admin/placeholders/act"),
+        season: String(season.id),
+        name: "The Host's Favorite Band",
+        genre: "Folk",
+        notes: "Reach them through the host.",
+        reach_via_contact_id: String(signup.contact.id),
+      }),
+    );
+    expect(created.status).toBe(303);
+
+    const placeholder = runtime.core.queue
+      .listForOrganizer(season.id, 1)
+      .find(
+        (item) =>
+          item.recordType === "act" &&
+          item.record.name === "The Host's Favorite Band",
+      );
+    expect(placeholder?.recordType).toBe("act");
+    if (!placeholder || placeholder.recordType !== "act") {
+      throw new Error("placeholder act was not created");
+    }
+    expect(placeholder.record).toMatchObject({
+      placeholder: true,
+      reachViaContactId: signup.contact.id,
+    });
+
+    const submission = createPerformer(
+      runtime,
+      season.id,
+      "The Filed Band Name",
+      "band@example.invalid",
+    );
+    const recordPage = await get(
+      runtime,
+      `/admin/records/act/${placeholder.record.id}?season=${season.id}`,
+      alice,
+    );
+    const recordHtml = await recordPage.clone().text();
+    expect(recordHtml).toContain(
+      `action="/admin/records/act/${placeholder.record.id}/promote"`,
+    );
+    expect(recordHtml).toContain("The Filed Band Name");
+
+    const promoted = await post(
+      runtime,
+      `/admin/records/act/${placeholder.record.id}/promote`,
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(
+          recordPage,
+          `/admin/records/act/${placeholder.record.id}/promote`,
+        ),
+        season: String(season.id),
+        version: String(placeholder.record.version),
+        submission: `${submission.act.id}:${submission.act.version}`,
+      }),
+    );
+
+    expect(promoted.status).toBe(303);
+    const acts = runtime.core.queue
+      .listForOrganizer(season.id, 1)
+      .filter((item) => item.recordType === "act");
+    expect(acts).toContainEqual(
+      expect.objectContaining({
+        record: expect.objectContaining({
+          id: placeholder.record.id,
+          name: "The Filed Band Name",
+          placeholder: false,
+          reachViaContactId: submission.contact.id,
+        }),
+      }),
+    );
+    expect(acts.some((item) => item.record.id === submission.act.id)).toBe(
+      false,
+    );
+  });
+
+  it("creates a venue with a manually entered email address", async () => {
+    const { runtime, season, alice, signup } = await boot();
+    const page = await get(
+      runtime,
+      `/admin/placeholders/venue/new?season=${season.id}`,
+      alice,
+    );
+    const created = await post(
+      runtime,
+      "/admin/placeholders/venue",
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(page, "/admin/placeholders/venue"),
+        season: String(season.id),
+        title: "The Future Porch",
+        address: "22 Future St",
+        manual_name: "Future host",
+        manual_email: "future@example.invalid",
+      }),
+    );
+
+    expect(created.status).toBe(303);
+    const venue = runtime.core.queue
+      .listForOrganizer(season.id, 1)
+      .find(
+        (item) =>
+          item.recordType === "venue" &&
+          item.record.title === "The Future Porch",
+      );
+    expect(venue?.recordType === "venue" && venue.record.placeholder).toBe(
+      true,
+    );
+    const reachContact = runtime.core.queue
+      .listForOrganizer(season.id, 1)
+      .find(
+        (item) =>
+          item.recordType === "contact" &&
+          item.record.email === "future@example.invalid",
+      );
+    expect(
+      venue?.recordType === "venue" &&
+        reachContact?.recordType === "contact" &&
+        venue.record.reachViaContactId === reachContact.record.id,
+    ).toBe(true);
+    if (!venue || venue.recordType !== "venue") {
+      throw new Error("placeholder venue was not created");
+    }
+
+    const recordPage = await get(
+      runtime,
+      `/admin/records/venue/${venue.record.id}?season=${season.id}`,
+      alice,
+    );
+    expect(await recordPage.clone().text()).toContain("The Test Porch");
+    const promoted = await post(
+      runtime,
+      `/admin/records/venue/${venue.record.id}/promote`,
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(
+          recordPage,
+          `/admin/records/venue/${venue.record.id}/promote`,
+        ),
+        season: String(season.id),
+        version: String(venue.record.version),
+        submission: `${signup.venue.id}:${signup.venue.version}`,
+      }),
+    );
+    expect(promoted.status).toBe(303);
+    const venues = runtime.core.queue
+      .listForOrganizer(season.id, 1)
+      .filter((item) => item.recordType === "venue");
+    expect(venues).toContainEqual(
+      expect.objectContaining({
+        record: expect.objectContaining({
+          id: venue.record.id,
+          title: "The Test Porch",
+          placeholder: false,
+        }),
+      }),
+    );
+    expect(venues.some((item) => item.record.id === signup.venue.id)).toBe(
+      false,
+    );
+  });
+
+  it.each([
+    ["older into newer", 0, 1],
+    ["newer into older", 1, 0],
+  ])(
+    "reconciles a resubmission %s",
+    async (_label, sourceIndex, targetIndex) => {
+      const { runtime, season, alice } = await boot();
+      const submissions = [
+        createPerformer(
+          runtime,
+          season.id,
+          "First Filing",
+          "first@example.invalid",
+        ),
+        createPerformer(
+          runtime,
+          season.id,
+          "Second Filing",
+          "second@example.invalid",
+        ),
+      ];
+      const source = submissions[sourceIndex]?.act;
+      const target = submissions[targetIndex]?.act;
+      if (!source || !target) throw new Error("missing resubmission fixture");
+      const page = await get(
+        runtime,
+        `/admin/records/act/${source.id}?season=${season.id}`,
+        alice,
+      );
+      const html = await page.clone().text();
+      expect(html).toContain(
+        `action="/admin/records/act/${source.id}/supersede"`,
+      );
+      expect(html).toContain(target.name);
+
+      const reconciled = await post(
+        runtime,
+        `/admin/records/act/${source.id}/supersede`,
+        alice,
+        new URLSearchParams({
+          _csrf: await csrfFrom(
+            page,
+            `/admin/records/act/${source.id}/supersede`,
+          ),
+          season: String(season.id),
+          version: String(source.version),
+          canonical_id: String(target.id),
+        }),
+      );
+
+      expect(reconciled.status).toBe(303);
+      const actIds = runtime.core.queue
+        .listForOrganizer(season.id, 1)
+        .filter((item) => item.recordType === "act")
+        .map((item) => item.record.id);
+      expect(actIds).toContain(target.id);
+      expect(actIds).not.toContain(source.id);
+    },
+  );
+
+  it("refuses stale promotion and supersession versions against SQLite", async () => {
+    const { runtime, season, alice, signup } = await boot();
+    const placeholder = runtime.core.seasons.createPlaceholderAct({
+      seasonId: season.id,
+      reach: { reachViaContactId: signup.contact.id },
+      act: { name: "Stale Placeholder" },
+    });
+    const promotionTarget = createPerformer(
+      runtime,
+      season.id,
+      "Promotion Target",
+      "promotion@example.invalid",
+    );
+    const promotionPage = await get(
+      runtime,
+      `/admin/records/act/${placeholder.id}?season=${season.id}`,
+      alice,
+    );
+    runtime.core.seasons.updateAct(placeholder.id, placeholder.version, {
+      genre: "Someone else's placeholder genre",
+    });
+    const refusedPromotion = await post(
+      runtime,
+      `/admin/records/act/${placeholder.id}/promote`,
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(
+          promotionPage,
+          `/admin/records/act/${placeholder.id}/promote`,
+        ),
+        season: String(season.id),
+        version: String(placeholder.version),
+        submission: `${promotionTarget.act.id}:${promotionTarget.act.version}`,
+      }),
+    );
+    expect(refusedPromotion.status).toBe(409);
+    expect(await refusedPromotion.text()).toContain(
+      "Someone else saved this first",
+    );
+
+    const supersedeSource = createPerformer(
+      runtime,
+      season.id,
+      "Stale Source",
+      "source@example.invalid",
+    );
+    const supersedeTarget = createPerformer(
+      runtime,
+      season.id,
+      "Canonical Target",
+      "target@example.invalid",
+    );
+    const supersedePage = await get(
+      runtime,
+      `/admin/records/act/${supersedeSource.act.id}?season=${season.id}`,
+      alice,
+    );
+    runtime.core.seasons.updateAct(
+      supersedeSource.act.id,
+      supersedeSource.act.version,
+      { genre: "Someone else's genre" },
+    );
+    const refusedSupersession = await post(
+      runtime,
+      `/admin/records/act/${supersedeSource.act.id}/supersede`,
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(
+          supersedePage,
+          `/admin/records/act/${supersedeSource.act.id}/supersede`,
+        ),
+        season: String(season.id),
+        version: String(supersedeSource.act.version),
+        canonical_id: String(supersedeTarget.act.id),
+      }),
+    );
+    expect(refusedSupersession.status).toBe(409);
+    expect(await refusedSupersession.text()).toContain(
+      "Someone else saved this first",
+    );
+    const acts = runtime.core.queue
+      .listForOrganizer(season.id, 1)
+      .filter((item) => item.recordType === "act");
+    expect(acts.some((item) => item.record.id === supersedeSource.act.id)).toBe(
+      true,
+    );
+  });
+
+  it("refuses every lifecycle route without organizer authentication", async () => {
+    const { runtime, season } = await boot();
+    const paths = [
+      `/admin/placeholders/act/new?season=${season.id}`,
+      `/admin/placeholders/venue/new?season=${season.id}`,
+    ];
+    for (const path of paths) {
+      expect((await runtime.request(`${PUBLIC_BASE_URL}${path}`)).status).toBe(
+        401,
+      );
+    }
+    for (const path of [
+      "/admin/placeholders/act",
+      "/admin/placeholders/venue",
+      "/admin/records/act/1/promote",
+      "/admin/records/venue/1/promote",
+      "/admin/records/act/1/supersede",
+      "/admin/records/venue/1/supersede",
+      "/admin/records/contact/1/supersede",
+    ]) {
+      const response = await runtime.request(`${PUBLIC_BASE_URL}${path}`, {
+        method: "POST",
+      });
+      expect(response.status).toBe(401);
+    }
+  });
+
+  it("refuses every lifecycle write from an unrelated origin", async () => {
+    const { runtime, alice } = await boot();
+    for (const path of [
+      "/admin/placeholders/act",
+      "/admin/placeholders/venue",
+      "/admin/records/act/1/promote",
+      "/admin/records/venue/1/promote",
+      "/admin/records/act/1/supersede",
+      "/admin/records/venue/1/supersede",
+      "/admin/records/contact/1/supersede",
+    ]) {
+      const response = await runtime.request(`${PUBLIC_BASE_URL}${path}`, {
+        method: "POST",
+        headers: {
+          origin: "https://unrelated.example",
+          cookie: alice,
+          "content-type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams(),
+      });
+      expect(response.status).toBe(403);
+    }
   });
 });
 

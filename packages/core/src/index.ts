@@ -38,10 +38,14 @@ export {
   type SlotHold,
 } from "./season.js";
 export type {
+  CreatePlaceholderActInput,
+  CreatePlaceholderVenueInput,
   HostSignup,
   HostSignupInput,
+  ManualPlaceholderContactInput,
   PerformerSignup,
   PerformerSignupInput,
+  PlaceholderReachInput,
   SignupContactInput,
 } from "./records.js";
 export {

@@ -47,6 +47,16 @@ describe("application scaffold", () => {
       { method: "POST", path: "/admin/setup", tier: "organizer" },
       { method: "POST", path: "/admin/sign-out", tier: "organizer" },
       { method: "POST", path: "/admin/queue/dismiss", tier: "organizer" },
+      {
+        method: "GET",
+        path: "/admin/placeholders/:recordType/new",
+        tier: "organizer",
+      },
+      {
+        method: "POST",
+        path: "/admin/placeholders/:recordType",
+        tier: "organizer",
+      },
       { method: "GET", path: "/admin/records/act/:id", tier: "organizer" },
       {
         method: "POST",
@@ -54,6 +64,16 @@ describe("application scaffold", () => {
         tier: "organizer",
       },
       { method: "POST", path: "/admin/records/act/:id", tier: "organizer" },
+      {
+        method: "POST",
+        path: "/admin/records/act/:id/promote",
+        tier: "organizer",
+      },
+      {
+        method: "POST",
+        path: "/admin/records/act/:id/supersede",
+        tier: "organizer",
+      },
       { method: "GET", path: "/admin/records/venue/:id", tier: "organizer" },
       {
         method: "POST",
@@ -61,8 +81,23 @@ describe("application scaffold", () => {
         tier: "organizer",
       },
       { method: "POST", path: "/admin/records/venue/:id", tier: "organizer" },
+      {
+        method: "POST",
+        path: "/admin/records/venue/:id/promote",
+        tier: "organizer",
+      },
+      {
+        method: "POST",
+        path: "/admin/records/venue/:id/supersede",
+        tier: "organizer",
+      },
       { method: "GET", path: "/admin/records/contact/:id", tier: "organizer" },
       { method: "POST", path: "/admin/records/contact/:id", tier: "organizer" },
+      {
+        method: "POST",
+        path: "/admin/records/contact/:id/supersede",
+        tier: "organizer",
+      },
     ]);
   });
 

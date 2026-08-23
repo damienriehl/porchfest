@@ -145,6 +145,94 @@ describe("record lifecycle", () => {
     });
   });
 
+  it("creates placeholders reachable through an existing contact or a manual address", () => {
+    const seasonId = insertSeason();
+    const host = sqlite
+      .prepare(
+        "insert into contacts (season_id, name, email) values (?, ?, ?) returning id",
+      )
+      .get(seasonId, "Fixture Host", "host@example.invalid") as {
+      id: number;
+    };
+
+    const act = records.createPlaceholderAct({
+      seasonId,
+      reach: { reachViaContactId: host.id },
+      act: {
+        name: "Host-reached act",
+        genre: "Folk",
+        notes: "Ask the host to pass this along.",
+      },
+    });
+    const venue = records.createPlaceholderVenue({
+      seasonId,
+      reach: {
+        contact: {
+          name: "Manual venue contact",
+          email: "manual@example.invalid",
+          phone: "synthetic-manual-reach-phone",
+        },
+      },
+      venue: {
+        title: "Manual-address venue",
+        address: "10 Placeholder Ave",
+        notes: "Added by an organizer.",
+      },
+    });
+
+    expect(act).toMatchObject({
+      name: "Host-reached act",
+      placeholder: true,
+      reachViaContactId: host.id,
+      version: 1,
+    });
+    expect(venue).toMatchObject({
+      title: "Manual-address venue",
+      address: "10 Placeholder Ave",
+      placeholder: true,
+      version: 1,
+    });
+    expect(records.resolveEmailRecipients("act", act.id)).toEqual([
+      expect.objectContaining({
+        id: host.id,
+        email: "host@example.invalid",
+      }),
+    ]);
+    expect(records.resolveEmailRecipients("venue", venue.id)).toEqual([
+      expect.objectContaining({
+        id: venue.reachViaContactId,
+        name: "Manual venue contact",
+        email: "manual@example.invalid",
+        phone: "synthetic-manual-reach-phone",
+      }),
+    ]);
+  });
+
+  it("refuses a placeholder reached through a contact from another season", () => {
+    const seasonId = insertSeason();
+    const otherSeasonId = insertSeason();
+    const otherContact = sqlite
+      .prepare(
+        "insert into contacts (season_id, name, email) values (?, ?, ?) returning id",
+      )
+      .get(otherSeasonId, "Other Season", "other@example.invalid") as {
+      id: number;
+    };
+
+    expect(() =>
+      records.createPlaceholderAct({
+        seasonId,
+        reach: { reachViaContactId: otherContact.id },
+        act: { name: "Wrong-season reach" },
+      }),
+    ).toThrowError("placeholder contact belongs to a different season");
+    expect(
+      sqlite
+        .prepare("select count(*) as total from acts where season_id = ?")
+        .get(seasonId),
+    ).toEqual({ total: 0 });
+  });
+
   it("promotes a placeholder act without losing assignment, email, or annotation history", () => {
     const seasonId = insertSeason();
     const contact = sqlite
@@ -166,21 +254,16 @@ describe("record lifecycle", () => {
       .get(seasonId, venue.id, 4_180_304_000, 4_180_307_600) as {
       id: number;
     };
-    const placeholder = sqlite
-      .prepare(
-        "insert into acts (season_id, name, genre, description, links, placeholder, reach_via_contact_id) values (?, ?, ?, ?, ?, 1, ?) returning id, version",
-      )
-      .get(
-        seasonId,
-        "Placeholder Act",
-        "Placeholder Genre",
-        "Placeholder description",
-        "https://example.invalid/placeholder",
-        contact.id,
-      ) as {
-      id: number;
-      version: number;
-    };
+    const placeholder = records.createPlaceholderAct({
+      seasonId,
+      reach: { reachViaContactId: contact.id },
+      act: {
+        name: "Placeholder Act",
+        genre: "Placeholder Genre",
+        description: "Placeholder description",
+        links: "https://example.invalid/placeholder",
+      },
+    });
     const submission = sqlite
       .prepare(
         "insert into acts (season_id, name, genre, description, links, duration_minutes, requires_amplification, house_preference, can_lend_gear) values (?, ?, ?, ?, ?, ?, ?, ?, ?) returning id, version",
@@ -381,6 +464,102 @@ describe("record lifecycle", () => {
       reachViaContactId: contact.id,
       version: placeholder.version + 1,
     });
+  });
+
+  it("keeps a host-reached placeholder act's assignment and email history after promotion", () => {
+    const seasonId = insertSeason();
+    sqlite
+      .prepare("update seasons set state = 'assigning' where id = ?")
+      .run(seasonId);
+    const host = sqlite
+      .prepare(
+        "insert into contacts (season_id, name, email) values (?, ?, ?) returning id",
+      )
+      .get(seasonId, "Placeholder Host", "host@example.invalid") as {
+      id: number;
+    };
+    const venue = sqlite
+      .prepare(
+        "insert into venues (season_id, title) values (?, ?) returning id",
+      )
+      .get(seasonId, "Assignment Venue") as { id: number };
+    const slot = sqlite
+      .prepare(
+        "insert into slots (season_id, venue_id, starts_at, ends_at) values (?, ?, ?, ?) returning id, version",
+      )
+      .get(seasonId, venue.id, 4_180_304_000, 4_180_307_600) as {
+      id: number;
+      version: number;
+    };
+    const seasonRecords = createSeasonRepository(database.db, {
+      now: () => pinnedNow,
+    });
+    const placeholder = seasonRecords.createPlaceholderAct({
+      seasonId,
+      reach: { reachViaContactId: host.id },
+      act: { name: "Host's penciled-in act" },
+    });
+    const submission = records.createPerformerSignup({
+      seasonId,
+      contact: {
+        name: "Filed performer",
+        email: "performer@example.invalid",
+      },
+      act: {
+        name: "Filed act name",
+        durationMinutes: 45,
+        requiresAmplification: false,
+        genre: "Folk",
+        description: "Filed description",
+        links: "",
+        housePreference: null,
+        canLendGear: false,
+        notes: null,
+      },
+      availabilities: [],
+    });
+    const assignment = seasonRecords.assignSlot(
+      slot.id,
+      slot.version,
+      placeholder.id,
+    );
+    const email = sqlite
+      .prepare(
+        "insert into email_log (season_id, record_type, record_id, wave_label, recipient_contact_id) values (?, 'act', ?, ?, ?) returning id",
+      )
+      .get(seasonId, placeholder.id, "placeholder-intro", host.id) as {
+      id: number;
+    };
+
+    const promoted = seasonRecords.promotePlaceholderAct(
+      placeholder.id,
+      placeholder.version,
+      submission.act.id,
+      submission.act.version,
+    );
+
+    expect(promoted).toMatchObject({
+      id: placeholder.id,
+      name: "Filed act name",
+      placeholder: false,
+      reachViaContactId: submission.contact.id,
+    });
+    expect(
+      sqlite
+        .prepare("select act_id, version from assignments where id = ?")
+        .get(assignment.id),
+    ).toEqual({ act_id: placeholder.id, version: assignment.version });
+    expect(
+      sqlite
+        .prepare("select record_id from email_log where id = ?")
+        .get(email.id),
+    ).toEqual({ record_id: placeholder.id });
+    expect(
+      seasonRecords
+        .listActivityQueue(seasonId)
+        .filter((item) => item.recordType === "act")
+        .map((item) => item.record.id),
+    ).toEqual([placeholder.id]);
   });
 
   it("preserves organizer-entered act fields omitted by the submission", () => {
@@ -591,23 +770,18 @@ describe("record lifecycle", () => {
         "insert into contacts (season_id, name) values (?, ?) returning id",
       )
       .get(seasonId, "Venue Contact") as { id: number };
-    const placeholder = sqlite
-      .prepare(
-        "insert into venues (season_id, title, address, latitude, longitude, notes, host_contact_id, placeholder, reach_via_contact_id) values (?, ?, ?, ?, ?, ?, ?, 1, ?) returning id, version",
-      )
-      .get(
-        seasonId,
-        "Placeholder Venue",
-        "Placeholder address",
-        44.9778,
-        -93.265,
-        "Placeholder notes",
-        contact.id,
-        contact.id,
-      ) as {
-      id: number;
-      version: number;
-    };
+    const placeholder = records.createPlaceholderVenue({
+      seasonId,
+      reach: { reachViaContactId: contact.id },
+      venue: {
+        title: "Placeholder Venue",
+        address: "Placeholder address",
+        latitude: 44.9778,
+        longitude: -93.265,
+        notes: "Placeholder notes",
+        hostContactId: contact.id,
+      },
+    });
     const submission = sqlite
       .prepare(
         "insert into venues (season_id, title, address, space_description, has_power, rain_backup, latitude, longitude, notes, host_contact_id) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) returning id, version",

@@ -105,6 +105,57 @@ export interface PerformerSignupInput {
   }[];
 }
 
+export interface ManualPlaceholderContactInput {
+  name: string;
+  email: string;
+  phone?: string | null;
+}
+
+// R26 stores both reachability choices through the contact graph. A manual
+// address becomes a contact row, so promotion and canonical resolution can use
+// the same recipient rules as a placeholder reached through another party.
+export type PlaceholderReachInput =
+  | {
+      reachViaContactId: number;
+      contact?: never;
+    }
+  | {
+      reachViaContactId?: never;
+      contact: ManualPlaceholderContactInput;
+    };
+
+export interface CreatePlaceholderActInput {
+  seasonId: number;
+  reach: PlaceholderReachInput;
+  act: {
+    name: string;
+    genre?: string | null;
+    description?: string | null;
+    links?: string | null;
+    durationMinutes?: number | null;
+    requiresAmplification?: boolean | null;
+    housePreference?: string | null;
+    canLendGear?: boolean | null;
+    notes?: string | null;
+  };
+}
+
+export interface CreatePlaceholderVenueInput {
+  seasonId: number;
+  reach: PlaceholderReachInput;
+  venue: {
+    title: string;
+    address?: string | null;
+    spaceDescription?: string | null;
+    hasPower?: boolean | null;
+    rainBackup?: boolean | null;
+    latitude?: number | null;
+    longitude?: number | null;
+    notes?: string | null;
+    hostContactId?: number | null;
+  };
+}
+
 export interface HostSignup {
   contact: Contact;
   venue: Venue;
@@ -307,6 +358,111 @@ export function createRecordRepository(
             .returning()
             .all();
     return { contact, act, availabilities };
+  }
+
+  function createPlaceholderReachContact(
+    executor: CoreExecutor,
+    seasonId: number,
+    reach: PlaceholderReachInput,
+  ): number {
+    if (reach.reachViaContactId !== undefined) {
+      const contact = executor
+        .select()
+        .from(contacts)
+        .where(eq(contacts.id, reach.reachViaContactId))
+        .get();
+      if (!contact) {
+        throw new RecordLifecycleError(
+          `contact ${reach.reachViaContactId} does not exist`,
+        );
+      }
+      if (contact.seasonId !== seasonId) {
+        throw new RecordLifecycleError(
+          "placeholder contact belongs to a different season",
+        );
+      }
+      return contact.id;
+    }
+
+    const contact = executor
+      .insert(contacts)
+      .values({
+        seasonId,
+        name: reach.contact.name,
+        email: reach.contact.email,
+        phone: reach.contact.phone ?? null,
+        ...mutableValues(),
+      })
+      .returning()
+      .get();
+    return contact.id;
+  }
+
+  /** R26 creates the organizer's canonical shell before a participant filing
+   *  exists. The surrounding transaction matters for manual reachability: a
+   *  failed record insert must not leave behind an orphan contact. */
+  function createPlaceholderAct(input: CreatePlaceholderActInput): Act {
+    return db.transaction((tx: CoreTransaction) => {
+      const reachViaContactId = createPlaceholderReachContact(
+        tx,
+        input.seasonId,
+        input.reach,
+      );
+      return tx
+        .insert(acts)
+        .values({
+          seasonId: input.seasonId,
+          ...input.act,
+          placeholder: true,
+          reachViaContactId,
+          ...mutableValues(),
+        })
+        .returning()
+        .get();
+    });
+  }
+
+  /** Venue placeholders share the same reach-via invariant as acts, while an
+   *  optional host reference is independently checked against the season. */
+  function createPlaceholderVenue(input: CreatePlaceholderVenueInput): Venue {
+    return db.transaction((tx: CoreTransaction) => {
+      const reachViaContactId = createPlaceholderReachContact(
+        tx,
+        input.seasonId,
+        input.reach,
+      );
+      if (input.venue.hostContactId !== undefined) {
+        const hostContactId = input.venue.hostContactId;
+        if (hostContactId !== null) {
+          const host = tx
+            .select()
+            .from(contacts)
+            .where(eq(contacts.id, hostContactId))
+            .get();
+          if (!host) {
+            throw new RecordLifecycleError(
+              `contact ${hostContactId} does not exist`,
+            );
+          }
+          if (host.seasonId !== input.seasonId) {
+            throw new RecordLifecycleError(
+              "placeholder host contact belongs to a different season",
+            );
+          }
+        }
+      }
+      return tx
+        .insert(venues)
+        .values({
+          seasonId: input.seasonId,
+          ...input.venue,
+          placeholder: true,
+          reachViaContactId,
+          ...mutableValues(),
+        })
+        .returning()
+        .get();
+    });
   }
 
   function updateAct(
@@ -1114,6 +1270,8 @@ export function createRecordRepository(
   return Object.freeze({
     createHostSignup,
     createPerformerSignup,
+    createPlaceholderAct,
+    createPlaceholderVenue,
     updateAct,
     updateVenue,
     updateContact,

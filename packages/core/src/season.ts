@@ -4,6 +4,8 @@ import {
   RecordConflictError,
   type ActChanges,
   type ContactChanges,
+  type CreatePlaceholderActInput,
+  type CreatePlaceholderVenueInput,
   type HostSignup,
   type HostSignupInput,
   type PerformerSignup,
@@ -217,6 +219,30 @@ export function createSeasonRepository(
       (tx) => {
         assertLegal(getSeason(input.seasonId, tx), "signup");
         return createRecordRepository(tx, options).createPerformerSignup(input);
+      },
+      { behavior: "immediate" },
+    );
+  }
+
+  function createPlaceholderAct(input: CreatePlaceholderActInput): Act {
+    // Organizer-created records are corrections, not participant signups. Keep
+    // the legality check and both contact/record writes in one immediate unit.
+    return db.transaction(
+      (tx) => {
+        assertCorrectionLegal(input.seasonId, tx);
+        return createRecordRepository(tx, options).createPlaceholderAct(input);
+      },
+      { behavior: "immediate" },
+    );
+  }
+
+  function createPlaceholderVenue(input: CreatePlaceholderVenueInput): Venue {
+    return db.transaction(
+      (tx) => {
+        assertCorrectionLegal(input.seasonId, tx);
+        return createRecordRepository(tx, options).createPlaceholderVenue(
+          input,
+        );
       },
       { behavior: "immediate" },
     );
@@ -1037,6 +1063,8 @@ export function createSeasonRepository(
     setRecordStatus,
     createHostSignup,
     createPerformerSignup,
+    createPlaceholderAct,
+    createPlaceholderVenue,
     updateAct,
     updateVenue,
     updateContact,

@@ -103,6 +103,7 @@ export function renderQueuePage(options: {
       <p class="eyebrow">${escapeHtml(options.seasonName)}</p>
       <h1>Welcome, ${escapeHtml(options.organizerName)}</h1>
       <p class="lede">${newItems.length === 0 ? "Nothing new for you right now." : `${newItems.length} ${newItems.length === 1 ? "item needs" : "items need"} your review.`}</p>
+      <p class="lede"><a href="/admin/placeholders/act/new?season=${options.seasonId}">Add an act without a submission</a> · <a href="/admin/placeholders/venue/new?season=${options.seasonId}">Add a venue without a submission</a></p>
     </header>
     <section aria-labelledby="queue-title">
       <h2 id="queue-title">New for you</h2>
@@ -128,6 +129,88 @@ export function renderQueuePage(options: {
   );
 }
 
+export interface LifecycleRecordOption {
+  readonly id: number;
+  readonly version: number;
+  readonly title: string;
+}
+
+export interface ReachContactOption {
+  readonly id: number;
+  readonly title: string;
+}
+
+// R26 deliberately presents both reachability modes together. Organizers often
+// know the host first, but can still enter a direct address when nobody already
+// in the season should act as intermediary.
+export function renderPlaceholderPage(options: {
+  readonly recordType: "act" | "venue";
+  readonly seasonId: number;
+  readonly csrfToken: string;
+  readonly contacts: readonly ReachContactOption[];
+  readonly values?: Readonly<Record<string, string>>;
+  readonly error?: string;
+}): string {
+  const fields = RECORD_FIELDS[options.recordType];
+  const values = options.values ?? {};
+  const kind = options.recordType === "act" ? "act" : "venue";
+  const fieldControl = (spec: RecordFieldSpec) => {
+    const value = values[spec.name] ?? "";
+    if (spec.kind === "textarea") {
+      return `<textarea id="placeholder_${escapeHtml(spec.name)}" name="${escapeHtml(spec.name)}" rows="4">${escapeHtml(value)}</textarea>`;
+    }
+    if (spec.kind === "boolean") {
+      return `<div class="choices">${["yes", "no"]
+        .map(
+          (choice) =>
+            `<label class="choice"><input type="radio" name="${escapeHtml(spec.name)}" value="${choice}"${value === choice ? " checked" : ""}><span>${choice === "yes" ? "Yes" : "No"}</span></label>`,
+        )
+        .join("")}</div>`;
+    }
+    return `<input id="placeholder_${escapeHtml(spec.name)}" name="${escapeHtml(spec.name)}" type="${spec.kind === "number" ? "number" : "text"}" value="${escapeHtml(value)}"${spec.name === "name" || spec.name === "title" ? " required" : ""}>`;
+  };
+
+  return shell(
+    `Add placeholder ${kind}`,
+    `    <header class="signup-header">
+      <p class="eyebrow">Organizer placeholder</p>
+      <h1>Add ${kind} without a submission</h1>
+      <p class="lede"><a href="/admin?season=${options.seasonId}">Back to the queue</a></p>
+    </header>
+    ${options.error ? `<section class="error-summary" role="alert"><h2>Check the placeholder</h2><p>${escapeHtml(options.error)}</p></section>` : ""}
+    <form class="signup-form" method="post" action="/admin/placeholders/${kind}">
+      <input type="hidden" name="_csrf" value="${escapeHtml(options.csrfToken)}">
+      <input type="hidden" name="season" value="${options.seasonId}">
+      <fieldset>
+        <legend>${kind === "act" ? "Act" : "Venue"} details</legend>
+        ${fields
+          .map(
+            (spec) => `<div class="field">
+          <label for="placeholder_${escapeHtml(spec.name)}">${escapeHtml(spec.label)}</label>
+          ${fieldControl(spec)}
+        </div>`,
+          )
+          .join("")}
+      </fieldset>
+      <fieldset>
+        <legend>How organizers can reach them</legend>
+        <p class="help">Choose an existing party who can pass messages along, or enter a direct email address below.</p>
+        <div class="field">
+          <label for="reach_via_contact_id">Reach through an existing contact</label>
+          <select id="reach_via_contact_id" name="reach_via_contact_id">
+            <option value="">Enter a direct address instead</option>
+            ${options.contacts.map((contact) => `<option value="${contact.id}"${values.reach_via_contact_id === String(contact.id) ? " selected" : ""}>${escapeHtml(contact.title)}</option>`).join("")}
+          </select>
+        </div>
+        <div class="field"><label for="manual_name">Direct contact name</label><input id="manual_name" name="manual_name" type="text" value="${escapeHtml(values.manual_name ?? "")}"></div>
+        <div class="field"><label for="manual_email">Direct email address</label><input id="manual_email" name="manual_email" type="email" value="${escapeHtml(values.manual_email ?? "")}"></div>
+        <div class="field"><label for="manual_phone">Direct phone (optional)</label><input id="manual_phone" name="manual_phone" type="text" value="${escapeHtml(values.manual_phone ?? "")}"></div>
+      </fieldset>
+      <button class="primary-action" type="submit">Create placeholder</button>
+    </form>`,
+  );
+}
+
 export interface ConflictDetail {
   readonly field: string;
   readonly label: string;
@@ -147,6 +230,14 @@ export function renderRecordPage(options: {
   readonly saved?: boolean;
   readonly statusCsrfToken?: string;
   readonly conflicts?: readonly ConflictDetail[];
+  readonly promotion?: {
+    readonly csrfToken: string;
+    readonly candidates: readonly LifecycleRecordOption[];
+  };
+  readonly supersession?: {
+    readonly csrfToken: string;
+    readonly candidates: readonly LifecycleRecordOption[];
+  };
 }): string {
   const fields = RECORD_FIELDS[options.recordType];
   const conflicts = options.conflicts ?? [];
@@ -186,6 +277,40 @@ export function renderRecordPage(options: {
         .join("")}</dl>
     </section>`;
 
+  const promotionBlock = options.promotion
+    ? `<form class="signup-form" method="post" action="/admin/records/${escapeHtml(options.recordType)}/${options.recordId}/promote">
+      <input type="hidden" name="_csrf" value="${escapeHtml(options.promotion.csrfToken)}">
+      <input type="hidden" name="season" value="${options.seasonId}">
+      <input type="hidden" name="version" value="${options.version}">
+      <fieldset><legend>Promote a submitted form into this placeholder</legend>
+        <p class="help">The submitted details become canonical here. Existing matches and email history follow this record.</p>
+        <label for="promotion_submission">Submitted ${escapeHtml(options.recordType)}</label>
+        <select id="promotion_submission" name="submission" required>
+          <option value="">Choose a submission</option>
+          ${options.promotion.candidates.map((candidate) => `<option value="${candidate.id}:${candidate.version}">${escapeHtml(candidate.title)} · version ${candidate.version}</option>`).join("")}
+        </select>
+      </fieldset>
+      <button class="primary-action" type="submit">Promote submission</button>
+    </form>`
+    : "";
+
+  const supersessionBlock = options.supersession
+    ? `<form class="signup-form" method="post" action="/admin/records/${escapeHtml(options.recordType)}/${options.recordId}/supersede">
+      <input type="hidden" name="_csrf" value="${escapeHtml(options.supersession.csrfToken)}">
+      <input type="hidden" name="season" value="${options.seasonId}">
+      <input type="hidden" name="version" value="${options.version}">
+      <fieldset><legend>Reconcile this record as a resubmission</legend>
+        <p class="help">This record will be marked superseded and disappear from new activity. Its history remains linked to the canonical record.</p>
+        <label for="supersession_canonical">Canonical ${escapeHtml(options.recordType)}</label>
+        <select id="supersession_canonical" name="canonical_id" required>
+          <option value="">Choose the record to keep</option>
+          ${options.supersession.candidates.map((candidate) => `<option value="${candidate.id}">${escapeHtml(candidate.title)} · version ${candidate.version}</option>`).join("")}
+        </select>
+      </fieldset>
+      <button class="secondary-action" type="submit">Mark this record superseded</button>
+    </form>`
+    : "";
+
   return shell(
     options.title,
     `    <header class="signup-header">
@@ -215,6 +340,8 @@ export function renderRecordPage(options: {
         : ""
     }
     ${conflictBlock}
+    ${promotionBlock}
+    ${supersessionBlock}
     <form class="signup-form" method="post" action="/admin/records/${escapeHtml(options.recordType)}/${options.recordId}">
       <input type="hidden" name="_csrf" value="${escapeHtml(options.csrfToken)}">
       <input type="hidden" name="season" value="${options.seasonId}">
