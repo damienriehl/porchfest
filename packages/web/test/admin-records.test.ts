@@ -119,10 +119,15 @@ async function post(
   });
 }
 
-async function csrfFrom(response: Response) {
-  return (
-    (await response.text()).match(/name="_csrf" value="([^"]+)"/)?.[1] ?? ""
+/** A page can carry several forms, each with its own path-bound token, so pick
+ *  the one belonging to the form under test rather than the first on the page. */
+async function csrfFrom(response: Response, action?: string) {
+  const html = await response.text();
+  if (!action) return html.match(/name="_csrf" value="([^"]+)"/)?.[1] ?? "";
+  const pattern = new RegExp(
+    `action="${action.replace(/[/\\^$*+?.()|[\]{}]/g, "\\$&")}"[\\s\\S]{0,400}?name="_csrf" value="([^"]+)"`,
   );
+  return html.match(pattern)?.[1] ?? "";
 }
 
 describe("the activity queue", () => {
@@ -214,7 +219,10 @@ describe("the record editor", () => {
       `/admin/records/venue/${signup.venue.id}?season=${season.id}`,
       alice,
     );
-    const csrf = await csrfFrom(page);
+    const csrf = await csrfFrom(
+      page,
+      `/admin/records/venue/${signup.venue.id}`,
+    );
 
     const saved = await post(
       runtime,
@@ -249,7 +257,10 @@ describe("the record editor", () => {
       `/admin/records/venue/${signup.venue.id}?season=${season.id}`,
       alice,
     );
-    const csrf = await csrfFrom(page);
+    const csrf = await csrfFrom(
+      page,
+      `/admin/records/venue/${signup.venue.id}`,
+    );
     const staleVersion = signup.venue.version;
 
     // Bob saves first, straight through core.
@@ -296,7 +307,10 @@ describe("the record editor", () => {
       `/admin/records/venue/${signup.venue.id}?season=${season.id}`,
       alice,
     );
-    const csrf = await csrfFrom(page);
+    const csrf = await csrfFrom(
+      page,
+      `/admin/records/venue/${signup.venue.id}`,
+    );
     runtime.core.seasons.updateVenue(signup.venue.id, signup.venue.version, {
       title: "Bob's Title",
     });
@@ -354,7 +368,7 @@ describe("the record editor", () => {
       `/admin/records/venue/${signup.venue.id}`,
       alice,
       new URLSearchParams({
-        _csrf: await csrfFrom(page),
+        _csrf: await csrfFrom(page, `/admin/records/venue/${signup.venue.id}`),
         season: String(season.id),
         version: String(signup.venue.version),
         title: "Renamed",
@@ -395,5 +409,94 @@ describe("the record editor", () => {
     );
 
     expect(page.status).toBe(401);
+  });
+});
+
+describe("record status", () => {
+  it("withdraws an act and says so on the record", async () => {
+    const { runtime, season, alice, signup } = await boot();
+    const page = await get(
+      runtime,
+      `/admin/records/venue/${signup.venue.id}?season=${season.id}`,
+      alice,
+    );
+    const statusCsrf = await csrfFrom(
+      page,
+      `/admin/records/venue/${signup.venue.id}/status`,
+    );
+
+    const set = await post(
+      runtime,
+      `/admin/records/venue/${signup.venue.id}/status`,
+      alice,
+      new URLSearchParams({
+        _csrf: statusCsrf,
+        season: String(season.id),
+        version: String(signup.venue.version),
+        status: "withdrawn",
+      }),
+    );
+
+    expect(set.status).toBe(303);
+    const stored = runtime.core.queue
+      .listForOrganizer(season.id, 1)
+      .find((item) => item.recordType === "venue");
+    expect(stored?.recordType === "venue" && stored.record.status).toBe(
+      "withdrawn",
+    );
+  });
+
+  it("names a stale status change instead of applying it", async () => {
+    const { runtime, season, alice, signup } = await boot();
+    const page = await get(
+      runtime,
+      `/admin/records/venue/${signup.venue.id}?season=${season.id}`,
+      alice,
+    );
+    const statusCsrf = await csrfFrom(
+      page,
+      `/admin/records/venue/${signup.venue.id}/status`,
+    );
+
+    // Someone else moves it first.
+    runtime.core.seasons.setRecordStatus(
+      "venue",
+      signup.venue.id,
+      signup.venue.version,
+      "confirmed",
+    );
+
+    const refused = await post(
+      runtime,
+      `/admin/records/venue/${signup.venue.id}/status`,
+      alice,
+      new URLSearchParams({
+        _csrf: statusCsrf,
+        season: String(season.id),
+        version: String(signup.venue.version),
+        status: "withdrawn",
+      }),
+    );
+
+    expect(refused.status).toBe(409);
+    expect(await refused.text()).toContain("Someone else saved this first");
+    const stored = runtime.core.queue
+      .listForOrganizer(season.id, 1)
+      .find((item) => item.recordType === "venue");
+    expect(stored?.recordType === "venue" && stored.record.status).toBe(
+      "confirmed",
+    );
+  });
+
+  it("offers no status control on a contact", async () => {
+    const { runtime, season, alice, signup } = await boot();
+
+    const page = await get(
+      runtime,
+      `/admin/records/contact/${signup.contact.id}?season=${season.id}`,
+      alice,
+    );
+
+    expect(await page.text()).not.toContain("/status");
   });
 });

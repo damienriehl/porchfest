@@ -21,6 +21,12 @@ export const seasonStates = [
 
 export const slotStates = ["open", "held", "assigned"] as const;
 
+/**
+ * R6's organizer-set record status. "tentative" is the default because that is
+ * what a fresh public submission actually is: received, not yet agreed.
+ */
+export const recordStatuses = ["tentative", "confirmed", "withdrawn"] as const;
+
 export const venueGearValues = [
   "pa",
   "microphone",
@@ -288,6 +294,9 @@ export const venues = sqliteTable(
     latitude: real("latitude"),
     longitude: real("longitude"),
     notes: text("notes"),
+    status: text("status", { enum: recordStatuses })
+      .notNull()
+      .default("tentative"),
     hostContactId: integer("host_contact_id").references(() => contacts.id),
     placeholder: integer("placeholder", { mode: "boolean" })
       .notNull()
@@ -323,6 +332,9 @@ export const acts = sqliteTable(
     // The performer-side counterpart to venues.notes: free text the organizers
     // read and the public map never shows.
     notes: text("notes"),
+    status: text("status", { enum: recordStatuses })
+      .notNull()
+      .default("tentative"),
     placeholder: integer("placeholder", { mode: "boolean" })
       .notNull()
       .default(false),
@@ -580,6 +592,7 @@ export const schemaTableNames = Object.freeze(
 export type SeasonTimeSlot = typeof seasonTimeSlots.$inferSelect;
 export type QueueDismissal = typeof queueDismissals.$inferSelect;
 export type QueueRecordType = (typeof queueRecordTypes)[number];
+export type RecordStatus = (typeof recordStatuses)[number];
 
 export type Organizer = typeof organizers.$inferSelect;
 export type NewOrganizer = typeof organizers.$inferInsert;
