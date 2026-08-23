@@ -212,7 +212,7 @@ export function renderPlaceholderPage(options: {
 }): string {
   const fields = RECORD_FIELDS[options.recordType];
   const values = options.values ?? {};
-  const kind = options.recordType === "act" ? "act" : "venue";
+  const kind = options.recordType;
   const fieldControl = (spec: RecordFieldSpec) => {
     const value = values[spec.name] ?? "";
     if (spec.kind === "textarea") {
