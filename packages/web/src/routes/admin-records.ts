@@ -3,8 +3,11 @@
 // saves a correction without letting two organizers overwrite each other.
 
 import {
+  ChangeRequestConflictError,
+  RecordLifecycleError,
   recordStatuses,
   RepositoryConflictError,
+  SeasonActionError,
   type CoreRuntime,
   type PlaceholderReachInput,
   type QueueItem,
@@ -20,6 +23,7 @@ import {
   renderRecordPage,
   type ConflictDetail,
 } from "../views/admin-records.js";
+import { CONTACT_EMAIL_PATTERN } from "./signup.js";
 
 const RECORD_TYPES: readonly QueueRecordType[] = ["act", "venue", "contact"];
 
@@ -87,12 +91,19 @@ export function registerAdminRecordRoutes(
       }
 
       try {
-        const applied = options.core.changeRequests.apply(requestId, version);
-        if (applied.kind === "address") {
+        if (pending.kind === "address") {
+          if (
+            pending.status !== "pending" ||
+            pending.version !== version ||
+            !pending.applicable
+          ) {
+            throw new ChangeRequestConflictError(requestId, ["recordVersion"]);
+          }
           return redirect(
-            `/admin/records/venue/${applied.recordId}?season=${seasonId}&change_request=${applied.id}`,
+            `/admin/records/venue/${pending.recordId}?season=${seasonId}&change_request=${pending.id}`,
           );
         }
+        options.core.changeRequests.apply(requestId, version);
         return redirect(`/admin?season=${seasonId}`);
       } catch (error) {
         if (!(error instanceof RepositoryConflictError)) throw error;
@@ -184,13 +195,13 @@ export function registerAdminRecordRoutes(
         return notFound();
       }
       const contacts = contactOptions(options.core, seasonId, organizer.id);
-      const reach = placeholderReach(
+      const reachResult = placeholderReach(
         fields,
         contacts.map(({ id }) => id),
       );
       const titleField = recordType === "act" ? "name" : "title";
       const title = fields[titleField]?.trim() ?? "";
-      if (!title || !reach) {
+      if (!title || !reachResult.reach) {
         return html(
           renderPlaceholderPage({
             recordType,
@@ -200,43 +211,67 @@ export function registerAdminRecordRoutes(
             values: fields,
             error: !title
               ? `Add a ${recordType === "act" ? "name" : "title"}.`
-              : "Choose an existing contact or enter a contact name and valid email address.",
+              : reachResult.error,
           }),
           400,
         );
       }
 
-      const created =
-        recordType === "act"
-          ? options.core.seasons.createPlaceholderAct({
-              seasonId,
-              reach,
-              act: {
-                name: title,
-                genre: nullableText(fields.genre),
-                description: nullableText(fields.description),
-                links: nullableText(fields.links),
-                durationMinutes: nullableNumber(fields.durationMinutes),
-                requiresAmplification: nullableBoolean(
-                  fields.requiresAmplification,
-                ),
-                housePreference: nullableText(fields.housePreference),
-                canLendGear: nullableBoolean(fields.canLendGear),
-                notes: nullableText(fields.notes),
-              },
-            })
-          : options.core.seasons.createPlaceholderVenue({
-              seasonId,
-              reach,
-              venue: {
-                title,
-                address: nullableText(fields.address),
-                spaceDescription: nullableText(fields.spaceDescription),
-                hasPower: nullableBoolean(fields.hasPower),
-                rainBackup: nullableBoolean(fields.rainBackup),
-                notes: nullableText(fields.notes),
-              },
-            });
+      let created;
+      try {
+        created =
+          recordType === "act"
+            ? options.core.seasons.createPlaceholderAct({
+                seasonId,
+                reach: reachResult.reach,
+                act: {
+                  name: title,
+                  genre: nullableText(fields.genre),
+                  description: nullableText(fields.description),
+                  links: nullableText(fields.links),
+                  durationMinutes: nullableNumber(fields.durationMinutes),
+                  requiresAmplification: nullableBoolean(
+                    fields.requiresAmplification,
+                  ),
+                  housePreference: nullableText(fields.housePreference),
+                  canLendGear: nullableBoolean(fields.canLendGear),
+                  notes: nullableText(fields.notes),
+                },
+              })
+            : options.core.seasons.createPlaceholderVenue({
+                seasonId,
+                reach: reachResult.reach,
+                venue: {
+                  title,
+                  address: nullableText(fields.address),
+                  spaceDescription: nullableText(fields.spaceDescription),
+                  hasPower: nullableBoolean(fields.hasPower),
+                  rainBackup: nullableBoolean(fields.rainBackup),
+                  notes: nullableText(fields.notes),
+                },
+              });
+      } catch (error) {
+        if (
+          !(error instanceof SeasonActionError) &&
+          !(error instanceof RecordLifecycleError)
+        ) {
+          throw error;
+        }
+        return html(
+          renderPlaceholderPage({
+            recordType,
+            seasonId,
+            csrfToken: options.csrfTokenFor("/admin/placeholders/:recordType"),
+            contacts: contactOptions(options.core, seasonId, organizer.id),
+            values: fields,
+            error:
+              error instanceof SeasonActionError
+                ? "This season is archived, so placeholders can no longer be added. Your answers are still here."
+                : "That contact is no longer available. Choose another contact or enter a direct email address.",
+          }),
+          409,
+        );
+      }
       return redirect(
         `/admin/records/${recordType}/${created.id}?season=${seasonId}&created=1`,
       );
@@ -262,7 +297,7 @@ export function registerAdminRecordRoutes(
         );
         if (!item) return notFound();
 
-        const proposedAddress = addressProposalFor(
+        const addressRequest = addressRequestFor(
           options.core,
           context.req.query("change_request"),
           seasonId,
@@ -277,20 +312,27 @@ export function registerAdminRecordRoutes(
               context.req.query("saved") === "1" ||
               context.req.query("created") === "1",
             values:
-              proposedAddress === null
+              addressRequest === null
                 ? undefined
-                : { ...storedValues, address: proposedAddress },
+                : {
+                    ...storedValues,
+                    address: addressRequest.proposedAddress ?? "",
+                  },
             conflicts:
-              proposedAddress === null
+              addressRequest === null
                 ? undefined
                 : [
                     {
                       field: "address",
                       label: "Street address",
-                      attempted: proposedAddress,
+                      attempted: addressRequest.proposedAddress ?? "",
                       stored: storedValues.address ?? "",
                     },
                   ],
+            changeRequestReview:
+              addressRequest === null
+                ? undefined
+                : { id: addressRequest.id, presentation: "proposal" },
           }),
         );
       },
@@ -390,6 +432,13 @@ export function registerAdminRecordRoutes(
             expectedVersion,
             changes,
           );
+          completeAddressReviewAfterSave(
+            options.core,
+            fields.change_request,
+            seasonId,
+            recordType,
+            recordId,
+          );
           return redirect(
             `/admin/records/${recordType}/${recordId}?season=${seasonId}&saved=1`,
           );
@@ -431,6 +480,7 @@ export function registerAdminRecordRoutes(
                 `/admin/records/${recordType}/:id`,
               ),
               conflicts,
+              changeRequestReview: changeRequestId(fields.change_request),
             }),
             409,
           );
@@ -637,6 +687,10 @@ function renderLifecycleRecordPage(
     readonly saved?: boolean;
     readonly conflicts?: readonly ConflictDetail[];
     readonly values?: Readonly<Record<string, string>>;
+    readonly changeRequestReview?: {
+      readonly id: number;
+      readonly presentation?: "proposal";
+    };
   } = {},
 ): string {
   const candidates = options.core.queue
@@ -687,24 +741,26 @@ function renderLifecycleRecordPage(
     status: statusOf(item.record),
     saved: overrides.saved,
     conflicts: overrides.conflicts,
+    changeRequestReview: overrides.changeRequestReview,
     promotion,
     supersession,
   });
 }
 
-function addressProposalFor(
+function addressRequestFor(
   core: CoreRuntime,
   requestIdValue: string | undefined,
   seasonId: number,
   recordType: QueueRecordType,
   recordId: number,
-): string | null {
+): ReturnType<CoreRuntime["changeRequests"]["find"]> {
   const requestId = Number(requestIdValue ?? "");
   if (!Number.isSafeInteger(requestId) || requestId <= 0) return null;
   const request = core.changeRequests.find(requestId);
   if (
     !request ||
-    request.status !== "applied" ||
+    request.status !== "pending" ||
+    !request.applicable ||
     request.kind !== "address" ||
     recordType !== "venue" ||
     request.seasonId !== seasonId ||
@@ -712,7 +768,44 @@ function addressProposalFor(
   ) {
     return null;
   }
-  return request.proposedAddress;
+  return request;
+}
+
+function changeRequestId(
+  value: string | undefined,
+): { readonly id: number } | undefined {
+  const id = Number(value ?? "");
+  return Number.isSafeInteger(id) && id > 0 ? { id } : undefined;
+}
+
+function completeAddressReviewAfterSave(
+  core: CoreRuntime,
+  requestIdValue: string | undefined,
+  seasonId: number,
+  recordType: QueueRecordType,
+  recordId: number,
+): void {
+  const review = changeRequestId(requestIdValue);
+  if (!review) return;
+  const request = core.changeRequests.find(review.id);
+  if (
+    !request ||
+    request.status !== "pending" ||
+    request.kind !== "address" ||
+    recordType !== "venue" ||
+    request.seasonId !== seasonId ||
+    request.recordId !== recordId
+  ) {
+    return;
+  }
+  try {
+    core.changeRequests.completeAddressReview(request.id, request.version);
+  } catch (error) {
+    // R33: the venue save already succeeded. Another organizer resolving the
+    // proposal first must not turn that successful save into a 500.
+    if (error instanceof ChangeRequestConflictError) return;
+    throw error;
+  }
 }
 
 function contactOptions(
@@ -736,24 +829,41 @@ function seasonExists(core: CoreRuntime, seasonId: number): boolean {
 function placeholderReach(
   fields: Readonly<Record<string, string>>,
   allowedContactIds: readonly number[],
-): PlaceholderReachInput | null {
-  const reachViaContactId = Number(fields.reach_via_contact_id ?? "");
-  if (
-    Number.isSafeInteger(reachViaContactId) &&
-    reachViaContactId > 0 &&
-    allowedContactIds.includes(reachViaContactId)
-  ) {
-    return { reachViaContactId };
+): { readonly reach: PlaceholderReachInput | null; readonly error: string } {
+  const selectedContact = fields.reach_via_contact_id?.trim() ?? "";
+  if (selectedContact) {
+    const reachViaContactId = Number(selectedContact);
+    if (
+      Number.isSafeInteger(reachViaContactId) &&
+      reachViaContactId > 0 &&
+      allowedContactIds.includes(reachViaContactId)
+    ) {
+      return { reach: { reachViaContactId }, error: "" };
+    }
+    return {
+      reach: null,
+      error:
+        "That selected contact is no longer available. Choose another contact or enter a direct email address.",
+    };
   }
   const name = fields.manual_name?.trim() ?? "";
   const email = fields.manual_email?.trim() ?? "";
-  if (!name || !/^[^\s@]+@[^\s@]+$/.test(email)) return null;
+  if (!name || !CONTACT_EMAIL_PATTERN.test(email)) {
+    return {
+      reach: null,
+      error:
+        "Choose an existing contact or enter a contact name and valid email address.",
+    };
+  }
   return {
-    contact: {
-      name,
-      email,
-      phone: nullableText(fields.manual_phone),
+    reach: {
+      contact: {
+        name,
+        email,
+        phone: nullableText(fields.manual_phone),
+      },
     },
+    error: "",
   };
 }
 

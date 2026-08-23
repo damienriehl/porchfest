@@ -49,6 +49,7 @@ export type RecordChangeRequestInput =
 export type ParticipantChangeRequest = ChangeRequest & {
   readonly proposedAddress: string | null;
   readonly proposedAvailability: readonly ProposedAvailabilityWindow[] | null;
+  readonly applicable: boolean;
 };
 
 export class ChangeRequestConflictError extends RepositoryConflictError<"change_request"> {
@@ -68,15 +69,44 @@ export class ChangeRequestLifecycleError extends RepositoryLifecycleError {
   }
 }
 
+export class ChangeRequestTargetConflictError extends RepositoryConflictError<ChangeRequestRecordType> {
+  constructor(
+    recordType: ChangeRequestRecordType,
+    recordId: number,
+    conflictingFields: readonly string[],
+  ) {
+    super(
+      "ChangeRequestTargetConflictError",
+      recordType,
+      recordId,
+      conflictingFields,
+    );
+  }
+}
+
 export function createChangeRequestRepository(
   db: CoreExecutor,
   options: RepositoryOptions = {},
 ) {
   const now = options.now ?? (() => new Date());
 
-  function decode(row: ChangeRequest): ParticipantChangeRequest {
+  function decode(
+    executor: CoreExecutor,
+    row: ChangeRequest,
+  ): ParticipantChangeRequest {
+    const applicable = targetMatches(executor, row);
     if (row.kind === "withdrawal") {
-      return { ...row, proposedAddress: null, proposedAvailability: null };
+      if (row.proposedValue !== null) {
+        throw new ChangeRequestLifecycleError(
+          `change request ${row.id} has an invalid withdrawal proposal`,
+        );
+      }
+      return {
+        ...row,
+        proposedAddress: null,
+        proposedAvailability: null,
+        applicable,
+      };
     }
     if (row.kind === "address") {
       if (row.recordType !== "venue" || row.proposedValue === null) {
@@ -88,14 +118,26 @@ export function createChangeRequestRepository(
         ...row,
         proposedAddress: row.proposedValue,
         proposedAvailability: null,
+        applicable,
       };
     }
-    if (row.recordType !== "act" || row.proposedValue === null) {
+    if (
+      row.kind !== "availability" ||
+      row.recordType !== "act" ||
+      row.proposedValue === null
+    ) {
       throw new ChangeRequestLifecycleError(
         `change request ${row.id} has an invalid availability proposal`,
       );
     }
-    const parsed: unknown = JSON.parse(row.proposedValue);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(row.proposedValue);
+    } catch {
+      throw new ChangeRequestLifecycleError(
+        `change request ${row.id} has an invalid availability proposal`,
+      );
+    }
     if (!Array.isArray(parsed)) {
       throw new ChangeRequestLifecycleError(
         `change request ${row.id} has an invalid availability proposal`,
@@ -123,7 +165,12 @@ export function createChangeRequestRepository(
         return { startsAt, endsAt };
       },
     );
-    return { ...row, proposedAddress: null, proposedAvailability };
+    return {
+      ...row,
+      proposedAddress: null,
+      proposedAvailability,
+      applicable,
+    };
   }
 
   function findWith(
@@ -135,20 +182,20 @@ export function createChangeRequestRepository(
       .from(changeRequests)
       .where(eq(changeRequests.id, id))
       .get();
-    return row ? decode(row) : null;
+    return row ? decode(executor, row) : null;
   }
 
   function find(id: number): ParticipantChangeRequest | null {
     return findWith(db, id);
   }
 
-  function targetFor(
+  function targetMatches(
     executor: CoreExecutor,
     request: Pick<
-      ParticipantChangeRequest,
-      "id" | "seasonId" | "recordType" | "recordId" | "recordVersion"
+      ChangeRequest,
+      "seasonId" | "recordType" | "recordId" | "recordVersion"
     >,
-  ) {
+  ): boolean {
     const target =
       request.recordType === "act"
         ? executor
@@ -171,15 +218,24 @@ export function createChangeRequestRepository(
             .from(venues)
             .where(eq(venues.id, request.recordId))
             .get();
-    if (
-      !target ||
-      target.seasonId !== request.seasonId ||
-      target.version !== request.recordVersion ||
-      target.canonicalId !== null
-    ) {
+    return Boolean(
+      target &&
+      target.seasonId === request.seasonId &&
+      target.version === request.recordVersion &&
+      target.canonicalId === null,
+    );
+  }
+
+  function targetFor(
+    executor: CoreExecutor,
+    request: Pick<
+      ParticipantChangeRequest,
+      "id" | "seasonId" | "recordType" | "recordId" | "recordVersion"
+    >,
+  ): void {
+    if (!targetMatches(executor, request)) {
       throw new ChangeRequestConflictError(request.id, ["recordVersion"]);
     }
-    return target;
   }
 
   function proposedValue(input: RecordChangeRequestInput): string | null {
@@ -213,7 +269,13 @@ export function createChangeRequestRepository(
   }
 
   function record(input: RecordChangeRequestInput): ParticipantChangeRequest {
-    targetFor(db, { ...input, id: 0 });
+    if (!targetMatches(db, input)) {
+      throw new ChangeRequestTargetConflictError(
+        input.recordType,
+        input.recordId,
+        ["recordVersion"],
+      );
+    }
     const stamp = now();
     const row = db
       .insert(changeRequests)
@@ -229,7 +291,7 @@ export function createChangeRequestRepository(
       })
       .returning()
       .get();
-    return decode(row);
+    return decode(db, row);
   }
 
   function listPendingForSeason(seasonId: number): ParticipantChangeRequest[] {
@@ -244,7 +306,16 @@ export function createChangeRequestRepository(
       )
       .orderBy(desc(changeRequests.createdAt), desc(changeRequests.id))
       .all()
-      .map(decode);
+      .flatMap((row) => {
+        try {
+          return [decode(db, row)];
+        } catch (error) {
+          // R33's queue must remain usable when a non-core writer left one
+          // malformed proposal behind. Direct lookups remain strict.
+          if (error instanceof ChangeRequestLifecycleError) return [];
+          throw error;
+        }
+      });
   }
 
   function claim(
@@ -285,6 +356,11 @@ export function createChangeRequestRepository(
           const request = findWith(tx, id);
           if (!request) {
             throw new ChangeRequestConflictError(id, ["version"]);
+          }
+          if (request.kind === "address") {
+            throw new ChangeRequestLifecycleError(
+              `address change request ${id} must be completed through the address review flow`,
+            );
           }
           claim(tx, id, expectedVersion, "applied");
           targetFor(tx, request);
@@ -334,6 +410,7 @@ export function createChangeRequestRepository(
                     updatedAt: stamp,
                   })),
                 )
+                .onConflictDoNothing()
                 .run();
             }
           }
@@ -357,6 +434,34 @@ export function createChangeRequestRepository(
     }
   }
 
+  function completeAddressReview(
+    id: number,
+    expectedVersion: number,
+  ): ParticipantChangeRequest {
+    return db.transaction(
+      (tx) => {
+        const request = findWith(tx, id);
+        if (!request) {
+          throw new ChangeRequestConflictError(id, ["version"]);
+        }
+        if (request.kind !== "address") {
+          throw new ChangeRequestLifecycleError(
+            `change request ${id} is not an address review`,
+          );
+        }
+        // R33: the editor save legitimately moved the venue version, so this
+        // completion consumes only the still-pending request's KTD7 token.
+        claim(tx, id, expectedVersion, "applied");
+        const applied = findWith(tx, id);
+        if (!applied) {
+          throw new ChangeRequestConflictError(id, ["version"]);
+        }
+        return applied;
+      },
+      { behavior: "immediate" },
+    );
+  }
+
   function reject(
     id: number,
     expectedVersion: number,
@@ -374,7 +479,14 @@ export function createChangeRequestRepository(
     );
   }
 
-  return Object.freeze({ record, find, listPendingForSeason, apply, reject });
+  return Object.freeze({
+    record,
+    find,
+    listPendingForSeason,
+    apply,
+    completeAddressReview,
+    reject,
+  });
 }
 
 export type ChangeRequestRepository = ReturnType<

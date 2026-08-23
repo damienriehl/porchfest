@@ -48,6 +48,7 @@ export type {
   PlaceholderReachInput,
   SignupContactInput,
 } from "./records.js";
+export { RecordLifecycleError } from "./records.js";
 export {
   AccessError,
   createAccessRepository,
@@ -72,6 +73,7 @@ export { RepositoryConflictError } from "./storage/repository-errors.js";
 export {
   ChangeRequestConflictError,
   ChangeRequestLifecycleError,
+  ChangeRequestTargetConflictError,
   createChangeRequestRepository,
   type ChangeRequestRepository,
   type ParticipantChangeRequest,

@@ -118,10 +118,7 @@ export function renderQueuePage(options: {
         : request.kind === "address"
           ? (request.proposedAddress ?? "")
           : (request.proposedAvailability ?? [])
-              .map(
-                ({ startsAt, endsAt }) =>
-                  `${startsAt.toISOString().slice(0, 16).replace("T", " ")}–${endsAt.toISOString().slice(11, 16)} UTC`,
-              )
+              .map(formatAvailabilityWindow)
               .join(", ") || "No availability";
     return `<li class="queue-item change-request-item">
       <div class="queue-item-body">
@@ -129,14 +126,19 @@ export function renderQueuePage(options: {
         <h3>${escapeHtml(label)}</h3>
         <p>${escapeHtml(proposal)}</p>
         <p class="help">Target record ${request.recordId} · record version ${request.recordVersion}</p>
+        ${request.applicable ? "" : '<p class="help">This record changed after the request was filed. It can no longer be applied; reject it after reviewing the current record.</p>'}
       </div>
       <div class="queue-item-actions">
-        <form method="post" action="/admin/change-requests/${request.id}/apply">
+        ${
+          request.applicable
+            ? `<form method="post" action="/admin/change-requests/${request.id}/apply">
           <input type="hidden" name="_csrf" value="${escapeHtml(options.applyChangeCsrfToken)}">
           <input type="hidden" name="season" value="${options.seasonId}">
           <input type="hidden" name="version" value="${request.version}">
           <button class="primary-action" type="submit">${request.kind === "address" ? "Review in editor" : "Apply"}</button>
-        </form>
+        </form>`
+            : ""
+        }
         <form method="post" action="/admin/change-requests/${request.id}/reject">
           <input type="hidden" name="_csrf" value="${escapeHtml(options.rejectChangeCsrfToken)}">
           <input type="hidden" name="season" value="${options.seasonId}">
@@ -186,6 +188,22 @@ export function renderQueuePage(options: {
       <button class="secondary-action" type="submit">Sign out</button>
     </form>`,
   );
+}
+
+function formatAvailabilityWindow({
+  startsAt,
+  endsAt,
+}: {
+  readonly startsAt: Date;
+  readonly endsAt: Date;
+}): string {
+  const start = startsAt.toISOString();
+  const end = endsAt.toISOString();
+  const endDisplay =
+    start.slice(0, 10) === end.slice(0, 10)
+      ? end.slice(11, 16)
+      : end.slice(0, 16).replace("T", " ");
+  return `${start.slice(0, 16).replace("T", " ")}–${endDisplay} UTC`;
 }
 
 export interface LifecycleRecordOption {
@@ -289,6 +307,10 @@ export function renderRecordPage(options: {
   readonly saved?: boolean;
   readonly statusCsrfToken?: string;
   readonly conflicts?: readonly ConflictDetail[];
+  readonly changeRequestReview?: {
+    readonly id: number;
+    readonly presentation?: "proposal";
+  };
   readonly promotion?: {
     readonly csrfToken: string;
     readonly candidates: readonly LifecycleRecordOption[];
@@ -300,6 +322,8 @@ export function renderRecordPage(options: {
 }): string {
   const fields = RECORD_FIELDS[options.recordType];
   const conflicts = options.conflicts ?? [];
+  const proposalPresentation =
+    options.changeRequestReview?.presentation === "proposal";
 
   const control = (spec: RecordFieldSpec) => {
     const value = options.values[spec.name] ?? "";
@@ -326,12 +350,12 @@ export function renderRecordPage(options: {
     conflicts.length === 0
       ? ""
       : `<section class="error-summary" role="alert" tabindex="-1" aria-labelledby="conflict-title">
-      <h2 id="conflict-title">Someone else saved this first</h2>
-      <p>Your answers are below, unchanged. Here is what is stored now — save again to overwrite it, or edit yours first.</p>
+      <h2 id="conflict-title">${proposalPresentation ? "Review the participant's proposed correction" : "Someone else saved this first"}</h2>
+      <p>${proposalPresentation ? "The participant proposed the value below. The stored value has not changed; saving this form accepts the proposal." : "Your answers are below, unchanged. Here is what is stored now — save again to overwrite it, or edit yours first."}</p>
       <dl class="submission-list">${conflicts
         .map(
           (conflict) =>
-            `<div class="submission-row"><dt>${escapeHtml(conflict.label)}</dt><dd><strong>Yours:</strong> ${escapeHtml(conflict.attempted || "(empty)")}<br><strong>Stored:</strong> ${escapeHtml(conflict.stored || "(empty)")}</dd></div>`,
+            `<div class="submission-row"><dt>${escapeHtml(conflict.label)}</dt><dd><strong>${proposalPresentation ? "Participant proposed" : "Yours"}:</strong> ${escapeHtml(conflict.attempted || "(empty)")}<br><strong>Stored:</strong> ${escapeHtml(conflict.stored || "(empty)")}</dd></div>`,
         )
         .join("")}</dl>
     </section>`;
@@ -405,6 +429,7 @@ export function renderRecordPage(options: {
       <input type="hidden" name="_csrf" value="${escapeHtml(options.csrfToken)}">
       <input type="hidden" name="season" value="${options.seasonId}">
       <input type="hidden" name="version" value="${options.version}">
+      ${options.changeRequestReview ? `<input type="hidden" name="change_request" value="${options.changeRequestReview.id}">` : ""}
       <fieldset>
         <legend>Details</legend>
         ${fields

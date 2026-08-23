@@ -421,6 +421,119 @@ describe("placeholder and supersession actions", () => {
     );
   });
 
+  it("refuses a selected contact that became stale instead of creating a duplicate", async () => {
+    const { runtime, season, alice, signup } = await boot();
+    const page = await get(
+      runtime,
+      `/admin/placeholders/act/new?season=${season.id}`,
+      alice,
+    );
+    const canonical = runtime.core.seasons.createHostSignup({
+      seasonId: season.id,
+      contact: { name: "Current contact", email: "current@example.invalid" },
+      venue: {
+        title: "Current Porch",
+        address: "3 Current St",
+        spaceDescription: "Porch",
+        hasPower: true,
+        rainBackup: false,
+        notes: null,
+      },
+      gear: [],
+      drinks: [],
+      amenities: [],
+    });
+    runtime.core.seasons.supersedeContact(
+      signup.contact.id,
+      signup.contact.version,
+      canonical.contact.id,
+    );
+
+    const refused = await post(
+      runtime,
+      "/admin/placeholders/act",
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(page, "/admin/placeholders/act"),
+        season: String(season.id),
+        name: "Should Not Exist",
+        reach_via_contact_id: String(signup.contact.id),
+        manual_name: "Accidental duplicate",
+        manual_email: "duplicate@example.invalid",
+      }),
+    );
+    const body = await refused.text();
+
+    expect(refused.status).toBe(400);
+    expect(body).toContain("selected contact is no longer available");
+    expect(body).toContain('value="Should Not Exist"');
+    expect(
+      runtime.core.queue
+        .listForOrganizer(season.id, 1)
+        .some(
+          (item) =>
+            item.recordType === "contact" &&
+            item.record.email === "duplicate@example.invalid",
+        ),
+    ).toBe(false);
+  });
+
+  it("uses the signup email rule for manually reached placeholders", async () => {
+    const { runtime, season, alice } = await boot();
+    const page = await get(
+      runtime,
+      `/admin/placeholders/venue/new?season=${season.id}`,
+      alice,
+    );
+
+    const refused = await post(
+      runtime,
+      "/admin/placeholders/venue",
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(page, "/admin/placeholders/venue"),
+        season: String(season.id),
+        title: "Bad Email Porch",
+        manual_name: "Host",
+        manual_email: "host@gmail",
+      }),
+    );
+
+    expect(refused.status).toBe(400);
+    expect(await refused.text()).toContain("valid email address");
+  });
+
+  it("re-renders an archived-season placeholder with the typed values", async () => {
+    const { runtime, season, alice, signup } = await boot();
+    runtime.core.seasons.transitionSeason(
+      season.id,
+      season.version,
+      "archived",
+    );
+    const page = await get(
+      runtime,
+      `/admin/placeholders/act/new?season=${season.id}`,
+      alice,
+    );
+
+    const refused = await post(
+      runtime,
+      "/admin/placeholders/act",
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(page, "/admin/placeholders/act"),
+        season: String(season.id),
+        name: "Preserved Archived Act",
+        reach_via_contact_id: String(signup.contact.id),
+      }),
+    );
+    const body = await refused.text();
+
+    expect(refused.status).toBe(409);
+    expect(body).toContain("This season is archived");
+    expect(body).toContain('value="Preserved Archived Act"');
+  });
+
   it.each([
     ["older into newer", 0, 1],
     ["newer into older", 1, 0],
@@ -977,26 +1090,152 @@ describe("participant change requests", () => {
     expect(accepted.headers.get("location")).toBe(
       `/admin/records/venue/${signup.venue.id}?season=${season.id}&change_request=${request.id}`,
     );
+    expect(runtime.core.changeRequests.find(request.id)?.status).toBe(
+      "pending",
+    );
     const editor = await get(
       runtime,
       accepted.headers.get("location") ?? "",
       alice,
     );
-    const body = await editor.text();
+    const body = await editor.clone().text();
     expect(editor.status).toBe(200);
-    // Assert the view edit landed: the proposal is editable and appears beside
-    // the still-stored value through the existing conflict presentation.
+    // Assert the view edit landed: the proposal is editable and is honestly
+    // distinguished from the still-stored value.
     expect(body).toContain(
       'name="address" type="text" value="22 Proposed Avenue"',
     );
-    expect(body).toContain("<strong>Yours:</strong> 22 Proposed Avenue");
+    expect(body).toContain("Review the participant's proposed correction");
+    expect(body).toContain("saving this form accepts the proposal");
+    expect(body).toContain(
+      "<strong>Participant proposed:</strong> 22 Proposed Avenue",
+    );
     expect(body).toContain("<strong>Stored:</strong> 1 Test St");
+    expect(body).toContain(`name="change_request" value="${request.id}"`);
     const stored = runtime.core.queue
       .listForOrganizer(season.id, 1)
       .find((item) => item.recordType === "venue");
     expect(stored?.recordType === "venue" && stored.record.address).toBe(
       "1 Test St",
     );
+
+    const saved = await post(
+      runtime,
+      `/admin/records/venue/${signup.venue.id}`,
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(
+          editor,
+          `/admin/records/venue/${signup.venue.id}`,
+        ),
+        season: String(season.id),
+        version: String(signup.venue.version),
+        change_request: String(request.id),
+        title: signup.venue.title,
+        address: "22 Proposed Avenue",
+        spaceDescription: signup.venue.spaceDescription ?? "",
+        hasPower: "yes",
+        rainBackup: "no",
+        notes: "",
+      }),
+    );
+
+    expect(saved.status).toBe(303);
+    const afterSave = runtime.core.queue
+      .listForOrganizer(season.id, 1)
+      .find((item) => item.recordType === "venue");
+    expect(afterSave?.recordType === "venue" && afterSave.record.address).toBe(
+      "22 Proposed Avenue",
+    );
+    expect(runtime.core.changeRequests.find(request.id)?.status).toBe(
+      "applied",
+    );
+  });
+
+  it("keeps an abandoned address review pending and listed", async () => {
+    const { runtime, season, alice, signup } = await boot();
+    const request = runtime.core.changeRequests.record({
+      seasonId: season.id,
+      recordType: "venue",
+      recordId: signup.venue.id,
+      recordVersion: signup.venue.version,
+      kind: "address",
+      proposedAddress: "44 Still Pending St",
+    });
+    const queue = await get(runtime, `/admin?season=${season.id}`, alice);
+    const review = await post(
+      runtime,
+      `/admin/change-requests/${request.id}/apply`,
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(
+          queue,
+          `/admin/change-requests/${request.id}/apply`,
+        ),
+        season: String(season.id),
+        version: String(request.version),
+      }),
+    );
+
+    expect(review.status).toBe(303);
+    expect(runtime.core.changeRequests.find(request.id)?.status).toBe(
+      "pending",
+    );
+    const reloaded = await (
+      await get(runtime, `/admin?season=${season.id}`, alice)
+    ).text();
+    expect(reloaded).toContain("44 Still Pending St");
+    expect(reloaded).toContain(`/admin/change-requests/${request.id}/apply`);
+  });
+
+  it("shows stale requests with only a reject action", async () => {
+    const { runtime, season, alice, signup } = await boot();
+    const request = runtime.core.changeRequests.record({
+      seasonId: season.id,
+      recordType: "venue",
+      recordId: signup.venue.id,
+      recordVersion: signup.venue.version,
+      kind: "withdrawal",
+    });
+    runtime.core.seasons.updateVenue(signup.venue.id, signup.venue.version, {
+      notes: "Changed after filing",
+    });
+
+    const body = await (
+      await get(runtime, `/admin?season=${season.id}`, alice)
+    ).text();
+
+    expect(body).toContain("This record changed after the request was filed");
+    expect(body).not.toContain(`/admin/change-requests/${request.id}/apply`);
+    expect(body).toContain(`/admin/change-requests/${request.id}/reject`);
+  });
+
+  it("renders the ending date for availability that crosses UTC midnight", async () => {
+    const { runtime, season, alice } = await boot();
+    const performer = createPerformer(
+      runtime,
+      season.id,
+      "Midnight Act",
+      "midnight@example.invalid",
+    );
+    runtime.core.changeRequests.record({
+      seasonId: season.id,
+      recordType: "act",
+      recordId: performer.act.id,
+      recordVersion: performer.act.version,
+      kind: "availability",
+      proposedAvailability: [
+        {
+          startsAt: new Date("2031-09-13T23:00:00.000Z"),
+          endsAt: new Date("2031-09-14T01:00:00.000Z"),
+        },
+      ],
+    });
+
+    const body = await (
+      await get(runtime, `/admin?season=${season.id}`, alice)
+    ).text();
+    expect(body).toContain("2031-09-13 23:00–2031-09-14 01:00 UTC");
   });
 
   it("rejects a request without touching its target", async () => {

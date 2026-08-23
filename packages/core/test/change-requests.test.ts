@@ -3,6 +3,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   ChangeRequestConflictError,
+  ChangeRequestLifecycleError,
+  ChangeRequestTargetConflictError,
   createChangeRequestRepository,
 } from "../src/change-requests.js";
 import { createSeasonRepository } from "../src/season.js";
@@ -167,6 +169,56 @@ describe("participant change requests", () => {
     ).toEqual([{ starts_at: 1_947_081_600, ends_at: 1_947_088_800 }]);
   });
 
+  it("deduplicates repeated proposed availability windows when applying", () => {
+    const { season, requests, performer } = fixtures();
+    const window = {
+      startsAt: new Date("2031-09-13T16:00:00.000Z"),
+      endsAt: new Date("2031-09-13T18:00:00.000Z"),
+    };
+    const request = requests.record({
+      seasonId: season.id,
+      recordType: "act",
+      recordId: performer.act.id,
+      recordVersion: performer.act.version,
+      kind: "availability",
+      proposedAvailability: [window, window],
+    });
+
+    expect(() => requests.apply(request.id, request.version)).not.toThrow();
+    expect(
+      database.sqlite
+        .prepare(
+          "select starts_at, ends_at from act_availabilities where act_id = ?",
+        )
+        .all(performer.act.id),
+    ).toEqual([{ starts_at: 1_947_081_600, ends_at: 1_947_088_800 }]);
+    expect(requests.find(request.id)?.status).toBe("applied");
+  });
+
+  it("keeps address requests pending until the editor save completes review", () => {
+    const { season, seasons, requests, host } = fixtures();
+    const request = requests.record({
+      seasonId: season.id,
+      recordType: "venue",
+      recordId: host.venue.id,
+      recordVersion: host.venue.version,
+      kind: "address",
+      proposedAddress: "2 Proposed Ave",
+    });
+
+    expect(() => requests.apply(request.id, request.version)).toThrowError(
+      ChangeRequestLifecycleError,
+    );
+    expect(requests.find(request.id)?.status).toBe("pending");
+
+    seasons.updateVenue(host.venue.id, host.venue.version, {
+      address: "2 Proposed Ave",
+    });
+    requests.completeAddressReview(request.id, request.version);
+
+    expect(requests.find(request.id)?.status).toBe("applied");
+  });
+
   it("rejects without touching the record", () => {
     const { season, requests, host } = fixtures();
     const request = requests.record({
@@ -206,6 +258,60 @@ describe("participant change requests", () => {
       ChangeRequestConflictError,
     );
     expect(requests.find(request.id)?.status).toBe("pending");
+    expect(requests.listPendingForSeason(season.id)).toEqual([
+      expect.objectContaining({ id: request.id, applicable: false }),
+    ]);
+  });
+
+  it("names the moved target record when a request cannot be filed", () => {
+    const { season, seasons, requests, host } = fixtures();
+    seasons.updateVenue(host.venue.id, host.venue.version, {
+      notes: "Moved before filing",
+    });
+
+    try {
+      requests.record({
+        seasonId: season.id,
+        recordType: "venue",
+        recordId: host.venue.id,
+        recordVersion: host.venue.version,
+        kind: "address",
+        proposedAddress: "2 Proposed Ave",
+      });
+      throw new Error("expected the stale filing to fail");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ChangeRequestTargetConflictError);
+      expect(error).toMatchObject({
+        recordType: "venue",
+        recordId: host.venue.id,
+        conflictingFields: ["recordVersion"],
+      });
+      expect(String(error)).not.toContain("change_request 0");
+    }
+  });
+
+  it("skips malformed requests in the pending listing but keeps direct lookup strict", () => {
+    const { season, requests, host } = fixtures();
+    const valid = requests.record({
+      seasonId: season.id,
+      recordType: "venue",
+      recordId: host.venue.id,
+      recordVersion: host.venue.version,
+      kind: "withdrawal",
+    });
+    const inserted = database.sqlite
+      .prepare(
+        `insert into change_requests
+          (season_id, record_type, record_id, record_version, kind, proposed_value)
+         values (?, 'act', ?, ?, 'address', 'not valid for an act')
+         returning id`,
+      )
+      .get(season.id, host.venue.id, host.venue.version) as { id: number };
+
+    expect(requests.listPendingForSeason(season.id)).toEqual([valid]);
+    expect(() => requests.find(inserted.id)).toThrowError(
+      ChangeRequestLifecycleError,
+    );
   });
 
   it("allows only one of two organizers to apply the same request", () => {
