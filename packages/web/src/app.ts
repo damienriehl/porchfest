@@ -4,6 +4,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { Hono, type Context } from "hono";
 import { RouteRegistry, type TrustAuthorizer } from "./router/registry.js";
 import { announceBootstrapLink, registerAdminRoutes } from "./routes/admin.js";
+import { registerAdminRecordRoutes } from "./routes/admin-records.js";
 import {
   registerSignupRoutes,
   type SignupRouteOptions,
@@ -81,6 +82,8 @@ export function createApp(options: AppOptions): PorchfestApp {
       options.resolveSocketPeerAddress ?? defaultSocketPeerAddress,
     cookie: options.sessionCookie,
   });
+
+  registerAdminRecordRoutes({ core: options.core, routes, csrfTokenFor });
 
   return {
     fetch: app.fetch.bind(app),

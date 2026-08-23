@@ -106,6 +106,47 @@ export const seasons = sqliteTable(
   ],
 );
 
+export const queueRecordTypes = ["act", "venue", "contact"] as const;
+
+/**
+ * R5: "new" is per organizer, so one organizer working the queue never hides an
+ * item from another.
+ *
+ * The dismissal remembers the record VERSION it was made against, not just that
+ * it happened. That single column is what makes R15 true for free: when a
+ * participant later edits the record its version moves past the dismissal and the
+ * item returns to the queue, without anything having to notice the edit and
+ * un-dismiss it.
+ */
+export const queueDismissals = sqliteTable(
+  "queue_dismissals",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    organizerId: integer("organizer_id")
+      .notNull()
+      .references(() => organizers.id),
+    seasonId: integer("season_id")
+      .notNull()
+      .references(() => seasons.id),
+    recordType: text("record_type", { enum: queueRecordTypes }).notNull(),
+    recordId: integer("record_id").notNull(),
+    dismissedVersion: integer("dismissed_version").notNull(),
+    ...mutableColumns(),
+  },
+  (table) => [
+    uniqueIndex("queue_dismissals_organizer_record_uidx").on(
+      table.organizerId,
+      table.recordType,
+      table.recordId,
+    ),
+    index("queue_dismissals_season_idx").on(table.seasonId),
+    check(
+      "queue_dismissals_record_type_check",
+      sql`${table.recordType} in ('act', 'venue', 'contact')`,
+    ),
+  ],
+);
+
 export const seasonTimeSlots = sqliteTable(
   "season_time_slots",
   {
@@ -514,6 +555,7 @@ const schemaTables = [
   organizerSessions,
   organizerInvites,
   seasonTimeSlots,
+  queueDismissals,
 ] as const;
 
 export const schemaTableDefinitions = Object.freeze(
@@ -536,6 +578,8 @@ export const schemaTableNames = Object.freeze(
 );
 
 export type SeasonTimeSlot = typeof seasonTimeSlots.$inferSelect;
+export type QueueDismissal = typeof queueDismissals.$inferSelect;
+export type QueueRecordType = (typeof queueRecordTypes)[number];
 
 export type Organizer = typeof organizers.$inferSelect;
 export type NewOrganizer = typeof organizers.$inferInsert;
