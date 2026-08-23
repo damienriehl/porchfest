@@ -2,7 +2,7 @@
 artifact_contract: "ce-handoff/v1"
 created_at: "2026-08-23T14:35:00Z"
 title: "Porchfest U4 — reviewed, remediated, pushed"
-summary: "fb83eef's review gate is closed. Four adversarial review lenses plus browser verification found eleven defects; all are fixed on feat/u4-signup-forms, six gates green, 249 tests, pushed to origin. No PR opened."
+summary: "U4 is merged. Four adversarial review lenses plus browser verification found eleven defects in fb83eef; all are fixed and squash-merged to main as 34144d1 (PR #6), CI green on both jobs."
 keywords:
   [
     "porchfest",
@@ -14,7 +14,7 @@ keywords:
     "ktd10",
     "ktd2",
   ]
-resume_focus: "Open the PR when ready, or start U5 — first-run setup now edits seasons.timezone rather than introducing it"
+resume_focus: "Start U5 — first-run setup now edits seasons.timezone rather than introducing it, and should add the core test-support seam the residual below names"
 repository: "porchfest"
 branch: "feat/u4-signup-forms"
 ---
@@ -23,13 +23,13 @@ branch: "feat/u4-signup-forms"
 
 ## Where this stands
 
-`feat/u4-signup-forms` is pushed to `origin` for the first time. **No PR is open** —
-that was Damien's call, so he sees the diff first.
+**U4 is merged.** PR #6 squash-merged to `main` as `34144d1`, following the
+convention #3 set for unit-sized PRs; the branch is deleted. Both CI jobs passed on
+the PR and again on `main`.
 
-- `6bfc3c3` — the remediation. 28 files, +5139/-271.
-- `8dc15b7` — the owner-approved plan rebaseline.
-- `66b7082` — a map fix from a **concurrent session** that landed mid-work. Zero file
-  overlap with the remediation; the gates ran green with it present.
+The branch carried the remediation (28 files, +5139/-271), the owner-approved plan
+rebaseline, and `66b7082` — a map fix from a **concurrent session** that landed
+mid-work. Zero file overlap; the gates ran green with it present.
 
 All six gates pass: `typecheck`, `lint`, `format:check`, `check:boundaries`,
 `check:clean-room`, `test` (249 tests, up from 206).
