@@ -71,7 +71,12 @@ export {
   type QueueRecord,
   type QueueRepository,
 } from "./queue.js";
-export type { QueueDismissal, QueueRecordType } from "./storage/schema.js";
+export type {
+  QueueDismissal,
+  QueueRecordType,
+  RecordStatus,
+} from "./storage/schema.js";
+export { recordStatuses } from "./storage/schema.js";
 export {
   createSeasonSetup,
   SeasonSetupError,

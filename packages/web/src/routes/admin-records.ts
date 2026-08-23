@@ -3,6 +3,7 @@
 // other silently.
 
 import {
+  recordStatuses,
   RepositoryConflictError,
   type CoreRuntime,
   type QueueRecordType,
@@ -91,11 +92,88 @@ export function registerAdminRecordRoutes(
             version: item.version,
             values: valuesOf(recordType, item.record),
             csrfToken: options.csrfTokenFor(`/admin/records/${recordType}/:id`),
+            statusCsrfToken: options.csrfTokenFor(
+              `/admin/records/${recordType}/:id/status`,
+            ),
+            status: statusOf(item.record),
             saved: context.req.query("saved") === "1",
           }),
         );
       },
     });
+
+    if (recordType !== "contact") {
+      options.routes.register({
+        method: "POST",
+        path: `/admin/records/${recordType}/:id/status`,
+        tier: "organizer",
+        handler: async (context: Context) => {
+          const organizer = currentOrganizer(options.core, context);
+          if (!organizer) return unauthorized();
+          const recordId = Number(context.req.param("id"));
+          const fields = await readFields(context);
+          const seasonId = Number(fields.season ?? "");
+          const version = Number(fields.version ?? "");
+          const status = recordStatuses.find(
+            (candidate) => candidate === fields.status,
+          );
+          if (!status) {
+            return redirect(
+              `/admin/records/${recordType}/${recordId}?season=${seasonId}`,
+            );
+          }
+
+          try {
+            options.core.seasons.setRecordStatus(
+              recordType,
+              recordId,
+              version,
+              status,
+            );
+          } catch (error) {
+            if (!(error instanceof RepositoryConflictError)) throw error;
+            // Same refusal shape as a field edit: named, not overwritten.
+            const current = findItem(
+              options.core,
+              seasonId,
+              organizer.id,
+              recordType,
+              recordId,
+            );
+            if (!current) return notFound();
+            return html(
+              renderRecordPage({
+                recordType,
+                recordId,
+                seasonId,
+                title: recordTitle(current),
+                version: current.version,
+                values: valuesOf(recordType, current.record),
+                csrfToken: options.csrfTokenFor(
+                  `/admin/records/${recordType}/:id`,
+                ),
+                statusCsrfToken: options.csrfTokenFor(
+                  `/admin/records/${recordType}/:id/status`,
+                ),
+                status: statusOf(current.record),
+                conflicts: [
+                  {
+                    field: "status",
+                    label: "Status",
+                    attempted: status,
+                    stored: statusOf(current.record) ?? "",
+                  },
+                ],
+              }),
+              409,
+            );
+          }
+          return redirect(
+            `/admin/records/${recordType}/${recordId}?season=${seasonId}&saved=1`,
+          );
+        },
+      });
+    }
 
     options.routes.register({
       method: "POST",
@@ -166,6 +244,12 @@ export function registerAdminRecordRoutes(
       },
     });
   }
+}
+
+/** Only acts and venues carry an organizer-set status; a contact has none. */
+function statusOf(record: Record<string, unknown>): string | null {
+  const status = record.status;
+  return typeof status === "string" ? status : null;
 }
 
 function findItem(

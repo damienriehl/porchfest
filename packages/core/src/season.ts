@@ -1,6 +1,7 @@
 import { and, desc, eq, isNull, lt, lte, ne, sql } from "drizzle-orm";
 import {
   createRecordRepository,
+  RecordConflictError,
   type ActChanges,
   type ContactChanges,
   type HostSignup,
@@ -21,6 +22,7 @@ import {
   type Assignment,
   type Contact,
   type EmailLogEntry,
+  type RecordStatus,
   type Season,
   type Slot,
   type Venue,
@@ -215,6 +217,81 @@ export function createSeasonRepository(
       (tx) => {
         assertLegal(getSeason(input.seasonId, tx), "signup");
         return createRecordRepository(tx, options).createPerformerSignup(input);
+      },
+      { behavior: "immediate" },
+    );
+  }
+
+  /**
+   * R6: set an organizer-decided status on an act or venue.
+   *
+   * AE2 is the reason this is not a plain column write. Withdrawing an act must
+   * reopen the slot it held, so the evening does not keep a booked slot for an
+   * act that is not coming — and it must leave the email history alone, because
+   * "we already wrote to them" stays true whatever happens next. Both halves
+   * live in one transaction so a withdrawal cannot half-happen.
+   */
+  function setRecordStatus(
+    recordType: "act" | "venue",
+    id: number,
+    expectedVersion: number,
+    status: RecordStatus,
+  ): { readonly reopenedSlotIds: readonly number[] } {
+    return db.transaction(
+      (tx) => {
+        const table = recordType === "act" ? acts : venues;
+        const stamp = now();
+        const result = tx
+          .update(table)
+          .set({
+            status,
+            version: sql`${table.version} + 1`,
+            updatedAt: stamp,
+          })
+          .where(and(eq(table.id, id), eq(table.version, expectedVersion)))
+          .run();
+        // KTD7: the predicate is inside the statement and the verdict is the
+        // affected-row count.
+        if (result.changes !== 1) {
+          throw new RecordConflictError(recordType, id, ["status"]);
+        }
+
+        if (status !== "withdrawn") return { reopenedSlotIds: [] };
+
+        const affected =
+          recordType === "act"
+            ? tx
+                .select()
+                .from(assignments)
+                .where(eq(assignments.actId, id))
+                .all()
+            : tx
+                .select({
+                  id: assignments.id,
+                  seasonId: assignments.seasonId,
+                  actId: assignments.actId,
+                  slotId: assignments.slotId,
+                })
+                .from(assignments)
+                .innerJoin(slots, eq(slots.id, assignments.slotId))
+                .where(eq(slots.venueId, id))
+                .all();
+
+        const reopenedSlotIds: number[] = [];
+        for (const assignment of affected) {
+          tx.delete(assignments).where(eq(assignments.id, assignment.id)).run();
+          tx.update(slots)
+            .set({
+              state: "open",
+              version: sql`${slots.version} + 1`,
+              updatedAt: stamp,
+            })
+            .where(eq(slots.id, assignment.slotId))
+            .run();
+          reopenedSlotIds.push(assignment.slotId);
+        }
+        // email_log is deliberately untouched: the send history is immutable.
+        return { reopenedSlotIds };
       },
       { behavior: "immediate" },
     );
@@ -957,6 +1034,7 @@ export function createSeasonRepository(
 
   return Object.freeze({
     getSeason,
+    setRecordStatus,
     createHostSignup,
     createPerformerSignup,
     updateAct,

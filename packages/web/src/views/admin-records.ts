@@ -137,6 +137,7 @@ export interface ConflictDetail {
 
 export function renderRecordPage(options: {
   readonly recordType: QueueRecordType;
+  readonly status?: string | null;
   readonly recordId: number;
   readonly seasonId: number;
   readonly title: string;
@@ -144,6 +145,7 @@ export function renderRecordPage(options: {
   readonly values: Readonly<Record<string, string>>;
   readonly csrfToken: string;
   readonly saved?: boolean;
+  readonly statusCsrfToken?: string;
   readonly conflicts?: readonly ConflictDetail[];
 }): string {
   const fields = RECORD_FIELDS[options.recordType];
@@ -192,6 +194,26 @@ export function renderRecordPage(options: {
       <p class="lede"><a href="/admin?season=${options.seasonId}">Back to the queue</a></p>
     </header>
     ${options.saved ? `<section class="confirmation" role="status"><p class="eyebrow success-mark">Saved</p></section>` : ""}
+    ${
+      options.status
+        ? `<form class="signup-form status-form" method="post" action="/admin/records/${escapeHtml(options.recordType)}/${options.recordId}/status">
+      <input type="hidden" name="_csrf" value="${escapeHtml(options.statusCsrfToken ?? "")}">
+      <input type="hidden" name="season" value="${options.seasonId}">
+      <input type="hidden" name="version" value="${options.version}">
+      <fieldset class="choice-group field" id="status">
+        <legend>Status</legend>
+        <p class="help">Withdrawing reopens any slot this record holds. The email history is kept either way.</p>
+        <div class="choices">${["tentative", "confirmed", "withdrawn"]
+          .map(
+            (choice) =>
+              `<label class="choice"><input type="radio" name="status" value="${choice}"${options.status === choice ? " checked" : ""}><span>${choice[0]?.toUpperCase()}${choice.slice(1)}</span></label>`,
+          )
+          .join("")}</div>
+      </fieldset>
+      <button class="secondary-action" type="submit">Set status</button>
+    </form>`
+        : ""
+    }
     ${conflictBlock}
     <form class="signup-form" method="post" action="/admin/records/${escapeHtml(options.recordType)}/${options.recordId}">
       <input type="hidden" name="_csrf" value="${escapeHtml(options.csrfToken)}">

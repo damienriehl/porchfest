@@ -48,8 +48,18 @@ describe("application scaffold", () => {
       { method: "POST", path: "/admin/sign-out", tier: "organizer" },
       { method: "POST", path: "/admin/queue/dismiss", tier: "organizer" },
       { method: "GET", path: "/admin/records/act/:id", tier: "organizer" },
+      {
+        method: "POST",
+        path: "/admin/records/act/:id/status",
+        tier: "organizer",
+      },
       { method: "POST", path: "/admin/records/act/:id", tier: "organizer" },
       { method: "GET", path: "/admin/records/venue/:id", tier: "organizer" },
+      {
+        method: "POST",
+        path: "/admin/records/venue/:id/status",
+        tier: "organizer",
+      },
       { method: "POST", path: "/admin/records/venue/:id", tier: "organizer" },
       { method: "GET", path: "/admin/records/contact/:id", tier: "organizer" },
       { method: "POST", path: "/admin/records/contact/:id", tier: "organizer" },
