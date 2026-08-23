@@ -18,6 +18,7 @@ import {
 import type { Context } from "hono";
 import { adminHeaders, currentOrganizer } from "../auth.js";
 import type { RouteRegistry } from "../router/registry.js";
+import { readFields, redirect, unauthorized } from "./admin-http.js";
 import {
   RECORD_FIELDS,
   recordTitle,
@@ -1044,42 +1045,8 @@ function asPlaceholderType(value: string | undefined): "act" | "venue" | null {
   return value === "act" || value === "venue" ? value : null;
 }
 
-async function readFields(
-  context: Context,
-): Promise<Readonly<Record<string, string>>> {
-  const form = await context.req.formData();
-  const fields: Record<string, string> = Object.create(null) as Record<
-    string,
-    string
-  >;
-  for (const [name, value] of form) {
-    if (typeof value === "string" && fields[name] === undefined) {
-      fields[name] = value;
-    }
-  }
-  return fields;
-}
-
 function html(body: string, status = 200): Response {
   return new Response(body, { status, headers: adminHeaders() });
-}
-
-function redirect(location: string): Response {
-  return new Response(null, {
-    status: 303,
-    headers: {
-      ...adminHeaders(),
-      "content-type": "text/plain; charset=UTF-8",
-      location,
-    },
-  });
-}
-
-function unauthorized(): Response {
-  return new Response(JSON.stringify({ error: "unauthorized" }), {
-    status: 401,
-    headers: { ...adminHeaders(), "content-type": "application/json" },
-  });
 }
 
 function notFound(): Response {

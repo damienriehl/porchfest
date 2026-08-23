@@ -8,6 +8,7 @@ import {
 import type { Context } from "hono";
 import { adminHeaders, currentOrganizer } from "../auth.js";
 import type { RouteRegistry } from "../router/registry.js";
+import { readFields, redirect, unauthorized } from "./admin-http.js";
 import {
   renderRetentionPage,
   type RetentionNotice,
@@ -113,40 +114,6 @@ function participantNameFor(core: CoreRuntime, contactId: number): string {
     core.retention.listEligible().find((contact) => contact.id === contactId)
       ?.name ?? `Participant ${contactId}`
   );
-}
-
-async function readFields(
-  context: Context,
-): Promise<Readonly<Record<string, string>>> {
-  const form = await context.req.formData();
-  const fields: Record<string, string> = Object.create(null) as Record<
-    string,
-    string
-  >;
-  for (const [name, value] of form) {
-    if (typeof value === "string" && fields[name] === undefined) {
-      fields[name] = value;
-    }
-  }
-  return fields;
-}
-
-function redirect(location: string): Response {
-  return new Response(null, {
-    status: 303,
-    headers: {
-      ...adminHeaders(),
-      "content-type": "text/plain; charset=UTF-8",
-      location,
-    },
-  });
-}
-
-function unauthorized(): Response {
-  return new Response(JSON.stringify({ error: "unauthorized" }), {
-    status: 401,
-    headers: { ...adminHeaders(), "content-type": "application/json" },
-  });
 }
 
 function notFound(): Response {
