@@ -5,7 +5,7 @@
 // caller get the same refusals — a season that this function accepts is a season
 // that can take a public signup.
 
-import { eq, sql } from "drizzle-orm";
+import { desc, eq, sql } from "drizzle-orm";
 import { seasons, seasonTimeSlots, type Season } from "./storage/schema.js";
 import {
   isValidTimeZone,
@@ -130,6 +130,16 @@ export function createSeasonSetup(
     return { season, timeSlotCount: validated.timeSlots.length };
   }
 
+  /** Seasons newest first. The admin uses this to pick a default landing season
+   *  rather than guessing that ids are contiguous. */
+  function listSeasons(): Season[] {
+    return db
+      .select()
+      .from(seasons)
+      .orderBy(desc(seasons.year), desc(seasons.id))
+      .all();
+  }
+
   function listTimeSlots(seasonId: number) {
     return db
       .select()
@@ -143,6 +153,7 @@ export function createSeasonSetup(
     needsFirstRun,
     seasonCount,
     createSeason,
+    listSeasons,
     listTimeSlots,
   });
 }

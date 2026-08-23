@@ -17,6 +17,7 @@ import {
   type SessionCookieOptions,
 } from "../auth.js";
 import type { RouteRegistry } from "../router/registry.js";
+import { renderQueuePage } from "../views/admin-records.js";
 import {
   renderAdminShell,
   renderSetupPage,
@@ -58,10 +59,51 @@ export function registerAdminRoutes(options: AdminRouteOptions): void {
           },
         });
       }
+      if (!organizer) {
+        return new Response(JSON.stringify({ error: "unauthorized" }), {
+          status: 401,
+          headers: { ...adminHeaders(), "content-type": "application/json" },
+        });
+      }
+
+      // Which season the organizer is working. With one season the choice is
+      // obvious; the query parameter is what makes a second season navigable.
+      const requested = Number(context.req.query("season") ?? "");
+      const seasonId =
+        Number.isSafeInteger(requested) && requested > 0
+          ? requested
+          : mostRecentSeasonId(options.core);
+      if (seasonId === null) {
+        return new Response(
+          renderAdminShell({
+            organizer,
+            csrfToken: options.csrfTokenFor(ADMIN_SIGN_OUT_PATH),
+          }),
+          { status: 200, headers: adminHeaders() },
+        );
+      }
+
+      let season;
+      try {
+        season = options.core.seasons.getSeason(seasonId);
+      } catch {
+        return new Response("No such season.", {
+          status: 404,
+          headers: {
+            ...adminHeaders(),
+            "content-type": "text/plain; charset=UTF-8",
+          },
+        });
+      }
+
       return new Response(
-        renderAdminShell({
-          organizer,
-          csrfToken: options.csrfTokenFor(ADMIN_SIGN_OUT_PATH),
+        renderQueuePage({
+          organizerName: organizer.displayName,
+          seasonName: season.displayName,
+          seasonId: season.id,
+          items: options.core.queue.listForOrganizer(season.id, organizer.id),
+          csrfToken: options.csrfTokenFor("/admin/queue/dismiss"),
+          signOutCsrf: options.csrfTokenFor(ADMIN_SIGN_OUT_PATH),
         }),
         { status: 200, headers: adminHeaders() },
       );
@@ -250,6 +292,11 @@ async function readFields(
     }
   }
   return fields;
+}
+
+/** The season an organizer lands on when they did not name one. */
+function mostRecentSeasonId(core: AdminRouteOptions["core"]): number | null {
+  return core.setup.listSeasons()[0]?.id ?? null;
 }
 
 /** Only a complete box is a box; a partly-filled one is a validation error rather

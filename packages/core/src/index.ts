@@ -64,6 +64,14 @@ export type {
   OrganizerInviteKind,
   OrganizerSession,
 } from "./storage/schema.js";
+export { RepositoryConflictError } from "./storage/repository-errors.js";
+export {
+  createQueueRepository,
+  type QueueItem,
+  type QueueRecord,
+  type QueueRepository,
+} from "./queue.js";
+export type { QueueDismissal, QueueRecordType } from "./storage/schema.js";
 export {
   createSeasonSetup,
   SeasonSetupError,
@@ -82,6 +90,7 @@ export {
 
 import type { AdapterPorts } from "./ports/index.js";
 import { createAccessRepository, type AccessRepository } from "./access.js";
+import { createQueueRepository, type QueueRepository } from "./queue.js";
 import { createSeasonSetup, type SeasonSetupRepository } from "./setup.js";
 import { createSeasonRepository } from "./season.js";
 import type { CoreDatabase } from "./storage/repository-errors.js";
@@ -93,6 +102,7 @@ export interface CoreRuntime {
   readonly seasons: SeasonRepository;
   readonly access: AccessRepository;
   readonly setup: SeasonSetupRepository;
+  readonly queue: QueueRepository;
 }
 
 export function createCore(
@@ -104,5 +114,6 @@ export function createCore(
     seasons: createSeasonRepository(database),
     access: createAccessRepository(database),
     setup: createSeasonSetup(database),
+    queue: createQueueRepository(database),
   });
 }
