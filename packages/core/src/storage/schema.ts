@@ -7,6 +7,7 @@ import {
   real,
   sqliteTable,
   text,
+  uniqueIndex,
 } from "drizzle-orm/sqlite-core";
 
 export const seasonStates = [
@@ -19,6 +20,36 @@ export const seasonStates = [
 ] as const;
 
 export const slotStates = ["open", "held", "assigned"] as const;
+
+export const venueGearValues = [
+  "pa",
+  "microphone",
+  "microphone_stand",
+  "instrument_amplifier",
+  "drum_kit",
+  "keyboard",
+  "music_stand",
+  "extension_cord",
+  "power_strip",
+  "other",
+] as const;
+
+export const venueDrinkValues = [
+  "water",
+  "non_alcoholic",
+  "beer",
+  "wine",
+  "other",
+] as const;
+
+export const venueAmenityValues = [
+  "seating",
+  "shade",
+  "restroom",
+  "accessible_entry",
+  "parking",
+  "other",
+] as const;
 
 function mutableColumns() {
   return {
@@ -39,6 +70,11 @@ export const seasons = sqliteTable(
     year: integer("year").notNull(),
     displayName: text("display_name").notNull(),
     state: text("state", { enum: seasonStates }).notNull().default("setup"),
+    // R34's first-run setup captures the festival's IANA timezone. Participant
+    // availability arrives as a timezone-free wall clock, so this column is what
+    // turns "2:00 PM" into an instant. It defaults to UTC rather than guessing a
+    // locality: a season that never sets it stores exactly what was typed.
+    timezone: text("timezone").notNull().default("UTC"),
     ...mutableColumns(),
   },
   (table) => [
@@ -81,6 +117,9 @@ export const venues = sqliteTable(
       .references(() => seasons.id),
     title: text("title").notNull(),
     address: text("address"),
+    spaceDescription: text("space_description"),
+    hasPower: integer("has_power", { mode: "boolean" }),
+    rainBackup: integer("rain_backup", { mode: "boolean" }),
     latitude: real("latitude"),
     longitude: real("longitude"),
     notes: text("notes"),
@@ -110,6 +149,15 @@ export const acts = sqliteTable(
     genre: text("genre"),
     description: text("description"),
     links: text("links"),
+    durationMinutes: integer("duration_minutes"),
+    requiresAmplification: integer("requires_amplification", {
+      mode: "boolean",
+    }),
+    housePreference: text("house_preference"),
+    canLendGear: integer("can_lend_gear", { mode: "boolean" }),
+    // The performer-side counterpart to venues.notes: free text the organizers
+    // read and the public map never shows.
+    notes: text("notes"),
     placeholder: integer("placeholder", { mode: "boolean" })
       .notNull()
       .default(false),
@@ -122,6 +170,113 @@ export const acts = sqliteTable(
     ...mutableColumns(),
   },
   (table) => [index("acts_season_id_idx").on(table.seasonId)],
+);
+
+export const venueGear = sqliteTable(
+  "venue_gear",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    seasonId: integer("season_id")
+      .notNull()
+      .references(() => seasons.id),
+    venueId: integer("venue_id")
+      .notNull()
+      .references(() => venues.id),
+    value: text("value", { enum: venueGearValues }).notNull(),
+    ...mutableColumns(),
+  },
+  (table) => [
+    index("venue_gear_season_id_idx").on(table.seasonId),
+    uniqueIndex("venue_gear_venue_id_value_uidx").on(
+      table.venueId,
+      table.value,
+    ),
+    check(
+      "venue_gear_value_check",
+      sql`${table.value} in ('pa', 'microphone', 'microphone_stand', 'instrument_amplifier', 'drum_kit', 'keyboard', 'music_stand', 'extension_cord', 'power_strip', 'other')`,
+    ),
+  ],
+);
+
+export const venueDrinks = sqliteTable(
+  "venue_drinks",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    seasonId: integer("season_id")
+      .notNull()
+      .references(() => seasons.id),
+    venueId: integer("venue_id")
+      .notNull()
+      .references(() => venues.id),
+    value: text("value", { enum: venueDrinkValues }).notNull(),
+    ...mutableColumns(),
+  },
+  (table) => [
+    index("venue_drinks_season_id_idx").on(table.seasonId),
+    uniqueIndex("venue_drinks_venue_id_value_uidx").on(
+      table.venueId,
+      table.value,
+    ),
+    check(
+      "venue_drinks_value_check",
+      sql`${table.value} in ('water', 'non_alcoholic', 'beer', 'wine', 'other')`,
+    ),
+  ],
+);
+
+export const venueAmenities = sqliteTable(
+  "venue_amenities",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    seasonId: integer("season_id")
+      .notNull()
+      .references(() => seasons.id),
+    venueId: integer("venue_id")
+      .notNull()
+      .references(() => venues.id),
+    value: text("value", { enum: venueAmenityValues }).notNull(),
+    ...mutableColumns(),
+  },
+  (table) => [
+    index("venue_amenities_season_id_idx").on(table.seasonId),
+    uniqueIndex("venue_amenities_venue_id_value_uidx").on(
+      table.venueId,
+      table.value,
+    ),
+    check(
+      "venue_amenities_value_check",
+      sql`${table.value} in ('seating', 'shade', 'restroom', 'accessible_entry', 'parking', 'other')`,
+    ),
+  ],
+);
+
+export const actAvailabilities = sqliteTable(
+  "act_availabilities",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    seasonId: integer("season_id")
+      .notNull()
+      .references(() => seasons.id),
+    actId: integer("act_id")
+      .notNull()
+      .references(() => acts.id),
+    startsAt: integer("starts_at", { mode: "timestamp" }).notNull(),
+    endsAt: integer("ends_at", { mode: "timestamp" }).notNull(),
+    ...mutableColumns(),
+  },
+  (table) => [
+    index("act_availabilities_season_id_idx").on(table.seasonId),
+    index("act_availabilities_act_id_idx").on(table.actId),
+    uniqueIndex("act_availabilities_act_id_window_uidx").on(
+      table.actId,
+      table.startsAt,
+      table.endsAt,
+    ),
+    check(
+      "act_availabilities_window_check",
+      sql`${table.endsAt} > ${table.startsAt}`,
+    ),
+  ],
 );
 
 export const slots = sqliteTable(
@@ -223,6 +378,10 @@ const schemaTables = [
   contacts,
   venues,
   acts,
+  venueGear,
+  venueDrinks,
+  venueAmenities,
+  actAvailabilities,
   slots,
   assignments,
   emailLog,
@@ -256,6 +415,14 @@ export type Venue = typeof venues.$inferSelect;
 export type NewVenue = typeof venues.$inferInsert;
 export type Act = typeof acts.$inferSelect;
 export type NewAct = typeof acts.$inferInsert;
+export type VenueGear = typeof venueGear.$inferSelect;
+export type NewVenueGear = typeof venueGear.$inferInsert;
+export type VenueDrink = typeof venueDrinks.$inferSelect;
+export type NewVenueDrink = typeof venueDrinks.$inferInsert;
+export type VenueAmenity = typeof venueAmenities.$inferSelect;
+export type NewVenueAmenity = typeof venueAmenities.$inferInsert;
+export type ActAvailability = typeof actAvailabilities.$inferSelect;
+export type NewActAvailability = typeof actAvailabilities.$inferInsert;
 export type Slot = typeof slots.$inferSelect;
 export type NewSlot = typeof slots.$inferInsert;
 export type Assignment = typeof assignments.$inferSelect;

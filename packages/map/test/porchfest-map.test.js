@@ -2110,7 +2110,7 @@ test("shows the empty state when no venue has an act", async () => {
 test("the marker shell never overrides the inline margins Leaflet uses for iconAnchor", () => {
   // Leaflet implements iconAnchor as inline margin-left/-top on the icon. A CSS
   // !important margin outranks that inline style and silently discards the anchor,
-  // pinning the icon"s top-left corner to the coordinate instead of the pin tip --
+  // pinning the icon's top-left corner to the coordinate instead of the pin tip --
   // every marker then sits 22px east and 40px south of its true location, which
   // reads as ~30ft off at max zoom but over 1000ft off zoomed out.
   const rule = stylesheetSource.match(/\.porchfest-marker-shell\s*\{([^}]*)\}/);

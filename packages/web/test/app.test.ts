@@ -20,12 +20,26 @@ describe("application scaffold", () => {
       ok: true,
       service: "porchfest",
     });
-    expect(runtime.routes.list()).toEqual([
-      expect.objectContaining({
+    expect(
+      runtime.routes
+        .list()
+        .map(({ method, path, tier }) => ({ method, path, tier })),
+    ).toEqual([
+      { method: "GET", path: "/health", tier: "public" },
+      {
         method: "GET",
-        path: "/health",
+        path: "/signup/assets/signup.css",
         tier: "public",
-      }),
+      },
+      {
+        method: "GET",
+        path: "/signup/assets/signup-preview.js",
+        tier: "public",
+      },
+      { method: "GET", path: "/signup/host", tier: "public" },
+      { method: "POST", path: "/signup/host", tier: "public" },
+      { method: "GET", path: "/signup/performer", tier: "public" },
+      { method: "POST", path: "/signup/performer", tier: "public" },
     ]);
   });
 

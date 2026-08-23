@@ -1,15 +1,23 @@
 import { and, eq, isNull, or, sql } from "drizzle-orm";
 import {
+  actAvailabilities,
   acts,
   annotations,
   assignments,
   contacts,
   emailLog,
   slots,
+  venueAmenities,
+  venueDrinks,
+  venueGear,
   venues,
   type Act,
+  type ActAvailability,
   type Contact,
   type Venue,
+  type VenueAmenity,
+  type VenueDrink,
+  type VenueGear,
 } from "./storage/schema.js";
 import {
   type CoreExecutor,
@@ -27,6 +35,10 @@ export type ActChanges = Partial<
     | "genre"
     | "description"
     | "links"
+    | "durationMinutes"
+    | "requiresAmplification"
+    | "housePreference"
+    | "canLendGear"
     | "placeholder"
     | "reachViaContactId"
   >
@@ -37,6 +49,9 @@ export type VenueChanges = Partial<
     Venue,
     | "title"
     | "address"
+    | "spaceDescription"
+    | "hasPower"
+    | "rainBackup"
     | "latitude"
     | "longitude"
     | "notes"
@@ -47,6 +62,62 @@ export type VenueChanges = Partial<
 >;
 
 export type ContactChanges = Partial<Pick<Contact, "name" | "email" | "phone">>;
+
+export interface SignupContactInput {
+  name: string;
+  email?: string | null;
+  phone?: string | null;
+}
+
+export interface HostSignupInput {
+  seasonId: number;
+  contact: SignupContactInput;
+  venue: {
+    title: string;
+    address: string;
+    spaceDescription: string;
+    hasPower: boolean;
+    rainBackup: boolean;
+    notes: string | null;
+  };
+  gear: readonly VenueGear["value"][];
+  drinks: readonly VenueDrink["value"][];
+  amenities: readonly VenueAmenity["value"][];
+}
+
+export interface PerformerSignupInput {
+  seasonId: number;
+  contact: SignupContactInput;
+  act: {
+    name: string;
+    durationMinutes: number;
+    requiresAmplification: boolean;
+    genre: string;
+    description: string;
+    links: string;
+    housePreference: string | null;
+    canLendGear: boolean;
+    notes: string | null;
+  };
+  availabilities: readonly {
+    startsAt: Date;
+    endsAt: Date;
+  }[];
+}
+
+export interface HostSignup {
+  contact: Contact;
+  venue: Venue;
+  gear: VenueGear[];
+  drinks: VenueDrink[];
+  amenities: VenueAmenity[];
+}
+
+export interface PerformerSignup {
+  contact: Contact;
+  act: Act;
+  availabilities: ActAvailability[];
+}
 
 export type ActivityQueueItem =
   | { recordType: "act"; record: Act }
@@ -113,6 +184,129 @@ export function createRecordRepository(
     const record = db.select().from(contacts).where(eq(contacts.id, id)).get();
     if (!record) throw new RecordLifecycleError(`contact ${id} does not exist`);
     return record;
+  }
+
+  function mutableValues() {
+    const timestamp = now();
+    return { createdAt: timestamp, updatedAt: timestamp };
+  }
+
+  function createContact(input: HostSignupInput | PerformerSignupInput) {
+    return db
+      .insert(contacts)
+      .values({
+        seasonId: input.seasonId,
+        name: input.contact.name,
+        email: input.contact.email ?? null,
+        phone: input.contact.phone ?? null,
+        ...mutableValues(),
+      })
+      .returning()
+      .get();
+  }
+
+  function createHostSignup(input: HostSignupInput): HostSignup {
+    const contact = createContact(input);
+    const venue = db
+      .insert(venues)
+      .values({
+        seasonId: input.seasonId,
+        title: input.venue.title,
+        address: input.venue.address,
+        spaceDescription: input.venue.spaceDescription,
+        hasPower: input.venue.hasPower,
+        rainBackup: input.venue.rainBackup,
+        notes: input.venue.notes,
+        hostContactId: contact.id,
+        ...mutableValues(),
+      })
+      .returning()
+      .get();
+    const gear =
+      input.gear.length === 0
+        ? []
+        : db
+            .insert(venueGear)
+            .values(
+              input.gear.map((value) => ({
+                seasonId: input.seasonId,
+                venueId: venue.id,
+                value,
+                ...mutableValues(),
+              })),
+            )
+            .returning()
+            .all();
+    const drinks =
+      input.drinks.length === 0
+        ? []
+        : db
+            .insert(venueDrinks)
+            .values(
+              input.drinks.map((value) => ({
+                seasonId: input.seasonId,
+                venueId: venue.id,
+                value,
+                ...mutableValues(),
+              })),
+            )
+            .returning()
+            .all();
+    const amenities =
+      input.amenities.length === 0
+        ? []
+        : db
+            .insert(venueAmenities)
+            .values(
+              input.amenities.map((value) => ({
+                seasonId: input.seasonId,
+                venueId: venue.id,
+                value,
+                ...mutableValues(),
+              })),
+            )
+            .returning()
+            .all();
+    return { contact, venue, gear, drinks, amenities };
+  }
+
+  function createPerformerSignup(input: PerformerSignupInput): PerformerSignup {
+    const contact = createContact(input);
+    const act = db
+      .insert(acts)
+      .values({
+        seasonId: input.seasonId,
+        name: input.act.name,
+        durationMinutes: input.act.durationMinutes,
+        requiresAmplification: input.act.requiresAmplification,
+        genre: input.act.genre,
+        description: input.act.description,
+        links: input.act.links,
+        housePreference: input.act.housePreference,
+        canLendGear: input.act.canLendGear,
+        notes: input.act.notes,
+        reachViaContactId: contact.id,
+        ...mutableValues(),
+      })
+      .returning()
+      .get();
+    const availabilities =
+      input.availabilities.length === 0
+        ? []
+        : db
+            .insert(actAvailabilities)
+            .values(
+              input.availabilities.map(({ startsAt, endsAt }) => ({
+                seasonId: input.seasonId,
+                actId: act.id,
+                startsAt,
+                endsAt,
+                ...mutableValues(),
+              })),
+            )
+            .returning()
+            .all();
+    return { contact, act, availabilities };
   }
 
   function updateAct(
@@ -220,6 +414,14 @@ export function createRecordRepository(
           genre: submission.genre ?? placeholder.genre,
           description: submission.description ?? placeholder.description,
           links: submission.links ?? placeholder.links,
+          durationMinutes:
+            submission.durationMinutes ?? placeholder.durationMinutes,
+          requiresAmplification:
+            submission.requiresAmplification ??
+            placeholder.requiresAmplification,
+          housePreference:
+            submission.housePreference ?? placeholder.housePreference,
+          canLendGear: submission.canLendGear ?? placeholder.canLendGear,
           placeholder: false,
           reachViaContactId:
             submission.reachViaContactId ?? placeholder.reachViaContactId,
@@ -241,6 +443,30 @@ export function createRecordRepository(
         })
         .where(eq(assignments.actId, submissionId))
         .run();
+      const submissionAvailabilities = tx
+        .select({
+          startsAt: actAvailabilities.startsAt,
+          endsAt: actAvailabilities.endsAt,
+        })
+        .from(actAvailabilities)
+        .where(eq(actAvailabilities.actId, submissionId))
+        .all();
+      if (submissionAvailabilities.length > 0) {
+        const copiedAt = now();
+        tx.insert(actAvailabilities)
+          .values(
+            submissionAvailabilities.map((availability) => ({
+              seasonId: submission.seasonId,
+              actId: placeholderId,
+              startsAt: availability.startsAt,
+              endsAt: availability.endsAt,
+              createdAt: copiedAt,
+              updatedAt: copiedAt,
+            })),
+          )
+          .onConflictDoNothing()
+          .run();
+      }
       tx.update(emailLog)
         .set({ recordId: placeholderId })
         .where(
@@ -354,6 +580,10 @@ export function createRecordRepository(
         .set({
           title: submission.title,
           address: submission.address ?? placeholder.address,
+          spaceDescription:
+            submission.spaceDescription ?? placeholder.spaceDescription,
+          hasPower: submission.hasPower ?? placeholder.hasPower,
+          rainBackup: submission.rainBackup ?? placeholder.rainBackup,
           latitude: submission.latitude ?? placeholder.latitude,
           longitude: submission.longitude ?? placeholder.longitude,
           notes: submission.notes ?? placeholder.notes,
@@ -388,6 +618,66 @@ export function createRecordRepository(
           ),
         )
         .run();
+      const submittedGear = tx
+        .select({ value: venueGear.value })
+        .from(venueGear)
+        .where(eq(venueGear.venueId, submissionId))
+        .all();
+      if (submittedGear.length > 0) {
+        const copiedAt = now();
+        tx.insert(venueGear)
+          .values(
+            submittedGear.map(({ value }) => ({
+              seasonId: submission.seasonId,
+              venueId: placeholderId,
+              value,
+              createdAt: copiedAt,
+              updatedAt: copiedAt,
+            })),
+          )
+          .onConflictDoNothing()
+          .run();
+      }
+      const submittedDrinks = tx
+        .select({ value: venueDrinks.value })
+        .from(venueDrinks)
+        .where(eq(venueDrinks.venueId, submissionId))
+        .all();
+      if (submittedDrinks.length > 0) {
+        const copiedAt = now();
+        tx.insert(venueDrinks)
+          .values(
+            submittedDrinks.map(({ value }) => ({
+              seasonId: submission.seasonId,
+              venueId: placeholderId,
+              value,
+              createdAt: copiedAt,
+              updatedAt: copiedAt,
+            })),
+          )
+          .onConflictDoNothing()
+          .run();
+      }
+      const submittedAmenities = tx
+        .select({ value: venueAmenities.value })
+        .from(venueAmenities)
+        .where(eq(venueAmenities.venueId, submissionId))
+        .all();
+      if (submittedAmenities.length > 0) {
+        const copiedAt = now();
+        tx.insert(venueAmenities)
+          .values(
+            submittedAmenities.map(({ value }) => ({
+              seasonId: submission.seasonId,
+              venueId: placeholderId,
+              value,
+              createdAt: copiedAt,
+              updatedAt: copiedAt,
+            })),
+          )
+          .onConflictDoNothing()
+          .run();
+      }
       tx.update(emailLog)
         .set({ recordId: placeholderId })
         .where(
@@ -822,6 +1112,8 @@ export function createRecordRepository(
   }
 
   return Object.freeze({
+    createHostSignup,
+    createPerformerSignup,
     updateAct,
     updateVenue,
     updateContact,
