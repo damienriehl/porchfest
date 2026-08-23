@@ -380,6 +380,7 @@ The Hetzner box is stood up as soon as the U2 scaffold exists — literal named 
 
 ### U3. Schema, season state machine, and record lifecycle
 
+- **Rebaselined 2026-08-23 (owner-approved):** record *creation* was never assigned to any unit — U3 built the lifecycle, U5 covers organizer placeholders, U10 covers import — so U4 was dispatched against a `core` that had no way to create a record and correctly came back blocked. Creation is now explicitly in U3's scope and was implemented in `cd2c975`: `createHostSignup` / `createPerformerSignup` on the season repository, each wrapping the legality check and the delegated write in one `db.transaction(..., { behavior: "immediate" })` over the `CoreExecutor` seam.
 - **Goal:** The database that is the season's source of truth, including the real-world states the 2026 season proved.
 - **Requirements:** R1, R2, R4, R6, R21, R25, R26, R27, R28, R32.
 - **Dependencies:** U2.
@@ -405,9 +406,10 @@ The Hetzner box is stood up as soon as the U2 scaffold exists — literal named 
 
 ### U4. Public signup forms and anti-bot adapter
 
+- **Rebaselined 2026-08-23 (owner-approved):** U4 takes the season **timezone** field that R34 assigns to U5's first-run setup, because participant availability arrives as a timezone-free wall clock and reading it as UTC stores the wrong instant. `seasons.timezone` (migration `0004`, default `UTC`) and `zonedWallClockToUtc` land here; U5's first-run setup edits the column rather than introducing it.
 - **Goal:** Hosts and performers sign up through the platform, with anti-bot protection that degrades honestly.
-- **Requirements:** R1, R3, R5. Implements KTD10.
-- **Dependencies:** U3.
+- **Requirements:** R1, R3, R5, and the timezone half of R34. Implements KTD10.
+- **Dependencies:** U3, including its rebaselined record-creation scope.
 - **Files:** `packages/antibot/src/index.ts`, `packages/antibot/src/turnstile.ts`, `packages/antibot/src/ratelimit.ts`, `packages/web/src/routes/signup.ts`, `packages/web/src/views/host-form.ts`, `packages/web/src/views/performer-form.ts`, `packages/antibot/test/turnstile.test.ts`, `packages/web/test/signup.test.ts`.
 - **Approach:** carry every 2026 Google Form field (R1). The anti-bot adapter interface returns pass, fail, or unavailable; unavailable is a refusal and stores nothing (KTD10). With no adapter configured, per-IP rate limiting plus a honeypot still applies, with the client IP resolved per KTD10's trusted-proxy rule. Follow Show View's mint shape for single-use tokens and per-IP caps. Participant text is stored raw and escaped at every render site (admin, outbox HTML and text, map popup); URL-typed fields accept only `http`/`https` schemes. Any rejected submission — validation or anti-bot — re-renders the form with every submitted value intact and the failing field named inline, since a phone-typed venue form is long and losing it means losing the signup. A successful submission renders a confirmation stating what happens next, and says plainly when no confirmation email will follow.
 - **Test scenarios:**
