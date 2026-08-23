@@ -1,4 +1,8 @@
-import type { QueueItem, QueueRecordType } from "@porchfest/core";
+import type {
+  ParticipantChangeRequest,
+  QueueItem,
+  QueueRecordType,
+} from "@porchfest/core";
 import { escapeHtml } from "./signup-view.js";
 
 export interface RecordFieldSpec {
@@ -71,11 +75,15 @@ export function renderQueuePage(options: {
   readonly seasonName: string;
   readonly seasonId: number;
   readonly items: readonly QueueItem[];
+  readonly changeRequests: readonly ParticipantChangeRequest[];
   readonly csrfToken: string;
+  readonly applyChangeCsrfToken: string;
+  readonly rejectChangeCsrfToken: string;
   readonly signOutCsrf: string;
 }): string {
   const newItems = options.items.filter((item) => item.isNew);
   const seen = options.items.filter((item) => !item.isNew);
+  const needsReview = newItems.length + options.changeRequests.length;
 
   const card = (item: QueueItem) => `<li class="queue-item">
       <div class="queue-item-body">
@@ -97,14 +105,65 @@ export function renderQueuePage(options: {
       }
     </li>`;
 
+  const changeRequestCard = (request: ParticipantChangeRequest) => {
+    const label =
+      request.kind === "withdrawal"
+        ? "Withdrawal"
+        : request.kind === "availability"
+          ? "Availability change"
+          : "Address correction";
+    const proposal =
+      request.kind === "withdrawal"
+        ? "Participant asked to withdraw this record."
+        : request.kind === "address"
+          ? (request.proposedAddress ?? "")
+          : (request.proposedAvailability ?? [])
+              .map(
+                ({ startsAt, endsAt }) =>
+                  `${startsAt.toISOString().slice(0, 16).replace("T", " ")}–${endsAt.toISOString().slice(11, 16)} UTC`,
+              )
+              .join(", ") || "No availability";
+    return `<li class="queue-item change-request-item">
+      <div class="queue-item-body">
+        <p class="queue-item-kind">Change request · ${escapeHtml(request.recordType)}</p>
+        <h3>${escapeHtml(label)}</h3>
+        <p>${escapeHtml(proposal)}</p>
+        <p class="help">Target record ${request.recordId} · record version ${request.recordVersion}</p>
+      </div>
+      <div class="queue-item-actions">
+        <form method="post" action="/admin/change-requests/${request.id}/apply">
+          <input type="hidden" name="_csrf" value="${escapeHtml(options.applyChangeCsrfToken)}">
+          <input type="hidden" name="season" value="${options.seasonId}">
+          <input type="hidden" name="version" value="${request.version}">
+          <button class="primary-action" type="submit">${request.kind === "address" ? "Review in editor" : "Apply"}</button>
+        </form>
+        <form method="post" action="/admin/change-requests/${request.id}/reject">
+          <input type="hidden" name="_csrf" value="${escapeHtml(options.rejectChangeCsrfToken)}">
+          <input type="hidden" name="season" value="${options.seasonId}">
+          <input type="hidden" name="version" value="${request.version}">
+          <button class="secondary-action" type="submit">Reject</button>
+        </form>
+      </div>
+    </li>`;
+  };
+
   return shell(
     "Activity queue",
     `    <header class="signup-header">
       <p class="eyebrow">${escapeHtml(options.seasonName)}</p>
       <h1>Welcome, ${escapeHtml(options.organizerName)}</h1>
-      <p class="lede">${newItems.length === 0 ? "Nothing new for you right now." : `${newItems.length} ${newItems.length === 1 ? "item needs" : "items need"} your review.`}</p>
+      <p class="lede">${needsReview === 0 ? "Nothing new for you right now." : `${needsReview} ${needsReview === 1 ? "item needs" : "items need"} your review.`}</p>
       <p class="lede"><a href="/admin/placeholders/act/new?season=${options.seasonId}">Add an act without a submission</a> · <a href="/admin/placeholders/venue/new?season=${options.seasonId}">Add a venue without a submission</a></p>
     </header>
+    <section aria-labelledby="change-requests-title">
+      <h2 id="change-requests-title">Change requests needing a decision</h2>
+      <p class="help">Assignments remain unchanged until you apply a request. Rejecting closes it without changing the record.</p>
+      ${
+        options.changeRequests.length === 0
+          ? `<p class="help">No pending change requests.</p>`
+          : `<ul class="queue-list">${options.changeRequests.map(changeRequestCard).join("")}</ul>`
+      }
+    </section>
     <section aria-labelledby="queue-title">
       <h2 id="queue-title">New for you</h2>
       <p class="help">Marking an item reviewed clears it for you only — another organizer still sees it.</p>

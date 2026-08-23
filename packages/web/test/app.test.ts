@@ -48,6 +48,16 @@ describe("application scaffold", () => {
       { method: "POST", path: "/admin/sign-out", tier: "organizer" },
       { method: "POST", path: "/admin/queue/dismiss", tier: "organizer" },
       {
+        method: "POST",
+        path: "/admin/change-requests/:id/apply",
+        tier: "organizer",
+      },
+      {
+        method: "POST",
+        path: "/admin/change-requests/:id/reject",
+        tier: "organizer",
+      },
+      {
         method: "GET",
         path: "/admin/placeholders/:recordType/new",
         tier: "organizer",

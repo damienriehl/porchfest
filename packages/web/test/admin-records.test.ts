@@ -910,3 +910,190 @@ describe("record status", () => {
     expect(await page.text()).not.toContain("/status");
   });
 });
+
+describe("participant change requests", () => {
+  it("shows an approve-or-reject queue item without changing the confirmed record", async () => {
+    const { runtime, season, alice, signup } = await boot();
+    runtime.core.seasons.setRecordStatus(
+      "venue",
+      signup.venue.id,
+      signup.venue.version,
+      "confirmed",
+    );
+    const request = runtime.core.changeRequests.record({
+      seasonId: season.id,
+      recordType: "venue",
+      recordId: signup.venue.id,
+      recordVersion: signup.venue.version + 1,
+      kind: "address",
+      proposedAddress: "22 Proposed Avenue",
+    });
+
+    const page = await get(runtime, `/admin?season=${season.id}`, alice);
+    const body = await page.text();
+
+    expect(page.status).toBe(200);
+    expect(body).toContain("Address correction");
+    expect(body).toContain("22 Proposed Avenue");
+    expect(body).toContain(`/admin/change-requests/${request.id}/apply`);
+    expect(body).toContain(`/admin/change-requests/${request.id}/reject`);
+    const stored = runtime.core.queue
+      .listForOrganizer(season.id, 1)
+      .find((item) => item.recordType === "venue");
+    expect(stored?.recordType === "venue" && stored.record.address).toBe(
+      "1 Test St",
+    );
+    expect(stored?.recordType === "venue" && stored.record.status).toBe(
+      "confirmed",
+    );
+  });
+
+  it("routes an accepted address correction into the editor with proposed and stored values", async () => {
+    const { runtime, season, alice, signup } = await boot();
+    const request = runtime.core.changeRequests.record({
+      seasonId: season.id,
+      recordType: "venue",
+      recordId: signup.venue.id,
+      recordVersion: signup.venue.version,
+      kind: "address",
+      proposedAddress: "22 Proposed Avenue",
+    });
+    const queue = await get(runtime, `/admin?season=${season.id}`, alice);
+    const accepted = await post(
+      runtime,
+      `/admin/change-requests/${request.id}/apply`,
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(
+          queue,
+          `/admin/change-requests/${request.id}/apply`,
+        ),
+        season: String(season.id),
+        version: String(request.version),
+      }),
+    );
+
+    expect(accepted.status).toBe(303);
+    expect(accepted.headers.get("location")).toBe(
+      `/admin/records/venue/${signup.venue.id}?season=${season.id}&change_request=${request.id}`,
+    );
+    const editor = await get(
+      runtime,
+      accepted.headers.get("location") ?? "",
+      alice,
+    );
+    const body = await editor.text();
+    expect(editor.status).toBe(200);
+    // Assert the view edit landed: the proposal is editable and appears beside
+    // the still-stored value through the existing conflict presentation.
+    expect(body).toContain(
+      'name="address" type="text" value="22 Proposed Avenue"',
+    );
+    expect(body).toContain("<strong>Yours:</strong> 22 Proposed Avenue");
+    expect(body).toContain("<strong>Stored:</strong> 1 Test St");
+    const stored = runtime.core.queue
+      .listForOrganizer(season.id, 1)
+      .find((item) => item.recordType === "venue");
+    expect(stored?.recordType === "venue" && stored.record.address).toBe(
+      "1 Test St",
+    );
+  });
+
+  it("rejects a request without touching its target", async () => {
+    const { runtime, season, alice, signup } = await boot();
+    const request = runtime.core.changeRequests.record({
+      seasonId: season.id,
+      recordType: "venue",
+      recordId: signup.venue.id,
+      recordVersion: signup.venue.version,
+      kind: "withdrawal",
+    });
+    const queue = await get(runtime, `/admin?season=${season.id}`, alice);
+
+    const rejected = await post(
+      runtime,
+      `/admin/change-requests/${request.id}/reject`,
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(
+          queue,
+          `/admin/change-requests/${request.id}/reject`,
+        ),
+        season: String(season.id),
+        version: String(request.version),
+      }),
+    );
+
+    expect(rejected.status).toBe(303);
+    expect(runtime.core.changeRequests.find(request.id)?.status).toBe(
+      "rejected",
+    );
+    const stored = runtime.core.queue
+      .listForOrganizer(season.id, 1)
+      .find((item) => item.recordType === "venue");
+    expect(stored?.recordType === "venue" && stored.record.status).toBe(
+      "tentative",
+    );
+  });
+
+  it("renders a stale apply as a conflict and leaves the request pending", async () => {
+    const { runtime, season, alice, signup } = await boot();
+    const request = runtime.core.changeRequests.record({
+      seasonId: season.id,
+      recordType: "venue",
+      recordId: signup.venue.id,
+      recordVersion: signup.venue.version,
+      kind: "withdrawal",
+    });
+    const queue = await get(runtime, `/admin?season=${season.id}`, alice);
+    runtime.core.seasons.updateVenue(signup.venue.id, signup.venue.version, {
+      notes: "Concurrent correction",
+    });
+
+    const refused = await post(
+      runtime,
+      `/admin/change-requests/${request.id}/apply`,
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(
+          queue,
+          `/admin/change-requests/${request.id}/apply`,
+        ),
+        season: String(season.id),
+        version: String(request.version),
+      }),
+    );
+
+    expect(refused.status).toBe(409);
+    expect(await refused.text()).toContain("could not be applied");
+    expect(runtime.core.changeRequests.find(request.id)?.status).toBe(
+      "pending",
+    );
+  });
+
+  it("refuses unauthenticated and unrelated-origin writes to both routes", async () => {
+    const { runtime, alice } = await boot();
+    for (const path of [
+      "/admin/change-requests/1/apply",
+      "/admin/change-requests/1/reject",
+    ]) {
+      expect(
+        (await runtime.request(`${PUBLIC_BASE_URL}${path}`, { method: "POST" }))
+          .status,
+      ).toBe(401);
+      expect(
+        (
+          await runtime.request(`${PUBLIC_BASE_URL}${path}`, {
+            method: "POST",
+            headers: {
+              origin: "https://unrelated.example",
+              cookie: alice,
+              "content-type": "application/x-www-form-urlencoded",
+            },
+            body: new URLSearchParams(),
+          })
+        ).status,
+      ).toBe(403);
+    }
+  });
+});

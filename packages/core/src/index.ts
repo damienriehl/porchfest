@@ -70,12 +70,25 @@ export type {
 } from "./storage/schema.js";
 export { RepositoryConflictError } from "./storage/repository-errors.js";
 export {
+  ChangeRequestConflictError,
+  ChangeRequestLifecycleError,
+  createChangeRequestRepository,
+  type ChangeRequestRepository,
+  type ParticipantChangeRequest,
+  type ProposedAvailabilityWindow,
+  type RecordChangeRequestInput,
+} from "./change-requests.js";
+export {
   createQueueRepository,
   type QueueItem,
   type QueueRecord,
   type QueueRepository,
 } from "./queue.js";
 export type {
+  ChangeRequest,
+  ChangeRequestKind,
+  ChangeRequestRecordType,
+  ChangeRequestStatus,
   QueueDismissal,
   QueueRecordType,
   RecordStatus,
@@ -99,6 +112,10 @@ export {
 
 import type { AdapterPorts } from "./ports/index.js";
 import { createAccessRepository, type AccessRepository } from "./access.js";
+import {
+  createChangeRequestRepository,
+  type ChangeRequestRepository,
+} from "./change-requests.js";
 import { createQueueRepository, type QueueRepository } from "./queue.js";
 import { createSeasonSetup, type SeasonSetupRepository } from "./setup.js";
 import { createSeasonRepository } from "./season.js";
@@ -112,6 +129,7 @@ export interface CoreRuntime {
   readonly access: AccessRepository;
   readonly setup: SeasonSetupRepository;
   readonly queue: QueueRepository;
+  readonly changeRequests: ChangeRequestRepository;
 }
 
 export function createCore(
@@ -124,5 +142,6 @@ export function createCore(
     access: createAccessRepository(database),
     setup: createSeasonSetup(database),
     queue: createQueueRepository(database),
+    changeRequests: createChangeRequestRepository(database),
   });
 }

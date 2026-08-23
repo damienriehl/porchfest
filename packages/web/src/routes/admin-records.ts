@@ -67,6 +67,79 @@ export function registerAdminRecordRoutes(
   });
 
   options.routes.register({
+    method: "POST",
+    path: "/admin/change-requests/:id/apply",
+    tier: "organizer",
+    handler: async (context: Context) => {
+      const organizer = currentOrganizer(options.core, context);
+      if (!organizer) return unauthorized();
+      const requestId = Number(context.req.param("id"));
+      const fields = await readFields(context);
+      const seasonId = Number(fields.season ?? "");
+      const version = Number(fields.version ?? "");
+      const pending = options.core.changeRequests.find(requestId);
+      if (
+        !pending ||
+        pending.seasonId !== seasonId ||
+        !Number.isSafeInteger(version)
+      ) {
+        return notFound();
+      }
+
+      try {
+        const applied = options.core.changeRequests.apply(requestId, version);
+        if (applied.kind === "address") {
+          return redirect(
+            `/admin/records/venue/${applied.recordId}?season=${seasonId}&change_request=${applied.id}`,
+          );
+        }
+        return redirect(`/admin?season=${seasonId}`);
+      } catch (error) {
+        if (!(error instanceof RepositoryConflictError)) throw error;
+        // R33 refuses the decision rather than risking a schedule mutation made
+        // against a record or request another organizer already changed.
+        return html(
+          `<h1>This change request could not be applied</h1><p>Reload the activity queue to review its current state.</p>`,
+          409,
+        );
+      }
+    },
+  });
+
+  options.routes.register({
+    method: "POST",
+    path: "/admin/change-requests/:id/reject",
+    tier: "organizer",
+    handler: async (context: Context) => {
+      const organizer = currentOrganizer(options.core, context);
+      if (!organizer) return unauthorized();
+      const requestId = Number(context.req.param("id"));
+      const fields = await readFields(context);
+      const seasonId = Number(fields.season ?? "");
+      const version = Number(fields.version ?? "");
+      const pending = options.core.changeRequests.find(requestId);
+      if (
+        !pending ||
+        pending.seasonId !== seasonId ||
+        !Number.isSafeInteger(version)
+      ) {
+        return notFound();
+      }
+
+      try {
+        options.core.changeRequests.reject(requestId, version);
+      } catch (error) {
+        if (!(error instanceof RepositoryConflictError)) throw error;
+        return html(
+          `<h1>This change request could not be rejected</h1><p>Reload the activity queue to review its current state.</p>`,
+          409,
+        );
+      }
+      return redirect(`/admin?season=${seasonId}`);
+    },
+  });
+
+  options.routes.register({
     method: "GET",
     path: "/admin/placeholders/:recordType/new",
     tier: "organizer",
@@ -189,11 +262,35 @@ export function registerAdminRecordRoutes(
         );
         if (!item) return notFound();
 
+        const proposedAddress = addressProposalFor(
+          options.core,
+          context.req.query("change_request"),
+          seasonId,
+          recordType,
+          recordId,
+        );
+        const storedValues = valuesOf(recordType, item.record);
+
         return html(
           renderLifecycleRecordPage(options, organizer.id, seasonId, item, {
             saved:
               context.req.query("saved") === "1" ||
               context.req.query("created") === "1",
+            values:
+              proposedAddress === null
+                ? undefined
+                : { ...storedValues, address: proposedAddress },
+            conflicts:
+              proposedAddress === null
+                ? undefined
+                : [
+                    {
+                      field: "address",
+                      label: "Street address",
+                      attempted: proposedAddress,
+                      stored: storedValues.address ?? "",
+                    },
+                  ],
           }),
         );
       },
@@ -539,6 +636,7 @@ function renderLifecycleRecordPage(
   overrides: {
     readonly saved?: boolean;
     readonly conflicts?: readonly ConflictDetail[];
+    readonly values?: Readonly<Record<string, string>>;
   } = {},
 ): string {
   const candidates = options.core.queue
@@ -581,7 +679,7 @@ function renderLifecycleRecordPage(
     seasonId,
     title: recordTitle(item),
     version: item.version,
-    values: valuesOf(item.recordType, item.record),
+    values: overrides.values ?? valuesOf(item.recordType, item.record),
     csrfToken: options.csrfTokenFor(`/admin/records/${item.recordType}/:id`),
     statusCsrfToken: options.csrfTokenFor(
       `/admin/records/${item.recordType}/:id/status`,
@@ -592,6 +690,29 @@ function renderLifecycleRecordPage(
     promotion,
     supersession,
   });
+}
+
+function addressProposalFor(
+  core: CoreRuntime,
+  requestIdValue: string | undefined,
+  seasonId: number,
+  recordType: QueueRecordType,
+  recordId: number,
+): string | null {
+  const requestId = Number(requestIdValue ?? "");
+  if (!Number.isSafeInteger(requestId) || requestId <= 0) return null;
+  const request = core.changeRequests.find(requestId);
+  if (
+    !request ||
+    request.status !== "applied" ||
+    request.kind !== "address" ||
+    recordType !== "venue" ||
+    request.seasonId !== seasonId ||
+    request.recordId !== recordId
+  ) {
+    return null;
+  }
+  return request.proposedAddress;
 }
 
 function contactOptions(

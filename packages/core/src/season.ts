@@ -139,7 +139,7 @@ export interface PriorSeasonContact {
 export type AssignmentCorrection = Partial<Pick<Assignment, "actId">>;
 
 export function createSeasonRepository(
-  db: CoreDatabase,
+  db: CoreExecutor,
   options: SeasonRepositoryOptions = {},
 ) {
   const now = options.now ?? (() => new Date());
