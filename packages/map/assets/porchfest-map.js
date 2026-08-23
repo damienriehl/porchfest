@@ -511,9 +511,11 @@
       createGenreFacet(status, listSection, venues, markerLookup),
     );
 
-    fullbleed.appendChild(controls);
     fullbleed.appendChild(status);
     fullbleed.appendChild(mapElement);
+    // Filters read as a header for the lineup they filter, so they sit between
+    // the map and the venue list rather than above the map.
+    listSection.parentNode.insertBefore(controls, listSection);
   }
 
   function showVenueOnMap(venue) {

@@ -83,9 +83,9 @@
 }
 
 .porchfest-map-controls {
-  padding: 0.5rem;
+  padding: 0.75rem 0 1rem;
   border-bottom: 1px solid var(--color-border);
-  background: var(--color-bg);
+  background: transparent;
 }
 
 .porchfest-map-toolbar {
@@ -185,12 +185,14 @@
 }
 
 .porchfest-marker-shell {
+  /* Nothing here may be !important. Leaflet drives this element's geometry with
+     inline styles derived from iconSize and iconAnchor, and an !important
+     declaration outranks an inline one -- that is how an !important margin came
+     to discard the anchor and put every pin 22px east and 40px south of its
+     true coordinate. The 44px below is the touch-target floor, not an override. */
   position: relative;
-  width: 44px !important;
-  height: 44px !important;
-  /* No margin override here: Leaflet implements iconAnchor as inline
-     margin-left/-top, and an !important margin silently discards it,
-     leaving every pin 22px east and 40px south of its true coordinate. */
+  width: 44px;
+  height: 44px;
   border: 0;
   background: transparent;
 }
