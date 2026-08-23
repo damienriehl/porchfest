@@ -32,5 +32,24 @@ describe("web composition root", () => {
     expect(runtime.core.ports.email).toBe(email);
     expect(runtime.adapters.antibot.configured).toBe(false);
     expect(runtime.adapters.geo.configured).toBe(false);
+    runtime.close();
   });
+
+  it.each([
+    [{}, 24],
+    [{ PORCHFEST_RETENTION_MONTHS: "invalid" }, 24],
+    [{ PORCHFEST_RETENTION_MONTHS: "0" }, 24],
+    [{ PORCHFEST_RETENTION_MONTHS: "18" }, 18],
+  ])(
+    "configures retention from the deployment environment",
+    async (env, expected) => {
+      const dataDirectory = await mkdtemp(
+        join(tmpdir(), "porchfest-retention-composition-"),
+      );
+      const runtime = await createRuntime({ env, dataDirectory });
+
+      expect(runtime.core.retention.retentionMonths).toBe(expected);
+      runtime.close();
+    },
+  );
 });

@@ -6,6 +6,8 @@ import type { UnconfiguredAntibotGuardOptions } from "@porchfest/antibot";
 import {
   CORE_DATABASE_FILENAME,
   createCore,
+  DEFAULT_RETENTION_MONTHS,
+  normalizeRetentionMonths,
   openCoreDatabase,
   type AdapterPorts,
   type CoreRuntime,
@@ -131,12 +133,15 @@ async function createRuntimeWithTesting(
   const trustedProxyHops = parseTrustedProxyHops(
     env.PORCHFEST_TRUSTED_PROXY_HOPS,
   );
+  const retentionMonths = parseRetentionMonths(env.PORCHFEST_RETENTION_MONTHS);
   const databaseConnection = openCoreDatabase(
     join(dataDirectory, CORE_DATABASE_FILENAME),
   );
 
   try {
-    const core = createCore(adapters, databaseConnection.database);
+    const core = createCore(adapters, databaseConnection.database, {
+      retention: { retentionMonths },
+    });
     const { fetch, request, routes } = createApp({
       core,
       authorize: options.authorize,
@@ -211,4 +216,12 @@ function parseTrustedProxyHops(value: string | undefined): number | undefined {
     );
   }
   return hops;
+}
+
+function parseRetentionMonths(value: string | undefined): number {
+  const configured = value?.trim();
+  if (!configured) return DEFAULT_RETENTION_MONTHS;
+  // R35 defaults closed to a meaningful window. Invalid deployment input must
+  // never become zero or NaN and immediately anonymize the whole database.
+  return normalizeRetentionMonths(Number(configured));
 }
