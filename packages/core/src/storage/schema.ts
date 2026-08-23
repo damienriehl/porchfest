@@ -85,6 +85,84 @@ export const seasons = sqliteTable(
   ],
 );
 
+// --- Organizer access (U5, R9) -------------------------------------------
+//
+// Bootstrap and invite links are bearer credentials to the whole contact
+// database, so they follow KTD8: high entropy, stored only as a hash, given a
+// short expiry, and consumed atomically exactly once. Nothing here ever stores a
+// token in the clear — a leaked database backup must not be a leaked login.
+
+export const organizers = sqliteTable(
+  "organizers",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    email: text("email").notNull(),
+    displayName: text("display_name").notNull(),
+    // Deactivation is a state change rather than a delete, so an audit trail and
+    // any annotations this organizer wrote survive them losing access.
+    deactivatedAt: integer("deactivated_at", { mode: "timestamp" }),
+    lastSeenAt: integer("last_seen_at", { mode: "timestamp" }),
+    ...mutableColumns(),
+  },
+  (table) => [uniqueIndex("organizers_email_uidx").on(table.email)],
+);
+
+export const organizerSessions = sqliteTable(
+  "organizer_sessions",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    organizerId: integer("organizer_id")
+      .notNull()
+      .references(() => organizers.id),
+    tokenHash: text("token_hash").notNull(),
+    // Two clocks on purpose. The absolute bound is the one the plan requires —
+    // a session cannot live forever however active it is — and the idle bound
+    // closes an unattended laptop faster than that.
+    expiresAt: integer("expires_at", { mode: "timestamp" }).notNull(),
+    idleExpiresAt: integer("idle_expires_at", { mode: "timestamp" }).notNull(),
+    revokedAt: integer("revoked_at", { mode: "timestamp" }),
+    ...mutableColumns(),
+  },
+  (table) => [
+    uniqueIndex("organizer_sessions_token_hash_uidx").on(table.tokenHash),
+    index("organizer_sessions_organizer_id_idx").on(table.organizerId),
+  ],
+);
+
+export const organizerInviteKinds = ["bootstrap", "invite"] as const;
+
+export const organizerInvites = sqliteTable(
+  "organizer_invites",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    kind: text("kind", { enum: organizerInviteKinds }).notNull(),
+    tokenHash: text("token_hash").notNull(),
+    // Null for a bootstrap link: the first organizer names themselves when they
+    // redeem it, because there is nobody yet to have addressed it to them.
+    email: text("email"),
+    invitedByOrganizerId: integer("invited_by_organizer_id").references(
+      () => organizers.id,
+    ),
+    expiresAt: integer("expires_at", { mode: "timestamp" }).notNull(),
+    redeemedAt: integer("redeemed_at", { mode: "timestamp" }),
+    redeemedByOrganizerId: integer("redeemed_by_organizer_id").references(
+      () => organizers.id,
+    ),
+    // Redemption is audited (R9): who took it, and from where.
+    redeemedFromIp: text("redeemed_from_ip"),
+    revokedAt: integer("revoked_at", { mode: "timestamp" }),
+    ...mutableColumns(),
+  },
+  (table) => [
+    uniqueIndex("organizer_invites_token_hash_uidx").on(table.tokenHash),
+    index("organizer_invites_kind_idx").on(table.kind),
+    check(
+      "organizer_invites_kind_check",
+      sql`${table.kind} in ('bootstrap', 'invite')`,
+    ),
+  ],
+);
+
 export const contacts = sqliteTable(
   "contacts",
   {
@@ -386,6 +464,9 @@ const schemaTables = [
   assignments,
   emailLog,
   annotations,
+  organizers,
+  organizerSessions,
+  organizerInvites,
 ] as const;
 
 export const schemaTableDefinitions = Object.freeze(
@@ -406,6 +487,12 @@ export const schemaTableDefinitions = Object.freeze(
 export const schemaTableNames = Object.freeze(
   schemaTableDefinitions.map(({ name }) => name),
 );
+
+export type Organizer = typeof organizers.$inferSelect;
+export type NewOrganizer = typeof organizers.$inferInsert;
+export type OrganizerSession = typeof organizerSessions.$inferSelect;
+export type OrganizerInvite = typeof organizerInvites.$inferSelect;
+export type OrganizerInviteKind = (typeof organizerInviteKinds)[number];
 
 export type Season = typeof seasons.$inferSelect;
 export type NewSeason = typeof seasons.$inferInsert;

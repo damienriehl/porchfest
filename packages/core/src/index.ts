@@ -45,6 +45,26 @@ export type {
   SignupContactInput,
 } from "./records.js";
 export {
+  AccessError,
+  createAccessRepository,
+  DEFAULT_BOOTSTRAP_TTL_MS,
+  DEFAULT_INVITE_TTL_MS,
+  DEFAULT_SESSION_ABSOLUTE_TTL_MS,
+  DEFAULT_SESSION_IDLE_TTL_MS,
+  hashToken,
+  type AccessFailure,
+  type AccessRepository,
+  type AccessRepositoryOptions,
+  type IssuedLink,
+  type IssuedSession,
+} from "./access.js";
+export type {
+  Organizer,
+  OrganizerInvite,
+  OrganizerInviteKind,
+  OrganizerSession,
+} from "./storage/schema.js";
+export {
   isValidTimeZone,
   parseWallClock,
   zonedWallClockToUtc,
@@ -52,6 +72,7 @@ export {
 } from "./time.js";
 
 import type { AdapterPorts } from "./ports/index.js";
+import { createAccessRepository, type AccessRepository } from "./access.js";
 import { createSeasonRepository } from "./season.js";
 import type { CoreDatabase } from "./storage/repository-errors.js";
 
@@ -60,6 +81,7 @@ export type SeasonRepository = ReturnType<typeof createSeasonRepository>;
 export interface CoreRuntime {
   readonly ports: AdapterPorts;
   readonly seasons: SeasonRepository;
+  readonly access: AccessRepository;
 }
 
 export function createCore(
@@ -69,5 +91,6 @@ export function createCore(
   return Object.freeze({
     ports: Object.freeze({ ...ports }),
     seasons: createSeasonRepository(database),
+    access: createAccessRepository(database),
   });
 }
