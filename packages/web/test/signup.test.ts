@@ -1,12 +1,14 @@
-import { CORE_DATABASE_FILENAME, type AntibotPort } from "@porchfest/core";
+import type { AntibotPort } from "@porchfest/core";
 import { TurnstileAntibotAdapter } from "@porchfest/antibot";
-import Database from "better-sqlite3";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it } from "vitest";
-import { createRuntime, type PorchfestRuntime } from "../src/composition.js";
+import {
+  createTestingRuntime,
+  type PorchfestRuntime,
+} from "../src/composition.js";
 
 const PUBLIC_BASE_URL = "https://porchfest.example";
 const temporaryRoots: string[] = [];
@@ -29,7 +31,7 @@ async function makeRuntime(
 ) {
   const dataDirectory = await mkdtemp(join(tmpdir(), "porchfest-signup-"));
   temporaryRoots.push(dataDirectory);
-  const runtime = await createRuntime({
+  const runtime = await createTestingRuntime({
     dataDirectory,
     env: {
       PUBLIC_BASE_URL,
@@ -46,15 +48,16 @@ async function makeRuntime(
   });
   runtimes.push(runtime);
 
-  const sqlite = new Database(join(dataDirectory, CORE_DATABASE_FILENAME));
-  const season = sqlite
-    .prepare(
-      "insert into seasons (year, display_name, state) values (?, ?, 'signups_open') returning id",
-    )
-    .get(2031, "Synthetic 2031 Porchfest") as { id: number };
-  sqlite.close();
+  const { season } = runtime.core.setup.createSeason({
+    year: 2031,
+    displayName: "Synthetic 2031 Porchfest",
+    timezone: "UTC",
+    eventDate: "2031-06-01",
+    timeSlots: [],
+    openSignups: true,
+  });
 
-  return { dataDirectory, runtime, seasonId: season.id };
+  return { runtime, seasonId: season.id };
 }
 
 async function csrfToken(
@@ -230,7 +233,7 @@ describe("public signup forms", () => {
   });
 
   it("round-trips every host field through the real repository and activity queue", async () => {
-    const { dataDirectory, runtime, seasonId } = await makeRuntime();
+    const { runtime, seasonId } = await makeRuntime();
     const { token } = await csrfToken(runtime, "/signup/host", seasonId);
 
     const response = await submit(
@@ -258,31 +261,25 @@ describe("public signup forms", () => {
     });
     const createdVenue = venue?.record;
     expect(createdVenue && "id" in createdVenue).toBe(true);
-    const sqlite = new Database(join(dataDirectory, CORE_DATABASE_FILENAME), {
-      readonly: true,
-    });
-    expect(
-      sqlite.prepare("select value from venue_gear order by id").all(),
-    ).toEqual([
+    const venueId = createdVenue?.id ?? 0;
+    expect(runtime.coreTesting.listVenueGear(venueId)).toEqual([
       { value: "pa" },
       { value: "microphone" },
       { value: "extension_cord" },
     ]);
-    expect(
-      sqlite.prepare("select value from venue_drinks order by id").all(),
-    ).toEqual([{ value: "water" }, { value: "non_alcoholic" }]);
-    expect(
-      sqlite.prepare("select value from venue_amenities order by id").all(),
-    ).toEqual([
+    expect(runtime.coreTesting.listVenueDrinks(venueId)).toEqual([
+      { value: "water" },
+      { value: "non_alcoholic" },
+    ]);
+    expect(runtime.coreTesting.listVenueAmenities(venueId)).toEqual([
       { value: "seating" },
       { value: "shade" },
       { value: "accessible_entry" },
     ]);
-    sqlite.close();
   });
 
   it("round-trips every performer field and availability window", async () => {
-    const { dataDirectory, runtime, seasonId } = await makeRuntime();
+    const { runtime, seasonId } = await makeRuntime();
     const { token } = await csrfToken(runtime, "/signup/performer", seasonId);
 
     const response = await submit(
@@ -300,9 +297,8 @@ describe("public signup forms", () => {
       email: "performer@example.invalid",
       phone: "synthetic-performer-phone",
     });
-    expect(
-      queue.find(({ recordType }) => recordType === "act")?.record,
-    ).toMatchObject({
+    const act = queue.find(({ recordType }) => recordType === "act");
+    expect(act?.record).toMatchObject({
       name: "The Test Fixtures",
       durationMinutes: 45,
       requiresAmplification: true,
@@ -312,20 +308,18 @@ describe("public signup forms", () => {
       housePreference: "Near the park",
       canLendGear: true,
     });
-    const sqlite = new Database(join(dataDirectory, CORE_DATABASE_FILENAME), {
-      readonly: true,
-    });
     expect(
-      sqlite
-        .prepare(
-          "select starts_at as startsAt, ends_at as endsAt from act_availabilities order by id",
-        )
-        .all(),
+      runtime.coreTesting.listActAvailabilities(act?.record.id ?? 0),
     ).toEqual([
-      { startsAt: 1_938_088_800, endsAt: 1_938_091_500 },
-      { startsAt: 1_938_096_000, endsAt: 1_938_098_700 },
+      {
+        startsAt: new Date(1_938_088_800_000),
+        endsAt: new Date(1_938_091_500_000),
+      },
+      {
+        startsAt: new Date(1_938_096_000_000),
+        endsAt: new Date(1_938_098_700_000),
+      },
     ]);
-    sqlite.close();
   });
 
   it("refuses a configured challenge timeout and persists nothing", async () => {
