@@ -17,6 +17,8 @@ import type { Context } from "hono";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { createApp } from "./app.js";
+import type { SessionCookieOptions } from "./auth.js";
+import { announceBootstrapLink } from "./routes/admin.js";
 import { loadSessionSecret } from "./config/session-secret.js";
 import type { RouteRegistry, TrustAuthorizer } from "./router/registry.js";
 
@@ -27,6 +29,9 @@ export interface RuntimeOptions {
   readonly env?: Readonly<Record<string, string | undefined>>;
   readonly resolveSocketPeerAddress?: (context: Context) => string | null;
   readonly signupGuardOptions?: UnconfiguredAntibotGuardOptions;
+  readonly sessionCookie?: SessionCookieOptions;
+  /** Where the first-boot organizer link is announced. Defaults to the log. */
+  readonly announce?: (message: string) => void;
 }
 
 export interface PorchfestRuntime {
@@ -107,7 +112,12 @@ export async function createRuntime(
       resolveSocketPeerAddress: options.resolveSocketPeerAddress,
       signupGuardOptions: options.signupGuardOptions,
       trustedProxyHops,
+      sessionCookie: options.sessionCookie,
     });
+
+    // R9: with no organizer yet, the container log is the delivery channel for
+    // the first login. It must not depend on the email adapter being configured.
+    announceBootstrapLink(core, publicBaseUrl, options.announce);
 
     return {
       adapters,

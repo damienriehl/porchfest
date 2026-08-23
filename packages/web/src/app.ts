@@ -3,14 +3,17 @@ import type { CoreRuntime } from "@porchfest/core";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { Hono, type Context } from "hono";
 import { RouteRegistry, type TrustAuthorizer } from "./router/registry.js";
+import { announceBootstrapLink, registerAdminRoutes } from "./routes/admin.js";
 import {
   registerSignupRoutes,
   type SignupRouteOptions,
 } from "./routes/signup.js";
+import { createTrustAuthorizer, type SessionCookieOptions } from "./auth.js";
 
 export interface AppOptions {
   readonly core: CoreRuntime;
   readonly authorize?: TrustAuthorizer;
+  readonly sessionCookie?: SessionCookieOptions;
   readonly csrfSecret?: string;
   readonly publicBaseUrl?: string | null;
   readonly resolveSocketPeerAddress?: SignupRouteOptions["resolveSocketPeerAddress"];
@@ -34,7 +37,10 @@ export function createApp(options: AppOptions): PorchfestApp {
     createHmac("sha256", csrfSecret)
       .update(`POST ${path}`, "utf8")
       .digest("base64url");
-  const routes = new RouteRegistry(app, options.authorize, {
+  // Without an explicit override the registry now gets real organizer auth
+  // instead of the deny-everything default the scaffold shipped with.
+  const authorize = options.authorize ?? createTrustAuthorizer(options.core);
+  const routes = new RouteRegistry(app, authorize, {
     allowedOrigin,
     validateCsrf: (token, route) => {
       if (!token || !csrfSecret) return false;
@@ -65,6 +71,15 @@ export function createApp(options: AppOptions): PorchfestApp {
       options.resolveSocketPeerAddress ?? defaultSocketPeerAddress,
     trustedProxyHops: options.trustedProxyHops,
     guardOptions: options.signupGuardOptions,
+  });
+
+  registerAdminRoutes({
+    core: options.core,
+    routes,
+    csrfTokenFor,
+    resolveSocketPeerAddress:
+      options.resolveSocketPeerAddress ?? defaultSocketPeerAddress,
+    cookie: options.sessionCookie,
   });
 
   return {

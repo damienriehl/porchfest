@@ -43,6 +43,13 @@
       "when": 1787494358784,
       "tag": "0005_optimal_scarlet_spider",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1787510647642,
+      "tag": "0006_living_moon_knight",
+      "breakpoints": true
     }
   ]
 }
