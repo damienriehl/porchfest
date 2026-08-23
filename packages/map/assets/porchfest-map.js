@@ -784,7 +784,7 @@
         status,
         mapElement,
         listSection,
-        "The interactive map could not be loaded. Please use the current official Google map below.",
+        "The interactive map could not be loaded. Please refresh the page and try again.",
         "is-error",
       );
       return;
@@ -804,7 +804,7 @@
             status,
             mapElement,
             listSection,
-            "The 2026 lineup is not on the interactive map yet. Please use the current official Google map below.",
+            "The 2026 lineup is not on the interactive map yet. Please check back soon.",
             "is-empty",
           );
           return;
@@ -831,7 +831,7 @@
           status,
           mapElement,
           listSection,
-          "The interactive map could not be loaded. Please use the current official Google map below.",
+          "The interactive map could not be loaded. Please refresh the page and try again.",
           "is-error",
         );
       });

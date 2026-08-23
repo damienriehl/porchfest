@@ -6,6 +6,18 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import * as schema from "../src/storage/schema.js";
 import { openTestDatabase, type TestDatabase } from "./support/db.js";
 
+function constraintValues(migration: string, constraintName: string): string[] {
+  const values = migration.match(
+    new RegExp(
+      `CONSTRAINT "${constraintName}" CHECK\\([^\\n]*? in \\(([^)]*)\\)\\)`,
+    ),
+  )?.[1];
+  if (values === undefined) {
+    throw new Error(`migration constraint ${constraintName} not found`);
+  }
+  return values.split(",").map((value) => value.trim().replaceAll("'", ""));
+}
+
 describe("core schema migration", () => {
   let database: TestDatabase;
   let sqlite: Database.Database;
@@ -70,27 +82,202 @@ describe("core schema migration", () => {
     ).toThrow();
   });
 
+  it("stores R1 signup fields in typed columns and normalized child rows", () => {
+    const season = sqlite
+      .prepare(
+        "insert into seasons (year, display_name) values (?, ?) returning id",
+      )
+      .get(2102, "Signup Field Sample") as { id: number };
+    const contact = sqlite
+      .prepare(
+        "insert into contacts (season_id, name) values (?, ?) returning id",
+      )
+      .get(season.id, "Signup Contact") as { id: number };
+    const venue = sqlite
+      .prepare(
+        "insert into venues (season_id, title, space_description, has_power, rain_backup, host_contact_id) values (?, ?, ?, ?, ?, ?) returning id",
+      )
+      .get(
+        season.id,
+        "Signup Venue",
+        "Front porch and yard",
+        1,
+        1,
+        contact.id,
+      ) as { id: number };
+    const act = sqlite
+      .prepare(
+        "insert into acts (season_id, name, duration_minutes, requires_amplification, house_preference, can_lend_gear, reach_via_contact_id) values (?, ?, ?, ?, ?, ?, ?) returning id",
+      )
+      .get(season.id, "Signup Act", 45, 1, "A shaded porch", 1, contact.id) as {
+      id: number;
+    };
+
+    const gear = sqlite
+      .prepare(
+        "insert into venue_gear (season_id, venue_id, value) values (?, ?, ?) returning version",
+      )
+      .get(season.id, venue.id, "pa") as { version: number };
+    const drink = sqlite
+      .prepare(
+        "insert into venue_drinks (season_id, venue_id, value) values (?, ?, ?) returning version",
+      )
+      .get(season.id, venue.id, "water") as { version: number };
+    const amenity = sqlite
+      .prepare(
+        "insert into venue_amenities (season_id, venue_id, value) values (?, ?, ?) returning version",
+      )
+      .get(season.id, venue.id, "shade") as { version: number };
+    const availability = sqlite
+      .prepare(
+        "insert into act_availabilities (season_id, act_id, starts_at, ends_at) values (?, ?, ?, ?) returning version",
+      )
+      .get(season.id, act.id, 4_102_444_800, 4_102_448_400) as {
+      version: number;
+    };
+
+    expect(
+      sqlite
+        .prepare(
+          "select space_description, has_power, rain_backup from venues where id = ?",
+        )
+        .get(venue.id),
+    ).toEqual({
+      space_description: "Front porch and yard",
+      has_power: 1,
+      rain_backup: 1,
+    });
+    expect(
+      sqlite
+        .prepare(
+          "select duration_minutes, requires_amplification, house_preference, can_lend_gear from acts where id = ?",
+        )
+        .get(act.id),
+    ).toEqual({
+      duration_minutes: 45,
+      requires_amplification: 1,
+      house_preference: "A shaded porch",
+      can_lend_gear: 1,
+    });
+    expect([gear, drink, amenity, availability]).toEqual([
+      { version: 1 },
+      { version: 1 },
+      { version: 1 },
+      { version: 1 },
+    ]);
+  });
+
+  it("rejects unsupported signup set values and invalid availability windows", () => {
+    const season = sqlite
+      .prepare(
+        "insert into seasons (year, display_name) values (?, ?) returning id",
+      )
+      .get(2103, "Signup Constraint Sample") as { id: number };
+    const venue = sqlite
+      .prepare(
+        "insert into venues (season_id, title) values (?, ?) returning id",
+      )
+      .get(season.id, "Constraint Venue") as { id: number };
+    const act = sqlite
+      .prepare("insert into acts (season_id, name) values (?, ?) returning id")
+      .get(season.id, "Constraint Act") as { id: number };
+
+    for (const table of ["venue_gear", "venue_drinks", "venue_amenities"]) {
+      expect(() =>
+        sqlite
+          .prepare(
+            `insert into ${table} (season_id, venue_id, value) values (?, ?, ?)`,
+          )
+          .run(season.id, venue.id, "unsupported"),
+      ).toThrow();
+    }
+    expect(() =>
+      sqlite
+        .prepare(
+          "insert into act_availabilities (season_id, act_id, starts_at, ends_at) values (?, ?, ?, ?)",
+        )
+        .run(season.id, act.id, 4_102_448_400, 4_102_444_800),
+    ).toThrow();
+  });
+
+  it("rejects duplicate values in normalized signup sets", () => {
+    const season = sqlite
+      .prepare(
+        "insert into seasons (year, display_name) values (?, ?) returning id",
+      )
+      .get(2104, "Signup Set Sample") as { id: number };
+    const venue = sqlite
+      .prepare(
+        "insert into venues (season_id, title) values (?, ?) returning id",
+      )
+      .get(season.id, "Set Venue") as { id: number };
+    const act = sqlite
+      .prepare("insert into acts (season_id, name) values (?, ?) returning id")
+      .get(season.id, "Set Act") as { id: number };
+
+    for (const table of ["venue_gear", "venue_drinks", "venue_amenities"]) {
+      sqlite
+        .prepare(
+          `insert into ${table} (season_id, venue_id, value) values (?, ?, ?)`,
+        )
+        .run(
+          season.id,
+          venue.id,
+          table === "venue_gear"
+            ? "pa"
+            : table === "venue_drinks"
+              ? "water"
+              : "shade",
+        );
+      expect(() =>
+        sqlite
+          .prepare(
+            `insert into ${table} (season_id, venue_id, value) select season_id, venue_id, value from ${table} where venue_id = ?`,
+          )
+          .run(venue.id),
+      ).toThrow();
+    }
+    sqlite
+      .prepare(
+        "insert into act_availabilities (season_id, act_id, starts_at, ends_at) values (?, ?, ?, ?)",
+      )
+      .run(season.id, act.id, 4_102_444_800, 4_102_448_400);
+    expect(() =>
+      sqlite
+        .prepare(
+          "insert into act_availabilities (season_id, act_id, starts_at, ends_at) values (?, ?, ?, ?)",
+        )
+        .run(season.id, act.id, 4_102_444_800, 4_102_448_400),
+    ).toThrow();
+  });
+
   it("keeps migration state checks aligned with the schema state lists", async () => {
     const migration = await readFile(
       new URL("../drizzle/0000_overconfident_joseph.sql", import.meta.url),
       "utf8",
     );
-    const constraintValues = (constraintName: string): string[] => {
-      const values = migration.match(
-        new RegExp(
-          `CONSTRAINT "${constraintName}" CHECK\\([^\\n]*? in \\(([^)]*)\\)\\)`,
-        ),
-      )?.[1];
-      if (values === undefined) {
-        throw new Error(`migration constraint ${constraintName} not found`);
-      }
-      return values.split(",").map((value) => value.trim().replaceAll("'", ""));
-    };
-
-    expect(constraintValues("seasons_state_check")).toEqual(
+    expect(constraintValues(migration, "seasons_state_check")).toEqual(
       schema.seasonStates,
     );
-    expect(constraintValues("slots_state_check")).toEqual(schema.slotStates);
+    expect(constraintValues(migration, "slots_state_check")).toEqual(
+      schema.slotStates,
+    );
+  });
+
+  it("keeps generated migration set checks aligned with schema value lists", async () => {
+    const migration = await readFile(
+      new URL("../drizzle/0003_awesome_krista_starr.sql", import.meta.url),
+      "utf8",
+    );
+    expect(constraintValues(migration, "venue_gear_value_check")).toEqual(
+      schema.venueGearValues,
+    );
+    expect(constraintValues(migration, "venue_drinks_value_check")).toEqual(
+      schema.venueDrinkValues,
+    );
+    expect(constraintValues(migration, "venue_amenities_value_check")).toEqual(
+      schema.venueAmenityValues,
+    );
   });
 
   it("defaults the optimistic-concurrency version to one", () => {

@@ -1,10 +1,21 @@
-import { Hono, type Context } from "hono";
+import { getConnInfo } from "@hono/node-server/conninfo";
 import type { CoreRuntime } from "@porchfest/core";
+import { createHmac, timingSafeEqual } from "node:crypto";
+import { Hono, type Context } from "hono";
 import { RouteRegistry, type TrustAuthorizer } from "./router/registry.js";
+import {
+  registerSignupRoutes,
+  type SignupRouteOptions,
+} from "./routes/signup.js";
 
 export interface AppOptions {
   readonly core: CoreRuntime;
   readonly authorize?: TrustAuthorizer;
+  readonly csrfSecret?: string;
+  readonly publicBaseUrl?: string | null;
+  readonly resolveSocketPeerAddress?: SignupRouteOptions["resolveSocketPeerAddress"];
+  readonly signupGuardOptions?: SignupRouteOptions["guardOptions"];
+  readonly trustedProxyHops?: number;
 }
 
 export interface PorchfestApp {
@@ -14,12 +25,27 @@ export interface PorchfestApp {
 }
 
 export function createApp(options: AppOptions): PorchfestApp {
-  // Retaining the core argument here makes the injection boundary explicit even
-  // before a domain route consumes it.
-  void options.core;
-
   const app = new Hono();
-  const routes = new RouteRegistry(app, options.authorize);
+  const allowedOrigin = options.publicBaseUrl
+    ? new URL(options.publicBaseUrl).origin
+    : null;
+  const csrfSecret = options.csrfSecret ?? "";
+  const csrfTokenFor = (path: string) =>
+    createHmac("sha256", csrfSecret)
+      .update(`POST ${path}`, "utf8")
+      .digest("base64url");
+  const routes = new RouteRegistry(app, options.authorize, {
+    allowedOrigin,
+    validateCsrf: (token, route) => {
+      if (!token || !csrfSecret) return false;
+      const expected = Buffer.from(csrfTokenFor(route.path));
+      const submitted = Buffer.from(token);
+      return (
+        expected.length === submitted.length &&
+        timingSafeEqual(expected, submitted)
+      );
+    },
+  });
 
   // The health endpoint is deliberately the first member of the canonical route
   // registry, so even the scaffold proves that reachability requires a trust tier.
@@ -31,9 +57,27 @@ export function createApp(options: AppOptions): PorchfestApp {
       context.json({ ok: true, service: "porchfest" } as const),
   });
 
+  registerSignupRoutes({
+    core: options.core,
+    routes,
+    csrfTokenFor,
+    resolveSocketPeerAddress:
+      options.resolveSocketPeerAddress ?? defaultSocketPeerAddress,
+    trustedProxyHops: options.trustedProxyHops,
+    guardOptions: options.signupGuardOptions,
+  });
+
   return {
     fetch: app.fetch.bind(app),
     request: app.request.bind(app),
     routes,
   };
+}
+
+function defaultSocketPeerAddress(context: Context): string | null {
+  try {
+    return getConnInfo(context).remote.address ?? null;
+  } catch {
+    return null;
+  }
 }

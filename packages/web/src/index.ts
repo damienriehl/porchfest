@@ -15,6 +15,7 @@ export type { AppOptions, PorchfestApp } from "./app.js";
 export type { PorchfestRuntime, RuntimeOptions } from "./composition.js";
 export type {
   HttpMethod,
+  MutationProtection,
   RouteDeclaration,
   TrustAuthorizer,
   TrustTier,

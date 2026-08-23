@@ -183,7 +183,7 @@ describe("record lifecycle", () => {
     };
     const submission = sqlite
       .prepare(
-        "insert into acts (season_id, name, genre, description, links) values (?, ?, ?, ?, ?) returning id, version",
+        "insert into acts (season_id, name, genre, description, links, duration_minutes, requires_amplification, house_preference, can_lend_gear) values (?, ?, ?, ?, ?, ?, ?, ?, ?) returning id, version",
       )
       .get(
         seasonId,
@@ -191,7 +191,41 @@ describe("record lifecycle", () => {
         "Submitted Genre",
         "Submitted description",
         "https://example.invalid/submission",
+        45,
+        1,
+        "Submitted house preference",
+        1,
       ) as { id: number; version: number };
+    const availability = sqlite
+      .prepare(
+        "insert into act_availabilities (season_id, act_id, starts_at, ends_at) values (?, ?, ?, ?) returning id, version",
+      )
+      .get(seasonId, submission.id, 4_180_304_000, 4_180_307_600) as {
+      id: number;
+      version: number;
+    };
+    const otherSubmittedAvailability = sqlite
+      .prepare(
+        "insert into act_availabilities (season_id, act_id, starts_at, ends_at) values (?, ?, ?, ?) returning id, version",
+      )
+      .get(seasonId, submission.id, 4_180_311_200, 4_180_314_800) as {
+      id: number;
+      version: number;
+    };
+    const overlappingPlaceholderAvailability = sqlite
+      .prepare(
+        "insert into act_availabilities (season_id, act_id, starts_at, ends_at) values (?, ?, ?, ?) returning id",
+      )
+      .get(seasonId, placeholder.id, 4_180_304_000, 4_180_307_600) as {
+      id: number;
+    };
+    const placeholderOnlyAvailability = sqlite
+      .prepare(
+        "insert into act_availabilities (season_id, act_id, starts_at, ends_at) values (?, ?, ?, ?) returning id",
+      )
+      .get(seasonId, placeholder.id, 4_180_307_600, 4_180_311_200) as {
+      id: number;
+    };
     const unrelatedAct = sqlite
       .prepare("insert into acts (season_id, name) values (?, ?) returning id")
       .get(seasonId, "Unrelated Act") as { id: number };
@@ -280,12 +314,69 @@ describe("record lifecycle", () => {
         .prepare("select canonical_act_id from acts where id = ?")
         .get(submission.id),
     ).toEqual({ canonical_act_id: promoted.id });
+    expect(
+      sqlite
+        .prepare(
+          "select act_id, version, updated_at from act_availabilities where id = ?",
+        )
+        .get(availability.id),
+    ).toEqual({
+      act_id: submission.id,
+      version: availability.version,
+      updated_at: expect.any(Number),
+    });
+    expect(
+      sqlite
+        .prepare(
+          "select starts_at, ends_at from act_availabilities where act_id = ? order by starts_at",
+        )
+        .all(promoted.id),
+    ).toEqual([
+      { starts_at: 4_180_304_000, ends_at: 4_180_307_600 },
+      { starts_at: 4_180_307_600, ends_at: 4_180_311_200 },
+      { starts_at: 4_180_311_200, ends_at: 4_180_314_800 },
+    ]);
+    expect(
+      sqlite
+        .prepare(
+          "select id, starts_at, ends_at from act_availabilities where act_id = ? order by starts_at",
+        )
+        .all(submission.id),
+    ).toEqual([
+      {
+        id: availability.id,
+        starts_at: 4_180_304_000,
+        ends_at: 4_180_307_600,
+      },
+      {
+        id: otherSubmittedAvailability.id,
+        starts_at: 4_180_311_200,
+        ends_at: 4_180_314_800,
+      },
+    ]);
+    expect(
+      sqlite
+        .prepare(
+          "select id from act_availabilities where id in (?, ?) order by id",
+        )
+        .all(
+          overlappingPlaceholderAvailability.id,
+          placeholderOnlyAvailability.id,
+        ),
+    ).toEqual([
+      { id: overlappingPlaceholderAvailability.id },
+      { id: placeholderOnlyAvailability.id },
+    ]);
     expect(promoted).toMatchObject({
       id: placeholder.id,
       name: "Submitted Act",
       genre: "Submitted Genre",
       description: "Submitted description",
       links: "https://example.invalid/submission",
+      durationMinutes: 45,
+      requiresAmplification: true,
+      housePreference: "Submitted house preference",
+      canLendGear: true,
       placeholder: false,
       reachViaContactId: contact.id,
       version: placeholder.version + 1,
@@ -296,7 +387,7 @@ describe("record lifecycle", () => {
     const seasonId = insertSeason();
     const placeholder = sqlite
       .prepare(
-        "insert into acts (season_id, name, genre, description, links, placeholder) values (?, ?, ?, ?, ?, 1) returning id, version",
+        "insert into acts (season_id, name, genre, description, links, duration_minutes, requires_amplification, house_preference, can_lend_gear, placeholder) values (?, ?, ?, ?, ?, ?, ?, ?, ?, 1) returning id, version",
       )
       .get(
         seasonId,
@@ -304,6 +395,10 @@ describe("record lifecycle", () => {
         "Organizer Genre",
         "Organizer description",
         "https://example.invalid/organizer",
+        60,
+        1,
+        "Organizer house preference",
+        0,
       ) as { id: number; version: number };
     const submission = sqlite
       .prepare(
@@ -324,6 +419,10 @@ describe("record lifecycle", () => {
       genre: "Organizer Genre",
       description: "Organizer description",
       links: "https://example.invalid/organizer",
+      durationMinutes: 60,
+      requiresAmplification: true,
+      housePreference: "Organizer house preference",
+      canLendGear: false,
     });
   });
 
@@ -511,17 +610,89 @@ describe("record lifecycle", () => {
     };
     const submission = sqlite
       .prepare(
-        "insert into venues (season_id, title, address, latitude, longitude, notes, host_contact_id) values (?, ?, ?, ?, ?, ?, ?) returning id, version",
+        "insert into venues (season_id, title, address, space_description, has_power, rain_backup, latitude, longitude, notes, host_contact_id) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) returning id, version",
       )
       .get(
         seasonId,
         "Submitted Venue",
         "Submitted address",
+        "Submitted porch and yard",
+        1,
+        1,
         44.95,
         -93.09,
         "Submitted notes",
         contact.id,
       ) as { id: number; version: number };
+    const gear = sqlite
+      .prepare(
+        "insert into venue_gear (season_id, venue_id, value) values (?, ?, ?) returning id, version",
+      )
+      .get(seasonId, submission.id, "pa") as {
+      id: number;
+      version: number;
+    };
+    const drink = sqlite
+      .prepare(
+        "insert into venue_drinks (season_id, venue_id, value) values (?, ?, ?) returning id, version",
+      )
+      .get(seasonId, submission.id, "water") as {
+      id: number;
+      version: number;
+    };
+    const amenity = sqlite
+      .prepare(
+        "insert into venue_amenities (season_id, venue_id, value) values (?, ?, ?) returning id, version",
+      )
+      .get(seasonId, submission.id, "shade") as {
+      id: number;
+      version: number;
+    };
+    sqlite
+      .prepare(
+        "insert into venue_gear (season_id, venue_id, value) values (?, ?, ?)",
+      )
+      .run(seasonId, submission.id, "microphone");
+    sqlite
+      .prepare(
+        "insert into venue_drinks (season_id, venue_id, value) values (?, ?, ?)",
+      )
+      .run(seasonId, submission.id, "beer");
+    sqlite
+      .prepare(
+        "insert into venue_amenities (season_id, venue_id, value) values (?, ?, ?)",
+      )
+      .run(seasonId, submission.id, "seating");
+    sqlite
+      .prepare(
+        "insert into venue_gear (season_id, venue_id, value) values (?, ?, ?)",
+      )
+      .run(seasonId, placeholder.id, "pa");
+    sqlite
+      .prepare(
+        "insert into venue_drinks (season_id, venue_id, value) values (?, ?, ?)",
+      )
+      .run(seasonId, placeholder.id, "water");
+    sqlite
+      .prepare(
+        "insert into venue_amenities (season_id, venue_id, value) values (?, ?, ?)",
+      )
+      .run(seasonId, placeholder.id, "shade");
+    sqlite
+      .prepare(
+        "insert into venue_gear (season_id, venue_id, value) values (?, ?, ?)",
+      )
+      .run(seasonId, placeholder.id, "extension_cord");
+    sqlite
+      .prepare(
+        "insert into venue_drinks (season_id, venue_id, value) values (?, ?, ?)",
+      )
+      .run(seasonId, placeholder.id, "wine");
+    sqlite
+      .prepare(
+        "insert into venue_amenities (season_id, venue_id, value) values (?, ?, ?)",
+      )
+      .run(seasonId, placeholder.id, "restroom");
     const otherVenue = sqlite
       .prepare(
         "insert into venues (season_id, title) values (?, ?) returning id",
@@ -594,10 +765,80 @@ describe("record lifecycle", () => {
         .prepare("select record_id from email_log where id = ?")
         .get(email.id),
     ).toEqual({ record_id: promoted.id });
+    for (const [table, row] of [
+      ["venue_gear", gear],
+      ["venue_drinks", drink],
+      ["venue_amenities", amenity],
+    ] as const) {
+      expect(
+        sqlite
+          .prepare(
+            `select venue_id, version, updated_at from ${table} where id = ?`,
+          )
+          .get(row.id),
+      ).toEqual({
+        venue_id: submission.id,
+        version: row.version,
+        updated_at: expect.any(Number),
+      });
+    }
+    expect(
+      sqlite
+        .prepare(
+          "select value from venue_gear where venue_id = ? order by value",
+        )
+        .all(promoted.id),
+    ).toEqual([
+      { value: "extension_cord" },
+      { value: "microphone" },
+      { value: "pa" },
+    ]);
+    expect(
+      sqlite
+        .prepare(
+          "select value from venue_drinks where venue_id = ? order by value",
+        )
+        .all(promoted.id),
+    ).toEqual([{ value: "beer" }, { value: "water" }, { value: "wine" }]);
+    expect(
+      sqlite
+        .prepare(
+          "select value from venue_amenities where venue_id = ? order by value",
+        )
+        .all(promoted.id),
+    ).toEqual([
+      { value: "restroom" },
+      { value: "seating" },
+      { value: "shade" },
+    ]);
+    expect(
+      sqlite
+        .prepare(
+          "select value from venue_gear where venue_id = ? order by value",
+        )
+        .all(submission.id),
+    ).toEqual([{ value: "microphone" }, { value: "pa" }]);
+    expect(
+      sqlite
+        .prepare(
+          "select value from venue_drinks where venue_id = ? order by value",
+        )
+        .all(submission.id),
+    ).toEqual([{ value: "beer" }, { value: "water" }]);
+    expect(
+      sqlite
+        .prepare(
+          "select value from venue_amenities where venue_id = ? order by value",
+        )
+        .all(submission.id),
+    ).toEqual([{ value: "seating" }, { value: "shade" }]);
     expect(promoted).toMatchObject({
       id: placeholder.id,
       title: "Submitted Venue",
       address: "Submitted address",
+      spaceDescription: "Submitted porch and yard",
+      hasPower: true,
+      rainBackup: true,
       latitude: 44.95,
       longitude: -93.09,
       notes: "Submitted notes",
@@ -626,12 +867,15 @@ describe("record lifecycle", () => {
     };
     const placeholder = sqlite
       .prepare(
-        "insert into venues (season_id, title, address, latitude, longitude, notes, host_contact_id, placeholder, reach_via_contact_id) values (?, ?, ?, ?, ?, ?, ?, 1, ?) returning id, version",
+        "insert into venues (season_id, title, address, space_description, has_power, rain_backup, latitude, longitude, notes, host_contact_id, placeholder, reach_via_contact_id) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?) returning id, version",
       )
       .get(
         seasonId,
         "Placeholder Venue",
         "Organizer address",
+        "Organizer porch and yard",
+        0,
+        1,
         44.9778,
         -93.265,
         "Organizer notes",
@@ -655,6 +899,9 @@ describe("record lifecycle", () => {
       id: placeholder.id,
       title: "Submitted Venue",
       address: "Organizer address",
+      spaceDescription: "Organizer porch and yard",
+      hasPower: false,
+      rainBackup: true,
       latitude: 44.9778,
       longitude: -93.265,
       notes: "Organizer notes",
