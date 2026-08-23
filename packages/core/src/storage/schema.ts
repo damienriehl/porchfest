@@ -70,6 +70,11 @@ export const seasons = sqliteTable(
     year: integer("year").notNull(),
     displayName: text("display_name").notNull(),
     state: text("state", { enum: seasonStates }).notNull().default("setup"),
+    // R34's first-run setup captures the festival's IANA timezone. Participant
+    // availability arrives as a timezone-free wall clock, so this column is what
+    // turns "2:00 PM" into an instant. It defaults to UTC rather than guessing a
+    // locality: a season that never sets it stores exactly what was typed.
+    timezone: text("timezone").notNull().default("UTC"),
     ...mutableColumns(),
   },
   (table) => [
@@ -150,6 +155,9 @@ export const acts = sqliteTable(
     }),
     housePreference: text("house_preference"),
     canLendGear: integer("can_lend_gear", { mode: "boolean" }),
+    // The performer-side counterpart to venues.notes: free text the organizers
+    // read and the public map never shows.
+    notes: text("notes"),
     placeholder: integer("placeholder", { mode: "boolean" })
       .notNull()
       .default(false),

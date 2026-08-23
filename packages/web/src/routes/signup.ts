@@ -1,18 +1,21 @@
 import {
   UnconfiguredAntibotGuard,
-  resolveClientIp,
   type UnconfiguredAntibotGuardOptions,
 } from "@porchfest/antibot";
 import {
+  isSeasonActionLegal,
   venueAmenityValues,
   venueDrinkValues,
   venueGearValues,
+  zonedWallClockToUtc,
   SeasonActionError,
   SeasonLifecycleError,
+  type AntibotClientChallenge,
   type AntibotResult,
   type CoreRuntime,
   type HostSignupInput,
   type PerformerSignupInput,
+  type Season,
 } from "@porchfest/core";
 import { readFileSync } from "node:fs";
 import type { Context } from "hono";
@@ -23,7 +26,9 @@ import {
   firstValue,
   renderConfirmationPage,
   renderHostPreview,
+  renderHostSubmission,
   renderPerformerPreview,
+  renderPerformerSubmission,
   type SignupError,
   type SignupValues,
 } from "../views/signup-view.js";
@@ -48,13 +53,67 @@ export interface SignupRouteOptions {
 }
 
 type SignupKind = "host" | "performer";
-type SignupStatus = 200 | 201 | 400 | 403 | 409 | 422 | 429 | 503;
+type SignupStatus = 200 | 201 | 400 | 403 | 409 | 415 | 422 | 429 | 503;
+
+/** Longest a participant answer may be, by field. Without a ceiling one 51 KiB
+ *  body of "&" persists in full and re-renders as ~256 KiB of "&amp;". */
+const MAX_FIELD_LENGTH: Readonly<Record<string, number>> = {
+  contact_name: 200,
+  contact_email: 320,
+  contact_phone: 60,
+  venue_title: 200,
+  venue_address: 300,
+  space_description: 4000,
+  notes: 4000,
+  act_name: 200,
+  genres: 300,
+  description: 4000,
+  links: 2000,
+  house_preference: 2000,
+  performer_notes: 4000,
+  duration_minutes: 10,
+  season_id: 20,
+  antibot_token: 4096,
+};
+const DEFAULT_MAX_FIELD_LENGTH = 300;
+
+/** A performer plays one festival day. Twelve windows is generous; without a cap
+ *  a sub-64 KiB body can echo ~869 KiB of markup or insert ~880 rows. */
+const MAX_AVAILABILITY_PAIRS = 12;
+
+/** A field the participant may only send once. Repeats are a refusal, never a
+ *  silent first-wins: `has_power=yes&has_power=maybe` must not persist "yes". */
+const SINGLE_VALUE_FIELDS = [
+  "season_id",
+  "contact_name",
+  "contact_email",
+  "contact_phone",
+  "venue_title",
+  "venue_address",
+  "space_description",
+  "has_power",
+  "rain_backup",
+  "notes",
+  "act_name",
+  "genres",
+  "description",
+  "links",
+  "duration_minutes",
+  "requires_amplification",
+  "house_preference",
+  "can_lend_gear",
+  "performer_notes",
+  "antibot_token",
+  "website",
+  "_csrf",
+] as const;
 
 export function registerSignupRoutes(options: SignupRouteOptions): void {
   const unconfiguredGuard = new UnconfiguredAntibotGuard({
     ...options.guardOptions,
     trustedProxyHops: options.trustedProxyHops,
   });
+  const challenge = options.core.ports.antibot.clientChallenge;
 
   options.routes.register({
     method: "GET",
@@ -80,147 +139,385 @@ export function registerSignupRoutes(options: SignupRouteOptions): void {
         },
       }),
   });
-  options.routes.register({
-    method: "GET",
-    path: HOST_SIGNUP_PATH,
-    tier: "public",
-    handler: (context: Context) => {
-      const seasonId = context.req.query("season") ?? "";
-      const errors = validSeasonId(seasonId)
-        ? []
-        : [seasonError("Choose an open Porchfest season before signing up.")];
-      return htmlResponse(
-        renderHostForm({
-          seasonId,
-          csrfToken: options.csrfTokenFor(HOST_SIGNUP_PATH),
-          challengeConfigured: options.core.ports.antibot.configured,
-          errors,
-        }),
-        errors.length === 0 ? 200 : 400,
-      );
-    },
-  });
-  options.routes.register({
-    method: "POST",
-    path: HOST_SIGNUP_PATH,
-    tier: "public",
-    handler: async (context: Context) => {
-      const values = await readSignupValues(context);
-      const antibot = await checkAntibot(
-        options,
-        unconfiguredGuard,
-        context,
-        values,
-      );
-      if (!antibot.passed) {
-        return hostFormResponse(
-          options,
-          values,
-          [antibot.error],
-          antibot.status,
-        );
-      }
-      const validation = validateHost(values);
-      if (!validation.ok) {
-        return hostFormResponse(options, values, validation.errors, 422);
-      }
 
-      try {
-        options.core.seasons.createHostSignup(validation.input);
-      } catch (error) {
-        return persistenceRefusal(options, "host", values, error);
-      }
-      return htmlResponse(
-        renderConfirmationPage({
-          title: "Your porch signup is in.",
-          kind: "host",
-          emailConfigured: options.core.ports.email.configured,
-          preview: renderHostPreview(values),
-        }),
-        201,
-      );
-    },
-  });
-  options.routes.register({
-    method: "GET",
-    path: PERFORMER_SIGNUP_PATH,
-    tier: "public",
-    handler: (context: Context) => {
-      const seasonId = context.req.query("season") ?? "";
-      const errors = validSeasonId(seasonId)
-        ? []
-        : [seasonError("Choose an open Porchfest season before signing up.")];
-      return htmlResponse(
-        renderPerformerForm({
-          seasonId,
-          csrfToken: options.csrfTokenFor(PERFORMER_SIGNUP_PATH),
-          challengeConfigured: options.core.ports.antibot.configured,
-          errors,
-        }),
-        errors.length === 0 ? 200 : 400,
-      );
-    },
-  });
-  options.routes.register({
-    method: "POST",
-    path: PERFORMER_SIGNUP_PATH,
-    tier: "public",
-    handler: async (context: Context) => {
-      const values = await readSignupValues(context);
-      const antibot = await checkAntibot(
-        options,
-        unconfiguredGuard,
-        context,
-        values,
-      );
-      if (!antibot.passed) {
-        return performerFormResponse(
-          options,
-          values,
-          [antibot.error],
-          antibot.status,
-        );
-      }
-      const validation = validatePerformer(values);
-      if (!validation.ok) {
-        return performerFormResponse(options, values, validation.errors, 422);
-      }
+  for (const kind of ["host", "performer"] as const) {
+    const path = kind === "host" ? HOST_SIGNUP_PATH : PERFORMER_SIGNUP_PATH;
 
-      try {
-        options.core.seasons.createPerformerSignup(validation.input);
-      } catch (error) {
-        return persistenceRefusal(options, "performer", values, error);
-      }
-      return htmlResponse(
-        renderConfirmationPage({
-          title: "Your performer signup is in.",
-          kind: "performer",
-          emailConfigured: options.core.ports.email.configured,
-          preview: renderPerformerPreview(values),
-        }),
-        201,
-      );
-    },
-  });
+    options.routes.register({
+      method: "GET",
+      path,
+      tier: "public",
+      handler: (context: Context) => {
+        const requested = context.req.query("season") ?? "";
+        const resolved = resolveSeason(options, requested);
+        return formResponse(
+          options,
+          challenge,
+          kind,
+          { season_id: [requested] },
+          resolved.ok ? [] : [resolved.error],
+          resolved.ok ? 200 : resolved.status,
+          resolved.ok ? resolved.season : null,
+        );
+      },
+    });
+
+    options.routes.register({
+      method: "POST",
+      path,
+      tier: "public",
+      handler: async (context: Context) => {
+        const read = await readSignupValues(context);
+        if (!read.ok) {
+          return formResponse(
+            options,
+            challenge,
+            kind,
+            read.values,
+            [read.error],
+            read.status,
+            null,
+          );
+        }
+        const values = read.values;
+
+        // 1. Volume first, and for EVERY submission. An external provider caps
+        //    token reuse, not request rate, so gating this behind the
+        //    unconfigured branch would leave a configured deployment uncapped.
+        const capped = applyRateLimit(options, unconfiguredGuard, context);
+        if (capped) {
+          return formResponse(
+            options,
+            challenge,
+            kind,
+            values,
+            [capped.error],
+            capped.status,
+            null,
+          );
+        }
+
+        const resolved = resolveSeason(
+          options,
+          firstValue(values, "season_id"),
+        );
+        if (!resolved.ok) {
+          return formResponse(
+            options,
+            challenge,
+            kind,
+            values,
+            [resolved.error],
+            resolved.status,
+            null,
+          );
+        }
+        const season = resolved.season;
+
+        // 2. Validate before the challenge is spent. A single-use token claimed
+        //    ahead of validation turns "fix the field and resubmit" into a
+        //    deterministic replay refusal, which is the opposite of the promise
+        //    that a rejected form keeps every answer and can be retried.
+        const validation =
+          kind === "host"
+            ? validateHost(values, season)
+            : validatePerformer(values, season);
+        if (!validation.ok) {
+          return formResponse(
+            options,
+            challenge,
+            kind,
+            values,
+            validation.errors,
+            422,
+            season,
+          );
+        }
+
+        const antibot = await checkAntibot(
+          options,
+          unconfiguredGuard,
+          context,
+          values,
+        );
+        if (!antibot.passed) {
+          // The token this page carried is spent, whatever the outcome. Re-render
+          // without it so the widget mints a fresh one instead of replaying.
+          const retryValues = withoutChallengeToken(values);
+          return formResponse(
+            options,
+            challenge,
+            kind,
+            retryValues,
+            [antibot.error],
+            antibot.status,
+            season,
+          );
+        }
+
+        try {
+          if (validation.kind === "host") {
+            options.core.seasons.createHostSignup(validation.input);
+          } else {
+            options.core.seasons.createPerformerSignup(validation.input);
+          }
+        } catch (error) {
+          return persistenceRefusal(
+            options,
+            challenge,
+            kind,
+            values,
+            season,
+            error,
+          );
+        }
+
+        return htmlResponse(
+          renderConfirmationPage({
+            title:
+              kind === "host"
+                ? "Your porch signup is in."
+                : "Your performer signup is in.",
+            kind,
+            emailConfigured: options.core.ports.email.configured,
+            preview:
+              kind === "host"
+                ? renderHostPreview(values)
+                : renderPerformerPreview(values),
+            submission:
+              kind === "host"
+                ? renderHostSubmission(values)
+                : renderPerformerSubmission(values, season.timezone),
+          }),
+          201,
+          challenge,
+        );
+      },
+    });
+  }
 }
 
-async function readSignupValues(context: Context): Promise<SignupValues> {
-  const form = await context.req.formData();
-  const values: Record<string, string[]> = {};
+// ---------------------------------------------------------------------------
+// Request reading
+// ---------------------------------------------------------------------------
+
+type ReadResult =
+  | { readonly ok: true; readonly values: SignupValues }
+  | {
+      readonly ok: false;
+      readonly values: SignupValues;
+      readonly error: SignupError;
+      readonly status: SignupStatus;
+    };
+
+async function readSignupValues(context: Context): Promise<ReadResult> {
+  const mediaType = (context.req.header("content-type") ?? "")
+    .split(";", 1)[0]
+    ?.trim()
+    .toLowerCase();
+  // The central registry also admits JSON, because organizer routes will want
+  // it. These two are form-only: accepting JSON here means formData() throws
+  // and the participant gets a 500 instead of an answer.
+  if (
+    mediaType !== "application/x-www-form-urlencoded" &&
+    mediaType !== "multipart/form-data"
+  ) {
+    return {
+      ok: false,
+      values: {},
+      status: 415,
+      error: {
+        field: "signup-form",
+        label: "Submission",
+        message: "Send this form as a normal form submission.",
+      },
+    };
+  }
+
+  let form: FormData;
+  try {
+    form = await context.req.formData();
+  } catch {
+    return {
+      ok: false,
+      values: {},
+      status: 400,
+      error: {
+        field: "signup-form",
+        label: "Submission",
+        message: "That submission could not be read. Please try again.",
+      },
+    };
+  }
+
+  // Null-prototype: on a plain object `values["__proto__"]` resolves to
+  // Object.prototype, `??=` declines to assign, and `.push` throws a public 500.
+  const values: Record<string, string[]> = Object.create(null) as Record<
+    string,
+    string[]
+  >;
   for (const [name, value] of form) {
-    if (typeof value !== "string") continue;
+    if (typeof value !== "string") {
+      // A file part where text belongs used to be dropped silently, so the
+      // signup could succeed with the field simply missing.
+      return {
+        ok: false,
+        values,
+        status: 422,
+        error: {
+          field: name,
+          label: "Submission",
+          message: "That field must be text, not a file.",
+        },
+      };
+    }
     (values[name] ??= []).push(value);
   }
-  return values;
+
+  for (const field of SINGLE_VALUE_FIELDS) {
+    if ((values[field]?.length ?? 0) > 1) {
+      return {
+        ok: false,
+        values: without(values, field),
+        status: 422,
+        error: {
+          field,
+          label: "Submission",
+          message: "That answer arrived more than once. Send it only once.",
+        },
+      };
+    }
+  }
+
+  for (const [field, submitted] of Object.entries(values)) {
+    const limit = MAX_FIELD_LENGTH[field] ?? DEFAULT_MAX_FIELD_LENGTH;
+    if (submitted.some((entry) => entry.length > limit)) {
+      return {
+        ok: false,
+        // The over-limit value is deliberately not echoed back into the page.
+        values: without(values, field),
+        status: 422,
+        error: {
+          field,
+          label: "Submission",
+          message: `Shorten this answer to ${limit} characters or fewer.`,
+        },
+      };
+    }
+  }
+
+  const pairs = Math.max(
+    values.availability_start?.length ?? 0,
+    values.availability_end?.length ?? 0,
+  );
+  if (pairs > MAX_AVAILABILITY_PAIRS) {
+    return {
+      ok: false,
+      values: without(
+        without(values, "availability_start"),
+        "availability_end",
+      ),
+      status: 422,
+      error: {
+        field: "availability_start",
+        label: "Available time windows",
+        message: `Send at most ${MAX_AVAILABILITY_PAIRS} availability windows.`,
+      },
+    };
+  }
+
+  return { ok: true, values };
 }
 
-function validateHost(
-  values: SignupValues,
-):
-  | { readonly ok: true; readonly input: HostSignupInput }
-  | { readonly ok: false; readonly errors: readonly SignupError[] } {
+function without(values: SignupValues, field: string): SignupValues {
+  const copy: Record<string, readonly string[]> = Object.create(null) as Record<
+    string,
+    readonly string[]
+  >;
+  for (const [name, entry] of Object.entries(values)) {
+    if (name !== field) copy[name] = entry;
+  }
+  return copy;
+}
+
+function withoutChallengeToken(values: SignupValues): SignupValues {
+  return without(values, "antibot_token");
+}
+
+// ---------------------------------------------------------------------------
+// Season
+// ---------------------------------------------------------------------------
+
+type SeasonResolution =
+  | { readonly ok: true; readonly season: Season }
+  | {
+      readonly ok: false;
+      readonly error: SignupError;
+      readonly status: SignupStatus;
+    };
+
+function resolveSeason(
+  options: SignupRouteOptions,
+  raw: string,
+): SeasonResolution {
+  const id = Number(raw);
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    return {
+      ok: false,
+      status: 400,
+      error: seasonError("Choose an open Porchfest season before signing up."),
+    };
+  }
+
+  let season: Season;
+  try {
+    season = options.core.seasons.getSeason(id);
+  } catch {
+    return {
+      ok: false,
+      status: 400,
+      error: seasonError("That Porchfest season could not be found."),
+    };
+  }
+
+  // Checked here so a closed season never renders a long, hopeful form. The
+  // authoritative race-safe check still runs inside the creation transaction.
+  if (!isSeasonActionLegal(season.state, "signup")) {
+    return {
+      ok: false,
+      status: 409,
+      error: seasonError("Signups are not open for that Porchfest season."),
+    };
+  }
+
+  return { ok: true, season };
+}
+
+function seasonError(message: string): SignupError {
+  return { field: "signup-form", label: "Porchfest season", message };
+}
+
+// ---------------------------------------------------------------------------
+// Validation
+// ---------------------------------------------------------------------------
+
+type HostValidation =
+  | {
+      readonly ok: true;
+      readonly kind: "host";
+      readonly input: HostSignupInput;
+    }
+  | { readonly ok: false; readonly errors: readonly SignupError[] };
+type PerformerValidation =
+  | {
+      readonly ok: true;
+      readonly kind: "performer";
+      readonly input: PerformerSignupInput;
+    }
+  | { readonly ok: false; readonly errors: readonly SignupError[] };
+
+function validateHost(values: SignupValues, season: Season): HostValidation {
   const errors: SignupError[] = [];
-  const seasonId = parseSeasonId(values, errors);
   const contact = validateContact(values, errors);
   const title = required(
     values,
@@ -267,8 +564,9 @@ function validateHost(
   if (errors.length > 0) return { ok: false, errors };
   return {
     ok: true,
+    kind: "host",
     input: {
-      seasonId,
+      seasonId: season.id,
       contact,
       venue: {
         title,
@@ -287,11 +585,9 @@ function validateHost(
 
 function validatePerformer(
   values: SignupValues,
-):
-  | { readonly ok: true; readonly input: PerformerSignupInput }
-  | { readonly ok: false; readonly errors: readonly SignupError[] } {
+  season: Season,
+): PerformerValidation {
   const errors: SignupError[] = [];
-  const seasonId = parseSeasonId(values, errors);
   const contact = validateContact(values, errors);
   const name = required(
     values,
@@ -329,12 +625,13 @@ function validatePerformer(
     "Lend gear",
     errors,
   );
-  const availabilities = parseAvailabilities(values, errors);
+  const availabilities = parseAvailabilities(values, season, errors);
   if (errors.length > 0) return { ok: false, errors };
   return {
     ok: true,
+    kind: "performer",
     input: {
-      seasonId,
+      seasonId: season.id,
       contact,
       act: {
         name,
@@ -345,6 +642,7 @@ function validatePerformer(
         links,
         housePreference: optional(values, "house_preference"),
         canLendGear,
+        notes: optional(values, "performer_notes"),
       },
       availabilities,
     },
@@ -374,26 +672,6 @@ function validateContact(values: SignupValues, errors: SignupError[]) {
     });
   }
   return { name, email, phone: optional(values, "contact_phone") };
-}
-
-function parseSeasonId(values: SignupValues, errors: SignupError[]): number {
-  const raw = firstValue(values, "season_id");
-  if (!validSeasonId(raw)) {
-    errors.push(
-      seasonError("Choose an open Porchfest season before signing up."),
-    );
-    return 0;
-  }
-  return Number(raw);
-}
-
-function validSeasonId(raw: string): boolean {
-  const value = Number(raw);
-  return Number.isSafeInteger(value) && value > 0;
-}
-
-function seasonError(message: string): SignupError {
-  return { field: "signup-form", label: "Porchfest season", message };
 }
 
 function required(
@@ -450,7 +728,8 @@ function enumSet<const Values extends readonly string[]>(
 }
 
 function parseDuration(values: SignupValues, errors: SignupError[]): number {
-  const value = Number(firstValue(values, "duration_minutes"));
+  const raw = firstValue(values, "duration_minutes").trim();
+  const value = raw === "" ? Number.NaN : Number(raw);
   if (!Number.isSafeInteger(value) || value < 5 || value > 240) {
     errors.push({
       field: "duration_minutes",
@@ -484,47 +763,87 @@ function validateLinks(links: string, errors: SignupError[]): void {
 
 function parseAvailabilities(
   values: SignupValues,
+  season: Season,
   errors: SignupError[],
 ): PerformerSignupInput["availabilities"] {
   const starts = values.availability_start ?? [];
   const ends = values.availability_end ?? [];
   const windows: { startsAt: Date; endsAt: Date }[] = [];
+  const seen = new Set<string>();
   const count = Math.max(starts.length, ends.length);
+  const availabilityError = (message: string): void => {
+    errors.push({
+      field: "availability_start",
+      label: "Available time windows",
+      message,
+    });
+  };
+
   for (let index = 0; index < count; index += 1) {
     const startValue = starts[index]?.trim() ?? "";
     const endValue = ends[index]?.trim() ?? "";
     if (!startValue && !endValue) continue;
-    const startsAt = parseLocalDateTime(startValue);
-    const endsAt = parseLocalDateTime(endValue);
+
+    // The browser sends a bare wall clock with no offset. The season's timezone
+    // is what turns it into the instant the performer actually meant.
+    const startsAt = zonedWallClockToUtc(startValue, season.timezone);
+    const endsAt = zonedWallClockToUtc(endValue, season.timezone);
     if (!startsAt || !endsAt || endsAt <= startsAt) {
-      errors.push({
-        field: "availability_start",
-        label: "Available time windows",
-        message: "Give each availability window a start and a later end time.",
-      });
+      availabilityError(
+        "Give each availability window a real start and a later end time.",
+      );
       return [];
     }
+
+    const key = `${startsAt.valueOf()}-${endsAt.valueOf()}`;
+    if (seen.has(key)) {
+      // The database refuses duplicates too, but that arrives as a storage
+      // failure and tells the participant to retry something that can never work.
+      availabilityError(
+        "Two availability windows are identical. Remove or change one.",
+      );
+      return [];
+    }
+    seen.add(key);
     windows.push({ startsAt, endsAt });
   }
+
   if (windows.length === 0) {
-    errors.push({
-      field: "availability_start",
-      label: "Available time windows",
-      message: "Add at least one time window when your whole act can perform.",
-    });
+    availabilityError(
+      "Add at least one time window when your whole act can perform.",
+    );
   }
   return windows;
 }
 
-function parseLocalDateTime(value: string): Date | null {
-  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)) return null;
-  const date = new Date(`${value}:00.000Z`);
-  return Number.isNaN(date.valueOf()) ? null : date;
+// ---------------------------------------------------------------------------
+// Anti-bot
+// ---------------------------------------------------------------------------
+
+function applyRateLimit(
+  options: SignupRouteOptions,
+  guard: UnconfiguredAntibotGuard,
+  context: Context,
+): { readonly error: SignupError; readonly status: SignupStatus } | null {
+  const { decision } = guard.consumeAttempt({
+    socketPeerAddress: options.resolveSocketPeerAddress(context),
+    forwardedFor: context.req.header("x-forwarded-for"),
+  });
+  if (decision.allowed) return null;
+  return {
+    status: 429,
+    error: {
+      field: "signup-form",
+      label: "Verification",
+      message:
+        "Too many signup attempts arrived from this address. Wait a minute, then try again.",
+    },
+  };
 }
 
 async function checkAntibot(
   options: SignupRouteOptions,
-  unconfiguredGuard: UnconfiguredAntibotGuard,
+  guard: UnconfiguredAntibotGuard,
   context: Context,
   values: SignupValues,
 ): Promise<
@@ -535,13 +854,11 @@ async function checkAntibot(
       readonly status: SignupStatus;
     }
 > {
-  const socketPeerAddress = options.resolveSocketPeerAddress(context);
-  const forwardedFor = context.req.header("x-forwarded-for");
-  const ipAddress = resolveClientIp({
-    socketPeerAddress,
-    forwardedFor,
-    trustedProxyHops: options.trustedProxyHops,
+  const ipAddress = guard.resolveAddress({
+    socketPeerAddress: options.resolveSocketPeerAddress(context),
+    forwardedFor: context.req.header("x-forwarded-for"),
   });
+
   let result: AntibotResult;
   try {
     result = await options.core.ports.antibot.verify({
@@ -549,38 +866,26 @@ async function checkAntibot(
       ipAddress,
     });
   } catch {
-    return {
-      passed: false,
-      status: 503,
-      error: {
-        field: "antibot_token",
-        label: "Verification",
-        message:
-          "Verification is unavailable right now. Your answers are still here; try again in a moment.",
-      },
-    };
+    return unavailable();
   }
 
   switch (result.status) {
     case "passed":
       return { passed: true };
     case "not-configured": {
-      const fallback = unconfiguredGuard.check({
-        socketPeerAddress,
-        forwardedFor,
-        honeypot: firstValue(values, "website"),
-      });
-      if (fallback.status === "passed") return { passed: true };
+      // The per-IP cap already ran for every submission; only the honeypot is
+      // left, and consuming a second attempt here would halve the real limit.
+      if (guard.checkHoneypot(firstValue(values, "website"))) {
+        return { passed: true };
+      }
       return {
         passed: false,
-        status: fallback.code === "rate-limited" ? 429 : 400,
+        status: 400,
         error: {
           field: "signup-form",
           label: "Verification",
           message:
-            fallback.code === "rate-limited"
-              ? "Too many signup attempts arrived from this address. Wait a minute, then try again."
-              : "Verification could not accept this signup. Clear the website field and try again.",
+            "Verification could not accept this signup. Clear the website field and try again.",
         },
       };
     }
@@ -591,33 +896,48 @@ async function checkAntibot(
         error: {
           field: "antibot_token",
           label: "Verification",
-          message: "Complete verification again before sending this signup.",
+          message:
+            "That verification could not be accepted. Complete the check again — your answers are still here.",
         },
       };
     case "unavailable":
-      return {
-        passed: false,
-        status: 503,
-        error: {
-          field: "antibot_token",
-          label: "Verification",
-          message:
-            "Verification is unavailable right now. Your answers are still here; try again in a moment.",
-        },
-      };
+      return unavailable();
     default:
       return assertNever(result);
   }
+}
+
+function unavailable(): {
+  readonly passed: false;
+  readonly error: SignupError;
+  readonly status: SignupStatus;
+} {
+  return {
+    passed: false,
+    status: 503,
+    error: {
+      field: "antibot_token",
+      label: "Verification",
+      message:
+        "Verification is unavailable right now. Your answers are still here; try again in a moment.",
+    },
+  };
 }
 
 function assertNever(value: never): never {
   throw new TypeError(`Unknown anti-bot result: ${String(value)}`);
 }
 
+// ---------------------------------------------------------------------------
+// Responses
+// ---------------------------------------------------------------------------
+
 function persistenceRefusal(
   options: SignupRouteOptions,
+  challenge: AntibotClientChallenge | null,
   kind: SignupKind,
   values: SignupValues,
+  season: Season | null,
   error: unknown,
 ): Response {
   const lifecycle =
@@ -629,58 +949,78 @@ function persistenceRefusal(
       ? "Signups are not open for that Porchfest season. Your answers are still here."
       : "The signup could not be saved. Your answers are still here; try again.",
   };
-  const status: SignupStatus = lifecycle ? 409 : 503;
-  return kind === "host"
-    ? hostFormResponse(options, values, [formError], status)
-    : performerFormResponse(options, values, [formError], status);
-}
-
-function hostFormResponse(
-  options: SignupRouteOptions,
-  values: SignupValues,
-  errors: readonly SignupError[],
-  status: SignupStatus,
-): Response {
-  return htmlResponse(
-    renderHostForm({
-      seasonId: firstValue(values, "season_id"),
-      csrfToken: options.csrfTokenFor(HOST_SIGNUP_PATH),
-      values,
-      errors,
-      challengeConfigured: options.core.ports.antibot.configured,
-    }),
-    status,
+  return formResponse(
+    options,
+    challenge,
+    kind,
+    values,
+    [formError],
+    lifecycle ? 409 : 503,
+    season,
   );
 }
 
-function performerFormResponse(
+function formResponse(
   options: SignupRouteOptions,
+  challenge: AntibotClientChallenge | null,
+  kind: SignupKind,
   values: SignupValues,
   errors: readonly SignupError[],
   status: SignupStatus,
+  season: Season | null,
 ): Response {
+  const path = kind === "host" ? HOST_SIGNUP_PATH : PERFORMER_SIGNUP_PATH;
+  const render = kind === "host" ? renderHostForm : renderPerformerForm;
   return htmlResponse(
-    renderPerformerForm({
+    render({
       seasonId: firstValue(values, "season_id"),
-      csrfToken: options.csrfTokenFor(PERFORMER_SIGNUP_PATH),
+      csrfToken: options.csrfTokenFor(path),
       values,
       errors,
-      challengeConfigured: options.core.ports.antibot.configured,
+      challenge,
+      timezone: season?.timezone ?? null,
     }),
     status,
+    challenge,
   );
 }
 
-function htmlResponse(html: string, status: SignupStatus): Response {
+function htmlResponse(
+  html: string,
+  status: SignupStatus,
+  challenge: AntibotClientChallenge | null,
+): Response {
   return new Response(html, {
     status,
     headers: {
-      "cache-control": "no-store",
-      "content-security-policy":
-        "default-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+      // KTD8: participant responses echo back what the participant typed.
+      "cache-control": "no-store, private",
+      "content-security-policy": contentSecurityPolicy(challenge),
       "content-type": "text/html; charset=UTF-8",
       "referrer-policy": "strict-origin-when-cross-origin",
       "x-content-type-options": "nosniff",
     },
   });
+}
+
+/**
+ * Self-only, widened by exactly what the configured challenge asks for and
+ * nothing else. An unconfigured deployment keeps the strict policy; the adapter
+ * names its own origins, so `web` never has to know a provider's domain.
+ */
+function contentSecurityPolicy(
+  challenge: AntibotClientChallenge | null,
+): string {
+  const join = (extra: readonly string[]): string =>
+    ["'self'", ...extra].join(" ");
+  const csp = challenge?.contentSecurityPolicy;
+  return [
+    `default-src 'self'`,
+    `script-src ${join(csp?.scriptSrc ?? [])}`,
+    `frame-src ${join(csp?.frameSrc ?? [])}`,
+    `connect-src ${join(csp?.connectSrc ?? [])}`,
+    `base-uri 'none'`,
+    `form-action 'self'`,
+    `frame-ancestors 'none'`,
+  ].join("; ");
 }

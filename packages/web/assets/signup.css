@@ -358,6 +358,75 @@ a:focus-visible,
   font-size: 1.25rem;
 }
 
+/* Confirmation read-back. The public/private split is the point of this section,
+   so the two groups are visually distinct rather than one long undifferentiated
+   list: a participant should be able to tell at a glance which answers will be
+   on the map before the season opens, not after. */
+.submission {
+  margin-top: 2.5rem;
+}
+
+.submission > h2 {
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+  margin-bottom: 1rem;
+}
+
+.submission-group {
+  border-left: 3px solid var(--color-border);
+  padding: 0.25rem 0 0.25rem 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.submission-public {
+  border-left-color: var(--color-accent);
+}
+
+.submission-private {
+  border-left-color: var(--color-success);
+}
+
+.submission-group > h3 {
+  font-family: var(--font-display);
+  font-size: 1rem;
+  margin: 0 0 0.25rem;
+}
+
+.submission-list {
+  display: grid;
+  gap: 0.5rem 1rem;
+  margin: 0.75rem 0 0;
+}
+
+.submission-row {
+  display: grid;
+  gap: 0.125rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.submission-row:last-child {
+  border-bottom: 0;
+}
+
+.submission-row dt {
+  color: var(--color-text-secondary);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.submission-row dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The challenge widget sits in the normal field rhythm rather than looking
+   bolted on, and reserves height so the form does not jump when it mounts. */
+.challenge-field {
+  min-height: 5.5rem;
+}
+
 @media (min-width: 56rem) {
   .signup-layout {
     grid-template-columns: minmax(0, 34rem) minmax(16rem, 22rem);
@@ -372,6 +441,12 @@ a:focus-visible,
   .availability-row {
     grid-template-columns: 1fr 1fr;
     gap: 0.75rem;
+  }
+
+  .submission-row {
+    grid-template-columns: minmax(10rem, 14rem) 1fr;
+    gap: 1rem;
+    align-items: baseline;
   }
 }
 

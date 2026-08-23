@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type {
+  AntibotClientChallenge,
   AntibotPort,
   AntibotRequest,
   AntibotResult,
@@ -7,6 +8,9 @@ import type {
 
 export const TURNSTILE_SITEVERIFY_URL =
   "https://challenges.cloudflare.com/turnstile/v0/siteverify";
+export const TURNSTILE_SCRIPT_URL =
+  "https://challenges.cloudflare.com/turnstile/v0/api.js";
+export const TURNSTILE_ORIGIN = "https://challenges.cloudflare.com";
 export const DEFAULT_TURNSTILE_TIMEOUT_MS = 5_000;
 export const DEFAULT_TURNSTILE_REPLAY_TTL_MS = 5 * 60_000;
 
@@ -36,6 +40,12 @@ export class InMemorySingleUseTokenStore implements SingleUseTokenStore {
 
 export interface TurnstileAntibotAdapterOptions {
   readonly secretKey: string;
+  /**
+   * The public site key. It is rendered into the page by design; the secret key
+   * never is. Required, because a Turnstile widget cannot mount without it and a
+   * deployment that configured only the secret would render an unusable form.
+   */
+  readonly siteKey: string;
   readonly timeoutMs?: number;
   readonly replayTtlMs?: number;
   readonly replayStore?: SingleUseTokenStore;
@@ -53,6 +63,7 @@ type SiteverifyOutcome =
 export class TurnstileAntibotAdapter implements AntibotPort {
   readonly name = "turnstile";
   readonly configured = true;
+  readonly clientChallenge: AntibotClientChallenge;
   readonly #secretKey: string;
   readonly #timeoutMs: number;
   readonly #replayTtlMs: number;
@@ -65,8 +76,27 @@ export class TurnstileAntibotAdapter implements AntibotPort {
     if (options.secretKey.trim().length === 0) {
       throw new TypeError("Turnstile secretKey must not be empty.");
     }
+    if (options.siteKey.trim().length === 0) {
+      throw new TypeError("Turnstile siteKey must not be empty.");
+    }
 
     this.#secretKey = options.secretKey;
+    this.clientChallenge = Object.freeze({
+      scriptUrl: TURNSTILE_SCRIPT_URL,
+      mountTag: "div",
+      mountAttributes: Object.freeze({
+        class: "cf-turnstile",
+        "data-sitekey": options.siteKey.trim(),
+        "data-response-field-name": "antibot_token",
+      }),
+      responseFieldName: "antibot_token",
+      label: "Verification",
+      contentSecurityPolicy: Object.freeze({
+        scriptSrc: Object.freeze([TURNSTILE_ORIGIN]),
+        frameSrc: Object.freeze([TURNSTILE_ORIGIN]),
+        connectSrc: Object.freeze([TURNSTILE_ORIGIN]),
+      }),
+    }) as AntibotClientChallenge;
     this.#timeoutMs = options.timeoutMs ?? DEFAULT_TURNSTILE_TIMEOUT_MS;
     this.#replayTtlMs = options.replayTtlMs ?? DEFAULT_TURNSTILE_REPLAY_TTL_MS;
     this.#fetcher = options.fetcher ?? fetch;

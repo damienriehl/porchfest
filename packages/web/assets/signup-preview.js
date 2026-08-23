@@ -1,5 +1,14 @@
 /* global document */
 (function () {
+  // Move focus to the error summary after a refused submission. role="alert" is
+  // announced inconsistently on a full page load, so without this a screen-reader
+  // user is dropped at the top of a long form with no signal it was rejected.
+  // Guarded separately from the preview so a missing preview cannot disable it.
+  var summary = document.querySelector(".error-summary");
+  if (summary && typeof summary.focus === "function") summary.focus();
+})();
+
+(function () {
   var preview = document.querySelector("[data-signup-preview]");
   if (!preview) return;
   var form = document.querySelector("[data-signup-form]");

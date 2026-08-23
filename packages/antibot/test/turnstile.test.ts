@@ -19,6 +19,7 @@ describe("TurnstileAntibotAdapter", () => {
       () =>
         new TurnstileAntibotAdapter({
           secretKey: "test-secret",
+          siteKey: "test-site-key",
           fetcher: async () => jsonResponse({ success: false }),
         }),
     );
@@ -30,6 +31,7 @@ describe("TurnstileAntibotAdapter", () => {
     );
     const adapter = new TurnstileAntibotAdapter({
       secretKey: "test-secret",
+      siteKey: "test-site-key",
       fetcher,
       createId: () => "server-generated-id",
     });
@@ -56,6 +58,7 @@ describe("TurnstileAntibotAdapter", () => {
   it("returns failed when Turnstile rejects a challenge", async () => {
     const adapter = new TurnstileAntibotAdapter({
       secretKey: "test-secret",
+      siteKey: "test-site-key",
       fetcher: async () =>
         jsonResponse({
           success: false,
@@ -75,6 +78,7 @@ describe("TurnstileAntibotAdapter", () => {
     const fetcher = vi.fn<typeof fetch>();
     const adapter = new TurnstileAntibotAdapter({
       secretKey: "test-secret",
+      siteKey: "test-site-key",
       fetcher,
     });
 
@@ -95,6 +99,7 @@ describe("TurnstileAntibotAdapter", () => {
   ])("maps a %s to unavailable", async (_label, fetcher) => {
     const adapter = new TurnstileAntibotAdapter({
       secretKey: "test-secret",
+      siteKey: "test-site-key",
       fetcher,
     });
 
@@ -114,6 +119,7 @@ describe("TurnstileAntibotAdapter", () => {
     try {
       const adapter = new TurnstileAntibotAdapter({
         secretKey: "test-secret",
+        siteKey: "test-site-key",
         timeoutMs: 50,
         fetcher: () => new Promise(() => undefined),
       });
@@ -149,6 +155,7 @@ describe("TurnstileAntibotAdapter", () => {
     );
     const adapter = new TurnstileAntibotAdapter({
       secretKey: "test-secret",
+      siteKey: "test-site-key",
       fetcher,
       replayStore,
     });
@@ -180,6 +187,7 @@ describe("TurnstileAntibotAdapter", () => {
     });
     const adapter = new TurnstileAntibotAdapter({
       secretKey: "test-secret",
+      siteKey: "test-site-key",
       fetcher,
       replayStore: new InMemorySingleUseTokenStore(),
     });

@@ -96,6 +96,7 @@ export class PerIpRateLimiter {
   consume(ipAddress: string): RateLimitDecision {
     const now = this.#now();
     const cutoff = now - this.#windowMs;
+    this.#evictExpired(cutoff);
     const attempts = (this.#attempts.get(ipAddress) ?? []).filter(
       (attemptedAt) => attemptedAt > cutoff,
     );
@@ -116,6 +117,26 @@ export class PerIpRateLimiter {
       remaining: this.#limit - attempts.length,
       retryAfterMs: 0,
     };
+  }
+
+  /** Buckets currently held. Exposed so a test can prove eviction happens. */
+  get trackedAddresses(): number {
+    return this.#attempts.size;
+  }
+
+  // Without this an address that submits once and never returns keeps its bucket
+  // for the life of the process: a slow leak that a long-running deployment pays
+  // for. Buckets are only ever pruned by a later call, so the sweep rides along
+  // with one rather than needing a timer.
+  #evictExpired(cutoff: number): void {
+    for (const [address, attempts] of this.#attempts) {
+      if (
+        attempts.length === 0 ||
+        (attempts[attempts.length - 1] ?? 0) <= cutoff
+      ) {
+        this.#attempts.delete(address);
+      }
+    }
   }
 }
 
@@ -153,6 +174,45 @@ export class UnconfiguredAntibotGuard {
     assertTrustedProxyHops(options.trustedProxyHops);
     this.#trustedProxyHops = options.trustedProxyHops;
     this.#rateLimiter = new PerIpRateLimiter(options);
+  }
+
+  /** The client address this guard would key on, without consuming an attempt. */
+  resolveAddress(
+    request: Pick<
+      UnconfiguredAntibotRequest,
+      "socketPeerAddress" | "forwardedFor"
+    >,
+  ): string {
+    return resolveClientIp({
+      socketPeerAddress: request.socketPeerAddress,
+      forwardedFor: request.forwardedFor,
+      trustedProxyHops: this.#trustedProxyHops,
+    });
+  }
+
+  /**
+   * Consume one per-IP attempt. Callers use this for EVERY submission, including
+   * one an external provider will verify: the provider adapter caps token reuse,
+   * not request volume, so without this a configured deployment has no volume
+   * limit at all.
+   */
+  consumeAttempt(
+    request: Pick<
+      UnconfiguredAntibotRequest,
+      "socketPeerAddress" | "forwardedFor"
+    >,
+  ): {
+    readonly ipAddress: string;
+    readonly decision: RateLimitDecision;
+  } {
+    const ipAddress = this.resolveAddress(request);
+    return { ipAddress, decision: this.#rateLimiter.consume(ipAddress) };
+  }
+
+  /** Honeypot only. Separated so a caller that already spent an attempt via
+   *  consumeAttempt() does not spend a second one here. */
+  checkHoneypot(honeypot: string | null | undefined): boolean {
+    return (honeypot ?? "").trim().length === 0;
   }
 
   check(request: UnconfiguredAntibotRequest): UnconfiguredAntibotResult {

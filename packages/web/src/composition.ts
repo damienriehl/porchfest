@@ -1,4 +1,7 @@
-import { NullAntibotAdapter } from "@porchfest/antibot";
+import {
+  NullAntibotAdapter,
+  TurnstileAntibotAdapter,
+} from "@porchfest/antibot";
 import type { UnconfiguredAntibotGuardOptions } from "@porchfest/antibot";
 import {
   CORE_DATABASE_FILENAME,
@@ -38,12 +41,39 @@ export interface PorchfestRuntime {
 
 export function createAdapterSet(
   overrides: Partial<AdapterPorts> = {},
+  env: Readonly<Record<string, string | undefined>> = {},
 ): AdapterPorts {
   return Object.freeze({
     email: overrides.email ?? new NullEmailAdapter(),
-    antibot: overrides.antibot ?? new NullAntibotAdapter(),
+    antibot: overrides.antibot ?? createAntibotAdapter(env),
     geo: overrides.geo ?? new NullGeoAdapter(),
   });
+}
+
+/**
+ * Select the anti-bot adapter a deployment actually configured.
+ *
+ * Until this existed the adapter could only be reached by a test injecting it,
+ * so R3's "fails closed when configured" branch was unreachable in production
+ * and every real deployment silently ran the no-provider default.
+ *
+ * Both values are required together on purpose: the site key mounts the widget
+ * and the other verifies it, so configuring one alone yields a form nobody can
+ * submit. That is a startup refusal, not a silent downgrade — a deployment that
+ * believes it turned on protection must not quietly be running without it.
+ */
+function createAntibotAdapter(
+  env: Readonly<Record<string, string | undefined>>,
+): AdapterPorts["antibot"] {
+  const siteKey = env.PORCHFEST_TURNSTILE_SITE_KEY?.trim();
+  const secret = env.PORCHFEST_TURNSTILE_SECRET_KEY?.trim();
+  if (!siteKey && !secret) return new NullAntibotAdapter();
+  if (!siteKey || !secret) {
+    throw new TypeError(
+      "Turnstile needs both PORCHFEST_TURNSTILE_SITE_KEY and PORCHFEST_TURNSTILE_SECRET_KEY. Set both, or neither to run with the built-in rate limit and honeypot.",
+    );
+  }
+  return new TurnstileAntibotAdapter({ siteKey, secretKey: secret });
 }
 
 export async function createRuntime(
@@ -58,7 +88,7 @@ export async function createRuntime(
     dataDirectory,
     configuredSecret: configuredSecret || undefined,
   });
-  const adapters = createAdapterSet(options.adapterOverrides);
+  const adapters = createAdapterSet(options.adapterOverrides, env);
   const publicBaseUrl = parsePublicBaseUrl(env.PUBLIC_BASE_URL);
   const trustedProxyHops = parseTrustedProxyHops(
     env.PORCHFEST_TRUSTED_PROXY_HOPS,

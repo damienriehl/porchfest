@@ -1,4 +1,5 @@
 export type {
+  AntibotClientChallenge,
   AntibotPort,
   AntibotRequest,
   AntibotResult,
@@ -21,6 +22,8 @@ export {
   DEFAULT_TURNSTILE_REPLAY_TTL_MS,
   DEFAULT_TURNSTILE_TIMEOUT_MS,
   InMemorySingleUseTokenStore,
+  TURNSTILE_ORIGIN,
+  TURNSTILE_SCRIPT_URL,
   TURNSTILE_SITEVERIFY_URL,
   TurnstileAntibotAdapter,
   type SingleUseTokenStore,
@@ -32,6 +35,9 @@ import type { AntibotPort, AntibotRequest } from "@porchfest/core";
 export class NullAntibotAdapter implements AntibotPort {
   readonly name = "none";
   readonly configured = false;
+  // Nothing for the browser to complete: this adapter's protection is the
+  // server-side honeypot and per-IP cap.
+  readonly clientChallenge = null;
 
   async verify(_request: AntibotRequest) {
     return {

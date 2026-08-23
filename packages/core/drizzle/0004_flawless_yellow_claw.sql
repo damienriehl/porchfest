@@ -1,0 +1,1 @@
+ALTER TABLE `seasons` ADD `timezone` text DEFAULT 'UTC' NOT NULL;

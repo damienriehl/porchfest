@@ -1,7 +1,9 @@
+import type { AntibotClientChallenge } from "@porchfest/core";
 import {
   escapeHtml,
   firstValue,
   renderBooleanChoices,
+  renderChallenge,
   renderField,
   renderFieldError,
   renderHoneypot,
@@ -18,7 +20,8 @@ export function renderPerformerForm(options: {
   readonly csrfToken: string;
   readonly values?: SignupValues;
   readonly errors?: readonly SignupError[];
-  readonly challengeConfigured: boolean;
+  readonly challenge: AntibotClientChallenge | null;
+  readonly timezone?: string | null;
 }): string {
   const values = options.values ?? {};
   const errors = options.errors ?? [];
@@ -67,7 +70,11 @@ export function renderPerformerForm(options: {
       <div class="field ${availabilityError ? "has-error" : ""}" id="availability_start">
         <h3 class="field-heading">Available time windows <span aria-hidden="true">*</span></h3>
         ${renderFieldError("availability_start", availabilityError)}
-        <p class="help">Add every window when your whole act can perform. Leave unused rows blank.</p>
+        <p class="help">Add every window when your whole act can perform. Leave unused rows blank.${
+          options.timezone
+            ? ` Times are ${escapeHtml(options.timezone)}, the festival's local clock.`
+            : ""
+        }</p>
         ${availabilityRows}
       </div>
       ${renderTextarea({ id: "house_preference", label: "Porch or neighborhood preference", value: firstValue(values, "house_preference"), errors, help: "Name a host, area, accessibility need, or say that you have no preference." })}
@@ -75,9 +82,9 @@ export function renderPerformerForm(options: {
     </fieldset>
     <fieldset>
       <legend>Anything else</legend>
-      <p class="help">The organizers will follow up if they need details that do not fit above.</p>
+      ${renderTextarea({ id: "performer_notes", label: "Notes for the organizers", value: firstValue(values, "performer_notes"), errors, help: "Anything else that might be helpful?" })}
     </fieldset>
-    ${options.challengeConfigured ? renderField({ id: "antibot_token", label: "Verification response", value: firstValue(values, "antibot_token"), errors, required: true, help: "Complete the configured anti-bot check and provide its response." }) : ""}
+    ${renderChallenge(options.challenge, errors)}
     ${renderHoneypot()}
     <button class="primary-action" type="submit">Sign up this act</button>
   </form>`;
@@ -90,5 +97,6 @@ export function renderPerformerForm(options: {
     form,
     preview: renderPerformerPreview(values),
     errors,
+    challenge: options.challenge,
   });
 }

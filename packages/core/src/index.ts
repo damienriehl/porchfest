@@ -1,5 +1,6 @@
 export type {
   AdapterPorts,
+  AntibotClientChallenge,
   AntibotPort,
   AntibotRequest,
   AntibotResult,
@@ -19,6 +20,7 @@ export {
   venueAmenityValues,
   venueDrinkValues,
   venueGearValues,
+  type Season,
 } from "./storage/schema.js";
 export {
   createSeasonRepository,
@@ -42,6 +44,12 @@ export type {
   PerformerSignupInput,
   SignupContactInput,
 } from "./records.js";
+export {
+  isValidTimeZone,
+  parseWallClock,
+  zonedWallClockToUtc,
+  type WallClockParts,
+} from "./time.js";
 
 import type { AdapterPorts } from "./ports/index.js";
 import { createSeasonRepository } from "./season.js";

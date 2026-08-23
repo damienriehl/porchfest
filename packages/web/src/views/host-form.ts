@@ -1,3 +1,4 @@
+import type { AntibotClientChallenge } from "@porchfest/core";
 import {
   venueAmenityValues,
   venueDrinkValues,
@@ -9,6 +10,7 @@ import {
   escapeHtml,
   firstValue,
   renderBooleanChoices,
+  renderChallenge,
   renderCheckboxGroup,
   renderField,
   renderFieldError,
@@ -16,6 +18,7 @@ import {
   renderHostPreview,
   renderSignupPage,
   renderTextarea,
+  VENUE_CHOICE_LABELS,
   type SignupError,
   type SignupValues,
 } from "./signup-view.js";
@@ -25,30 +28,15 @@ type VenueChoice =
   | (typeof venueDrinkValues)[number]
   | (typeof venueAmenityValues)[number];
 
-const labels = {
-  pa: "PA system",
-  microphone: "Microphone",
-  microphone_stand: "Microphone stand",
-  instrument_amplifier: "Instrument amplifier",
-  drum_kit: "Drum kit",
-  keyboard: "Keyboard",
-  music_stand: "Music stand",
-  extension_cord: "Extension cord",
-  power_strip: "Power strip",
-  water: "Water",
-  non_alcoholic: "Non-alcoholic drinks",
-  beer: "Beer",
-  wine: "Wine",
-  seating: "Seating",
-  shade: "Shade",
-  restroom: "Restroom",
-  accessible_entry: "Accessible entry",
-  parking: "Parking",
-  other: "Other",
-} satisfies Record<VenueChoice, string>;
+const labels = VENUE_CHOICE_LABELS satisfies Record<string, string>;
 
 function choices(values: readonly VenueChoice[]) {
-  return values.map((value) => ({ value, label: labels[value] }));
+  // Every venue value has a label; falling back to the value keeps a future
+  // schema addition rendering as a readable control instead of an empty one.
+  return values.map((value) => ({
+    value,
+    label: labels[value] ?? value.replaceAll("_", " "),
+  }));
 }
 
 const gearChoices = choices(venueGearValues);
@@ -60,7 +48,8 @@ export function renderHostForm(options: {
   readonly csrfToken: string;
   readonly values?: SignupValues;
   readonly errors?: readonly SignupError[];
-  readonly challengeConfigured: boolean;
+  readonly challenge: AntibotClientChallenge | null;
+  readonly timezone?: string | null;
 }): string {
   const values = options.values ?? {};
   const errors = options.errors ?? [];
@@ -99,7 +88,7 @@ export function renderHostForm(options: {
       <legend>Anything else</legend>
       ${renderTextarea({ id: "notes", label: "Notes for the organizers", value: firstValue(values, "notes"), errors, help: "Share access details, neighbor considerations, or questions." })}
     </fieldset>
-    ${options.challengeConfigured ? renderField({ id: "antibot_token", label: "Verification response", value: firstValue(values, "antibot_token"), errors, required: true, help: "Complete the configured anti-bot check and provide its response." }) : ""}
+    ${renderChallenge(options.challenge, errors)}
     ${renderHoneypot()}
     <button class="primary-action" type="submit">Sign up this porch</button>
   </form>`;
@@ -112,5 +101,6 @@ export function renderHostForm(options: {
     form,
     preview: renderHostPreview(values),
     errors,
+    challenge: options.challenge,
   });
 }

@@ -97,6 +97,7 @@ export interface PerformerSignupInput {
     links: string;
     housePreference: string | null;
     canLendGear: boolean;
+    notes: string | null;
   };
   availabilities: readonly {
     startsAt: Date;
@@ -283,6 +284,7 @@ export function createRecordRepository(
         links: input.act.links,
         housePreference: input.act.housePreference,
         canLendGear: input.act.canLendGear,
+        notes: input.act.notes,
         reachViaContactId: contact.id,
         ...mutableValues(),
       })

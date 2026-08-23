@@ -9,6 +9,17 @@ services:
     environment:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
       PORCHFEST_SESSION_SECRET: ${PORCHFEST_SESSION_SECRET:-}
+      # Exactly one trusted hop: the caddy service below, and nothing else can
+      # reach the app port. Without this the app sees every request coming from
+      # Caddy's address, keys the whole internet to one per-IP bucket, and five
+      # submissions in a minute lock out every other neighbour on the block.
+      # This value is specific to THIS topology. A direct deployment with no
+      # proxy must leave it unset, or a spoofed forwarded header defeats the cap.
+      PORCHFEST_TRUSTED_PROXY_HOPS: ${PORCHFEST_TRUSTED_PROXY_HOPS:-1}
+      # Anti-bot is optional. Set BOTH to turn on the provider challenge; leaving
+      # both unset keeps the built-in per-IP limit and honeypot.
+      PORCHFEST_TURNSTILE_SITE_KEY: ${PORCHFEST_TURNSTILE_SITE_KEY:-}
+      PORCHFEST_TURNSTILE_SECRET_KEY: ${PORCHFEST_TURNSTILE_SECRET_KEY:-}
     volumes:
       - porchfest-data:/data
     expose:

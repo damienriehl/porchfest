@@ -229,6 +229,7 @@ describe("season domain", () => {
         links: "https://example.invalid/the-typed-columns",
         housePreference: "Near the park",
         canLendGear: true,
+        notes: null,
       },
       availabilities: [
         { startsAt: firstStartsAt, endsAt: firstEndsAt },
@@ -252,6 +253,7 @@ describe("season domain", () => {
       links: "https://example.invalid/the-typed-columns",
       housePreference: "Near the park",
       canLendGear: true,
+      notes: null,
       reachViaContactId: signup.contact.id,
       placeholder: false,
     });
@@ -307,6 +309,7 @@ describe("season domain", () => {
         links: "",
         housePreference: null,
         canLendGear: false,
+        notes: null,
       },
       availabilities: [],
     });
@@ -362,6 +365,7 @@ describe("season domain", () => {
             links: "",
             housePreference: null,
             canLendGear: false,
+            notes: null,
           },
           availabilities: [],
         }),
@@ -467,6 +471,7 @@ describe("season domain", () => {
           links: "https://example.invalid/atomic-act",
           housePreference: null,
           canLendGear: false,
+          notes: null,
         },
         availabilities: [
           {

@@ -333,6 +333,7 @@ describe("public signup forms", () => {
       await new Promise<Response>(() => undefined);
     const antibot = new TurnstileAntibotAdapter({
       secretKey: "synthetic-secret",
+      siteKey: "test-site-key",
       timeoutMs: 1,
       fetcher: neverResponds,
     });
@@ -351,6 +352,7 @@ describe("public signup forms", () => {
   it("refuses a replayed configured challenge token on its second use", async () => {
     const antibot = new TurnstileAntibotAdapter({
       secretKey: "synthetic-secret",
+      siteKey: "test-site-key",
       fetcher: async () => Response.json({ success: true }),
     });
     const { runtime, seasonId } = await makeRuntime({ antibot });
