@@ -108,10 +108,34 @@ class TestNode {
   }
 
   appendChild(child) {
+    return this.insertBefore(child, null);
+  }
+
+  // The module under test positions the filter controls with
+  // parentNode.insertBefore, so this fake has to honour real insertion semantics:
+  // a null reference appends, and an already-attached node moves rather than
+  // duplicating. appendChild is the reference-less case of exactly this.
+  insertBefore(child, reference) {
+    // Validate before mutating, like the DOM pre-insert algorithm. Appending on a
+    // bad reference would let a production insertBefore that a browser rejects
+    // outright still produce a plausible tree here, so most of the suite would stay
+    // green while the real page rendered nothing but the error state.
+    const referenceIndex =
+      reference == null ? -1 : this.children.indexOf(reference);
+    if (reference != null && referenceIndex === -1) {
+      throw new Error("NotFoundError: reference is not a child of this node");
+    }
+    // "If referenceChild is node, set referenceChild to node's next sibling."
+    // Without this, inserting a node before itself relocates it to the end.
+    const target =
+      reference === child
+        ? this.children[referenceIndex + 1] || null
+        : reference;
+
     if (child.tagName === "#FRAGMENT") {
       child.children
         .slice()
-        .forEach((fragmentChild) => this.appendChild(fragmentChild));
+        .forEach((fragmentChild) => this.insertBefore(fragmentChild, target));
       child.children = [];
       return child;
     }
@@ -120,7 +144,9 @@ class TestNode {
       if (oldIndex !== -1) child.parentNode.children.splice(oldIndex, 1);
     }
     child.parentNode = this;
-    this.children.push(child);
+    const at = target == null ? -1 : this.children.indexOf(target);
+    if (at === -1) this.children.push(child);
+    else this.children.splice(at, 0, child);
     return child;
   }
 
@@ -976,10 +1002,10 @@ test("hour and genre filter changes each schedule a relayout", async () => {
   const run = await runScript({
     fetch: () => Promise.resolve(response({ venues })),
   });
-  const hourButton = run.nodes.fullbleed
+  const hourButton = run.nodes.mount
     .querySelector(".porchfest-hour-control")
     .querySelectorAll("button")[1];
-  const genreButton = run.nodes.fullbleed
+  const genreButton = run.nodes.mount
     .querySelector(".porchfest-genre-chips")
     .querySelectorAll("button")
     .find((button) => button.textContent === "Folk");
@@ -1005,9 +1031,7 @@ test("sort changes schedule a relayout after existing cards move", async () => {
       ),
   });
   const cardsBefore = run.nodes.list.children.slice();
-  const sortButton = run.nodes.fullbleed.querySelector(
-    ".porchfest-sort-button",
-  );
+  const sortButton = run.nodes.mount.querySelector(".porchfest-sort-button");
 
   sortButton.dispatchEvent({ type: "click" });
 
@@ -1093,6 +1117,58 @@ test("window resize relayout is debounced for 150ms", async () => {
   assert.ok(run.clearedTimers.length >= 2);
   run.timers.at(-1).callback();
   assert.equal(run.animationFrames.length, 1);
+});
+
+test("insertBefore matches real DOM semantics for the fake node tree", () => {
+  // A gap here does not surface as a harness failure: the module calls insertBefore
+  // inside init(), whose catch turns any throw into the generic error state.
+  const parent = new TestNode("div");
+  const a = new TestNode("a");
+  const b = new TestNode("b");
+  const c = new TestNode("c");
+  parent.appendChild(a);
+  parent.appendChild(c);
+
+  assert.equal(parent.insertBefore(b, c), b);
+  assert.deepEqual(parent.children, [a, b, c]);
+  assert.equal(b.parentNode, parent);
+
+  // a null reference appends, as in the real DOM
+  const d = new TestNode("d");
+  parent.insertBefore(d, null);
+  assert.deepEqual(parent.children, [a, b, c, d]);
+
+  // re-inserting an attached node moves it rather than duplicating it
+  parent.insertBefore(d, a);
+  assert.deepEqual(parent.children, [d, a, b, c]);
+  assert.equal(parent.children.filter((child) => child === d).length, 1);
+
+  // an existing parent releases the node
+  const other = new TestNode("section");
+  other.insertBefore(a, null);
+  assert.equal(a.parentNode, other);
+  assert.deepEqual(parent.children, [d, b, c]);
+
+  // inserting a node before itself is a no-op, not a move to the end
+  parent.insertBefore(d, d);
+  assert.deepEqual(parent.children, [d, b, c]);
+
+  // a reference that is not a child is rejected instead of silently appending
+  assert.throws(
+    () => parent.insertBefore(new TestNode("x"), other),
+    /NotFoundError/,
+  );
+
+  // a fragment inserted before a reference keeps its children's relative order
+  const fragment = new TestNode("#FRAGMENT");
+  const f1 = new TestNode("f1");
+  const f2 = new TestNode("f2");
+  fragment.appendChild(f1);
+  fragment.appendChild(f2);
+  parent.insertBefore(fragment, c);
+  assert.deepEqual(parent.children, [d, b, f1, f2, c]);
+  assert.deepEqual(fragment.children, []);
+  assert.equal(f1.parentNode, parent);
 });
 
 test("classList methods stay synchronized with className", () => {
@@ -1348,15 +1424,24 @@ test("a collapsed venue card still navigates to its marker without changing filt
 
 test("renders a permanent one-line hour control with exactly one active button", async () => {
   const run = await runScript();
-  const controls = run.nodes.fullbleed.querySelector(".porchfest-map-controls");
+  const controls = run.nodes.mount.querySelector(".porchfest-map-controls");
   const hourControl = controls.querySelector(".porchfest-hour-control");
   const buttons = hourControl.querySelectorAll("button");
 
-  assert.equal(controls.parentNode, run.nodes.fullbleed);
+  // The filters sit outside the full-bleed map block, reading as a header for the
+  // lineup they filter: DOM order is map -> filters -> lineup.
+  assert.equal(controls.parentNode, run.nodes.mount);
+  const mountOrder = run.nodes.mount.children;
+  // Pin the map block's index first: indexOf returns -1 when it is not a direct
+  // child, and -1 < any index, so the map-before-filters claim would pass vacuously.
+  assert.equal(mountOrder.indexOf(run.nodes.fullbleed), 0);
   assert.equal(
-    run.nodes.fullbleed.children.indexOf(controls) <
-      run.nodes.fullbleed.children.indexOf(run.nodes.mapElement),
+    mountOrder.indexOf(run.nodes.fullbleed) < mountOrder.indexOf(controls),
     true,
+  );
+  assert.equal(
+    mountOrder.indexOf(controls),
+    mountOrder.indexOf(run.nodes.listSection) - 1,
   );
   assert.deepEqual(
     buttons.map((button) => button.textContent),
@@ -1384,7 +1469,7 @@ test("hour buttons are accessible native buttons that update state and reapply t
   const run = await runScript({
     fetch: () => Promise.resolve(response({ venues })),
   });
-  const buttons = run.nodes.fullbleed
+  const buttons = run.nodes.mount
     .querySelector(".porchfest-hour-control")
     .querySelectorAll("button");
 
@@ -1471,7 +1556,7 @@ test("derives genre chips from loaded data and orders them by frequency then alp
   const run = await runScript({
     fetch: () => Promise.resolve(response({ venues })),
   });
-  const chips = run.nodes.fullbleed
+  const chips = run.nodes.mount
     .querySelector(".porchfest-genre-chips")
     .querySelectorAll("button");
 
@@ -1505,7 +1590,7 @@ test("genre disclosure uses the existing details pattern and All clears the genr
   const run = await runScript({
     fetch: () => Promise.resolve(response({ venues })),
   });
-  const facet = run.nodes.fullbleed.querySelector(".porchfest-genre-facet");
+  const facet = run.nodes.mount.querySelector(".porchfest-genre-facet");
   const summary = facet.querySelector("summary");
   const chips = facet
     .querySelector(".porchfest-genre-chips")
@@ -1559,9 +1644,7 @@ test("starts south-to-north and reverses the existing card nodes through one sor
   const run = await runScript({
     fetch: () => Promise.resolve(response({ venues })),
   });
-  const sortButton = run.nodes.fullbleed.querySelector(
-    ".porchfest-sort-button",
-  );
+  const sortButton = run.nodes.mount.querySelector(".porchfest-sort-button");
   const cardsBefore = run.nodes.list.children.slice();
 
   assert.equal(run.testApi.getViewState().sortDirection, "asc");
@@ -1614,12 +1697,10 @@ test("sorting preserves every venue match state and marker lookup by venue key",
   const run = await runScript({
     fetch: () => Promise.resolve(response({ venues })),
   });
-  const hourButtons = run.nodes.fullbleed
+  const hourButtons = run.nodes.mount
     .querySelector(".porchfest-hour-control")
     .querySelectorAll("button");
-  const sortButton = run.nodes.fullbleed.querySelector(
-    ".porchfest-sort-button",
-  );
+  const sortButton = run.nodes.mount.querySelector(".porchfest-sort-button");
   const lookup = run.testApi.getMarkersByVenueKey();
 
   hourButtons[1].dispatchEvent({ type: "click" });
@@ -1648,9 +1729,7 @@ test("sorting preserves every venue match state and marker lookup by venue key",
 
 test("sort button shares the accessible 44px chip treatment", async () => {
   const run = await runScript();
-  const sortButton = run.nodes.fullbleed.querySelector(
-    ".porchfest-sort-button",
-  );
+  const sortButton = run.nodes.mount.querySelector(".porchfest-sort-button");
 
   assert.equal(sortButton.classList.contains("porchfest-filter-chip"), true);
   assert.notEqual(sortButton.getAttribute("aria-label"), null);
@@ -1966,15 +2045,22 @@ test("a zero-match combination explains how to return to All without removing ve
   assert.equal(run.nodes.mapElement.hidden, false);
   assert.equal(run.nodes.listSection.hidden, false);
   assert.equal(run.nodes.status.parentNode, run.nodes.fullbleed);
-  assert.equal(
-    run.nodes.fullbleed.children.indexOf(run.nodes.status),
-    run.nodes.fullbleed.children.indexOf(
-      run.nodes.fullbleed.querySelector(".porchfest-map-controls"),
-    ) + 1,
-  );
+  // Assert the two blocks separately. Locating the controls inside the full-bleed
+  // block goes vacuous rather than failing, because indexOf(null) is -1.
+  assert.equal(run.nodes.fullbleed.children.indexOf(run.nodes.status), 0);
   assert.equal(
     run.nodes.fullbleed.children.indexOf(run.nodes.mapElement),
     run.nodes.fullbleed.children.indexOf(run.nodes.status) + 1,
+  );
+  const noMatchControls = run.nodes.mount.querySelector(
+    ".porchfest-map-controls",
+  );
+  assert.ok(noMatchControls, "expected the filter controls to be mounted");
+  // Same trap as above: pin the map block's index before doing arithmetic on it.
+  assert.equal(run.nodes.mount.children.indexOf(run.nodes.fullbleed), 0);
+  assert.equal(
+    run.nodes.mount.children.indexOf(noMatchControls),
+    run.nodes.mount.children.indexOf(run.nodes.fullbleed) + 1,
   );
   assertViewClasses(run.nodes.list.children[0], "collapsed");
   assertViewClasses(run.leaflet.records.markers[0].element, "dimmed");
@@ -2015,6 +2101,12 @@ test("applyView preserves the existing card node identity", async () => {
     throw new Error("applyView must not create elements");
   };
   run.nodes.list.appendChild = () => {
+    throw new Error("applyView must not detach or re-append cards");
+  };
+  // appendChild delegates to insertBefore, so spying only on appendChild would let a
+  // direct list.insertBefore(card, ref) past the guard -- including the no-op form
+  // that detaches and re-attaches every card while leaving children identical.
+  run.nodes.list.insertBefore = () => {
     throw new Error("applyView must not detach or re-append cards");
   };
 
@@ -2107,7 +2199,7 @@ test("shows the empty state when no venue has an act", async () => {
   );
 });
 
-test("the marker shell never overrides the inline margins Leaflet uses for iconAnchor", () => {
+test("the marker shell never overrides the inline styles Leaflet uses for icon geometry", () => {
   // Leaflet implements iconAnchor as inline margin-left/-top on the icon. A CSS
   // !important margin outranks that inline style and silently discards the anchor,
   // pinning the icon's top-left corner to the coordinate instead of the pin tip --
@@ -2116,7 +2208,10 @@ test("the marker shell never overrides the inline margins Leaflet uses for iconA
   const rule = stylesheetSource.match(/\.porchfest-marker-shell\s*\{([^}]*)\}/);
   const declarations = rule && rule[1].replace(/\/\*[\s\S]*?\*\//g, "");
   assert.ok(rule, "expected a .porchfest-marker-shell rule");
-  assert.doesNotMatch(declarations, /margin[^:]*:[^;]*!important/);
+  // Broadened from margin to every property: Leaflet drives this element's width,
+  // height, margin, and transform from iconSize/iconAnchor via inline styles, and
+  // !important outranks all of them. margin is simply the one that bit first.
+  assert.doesNotMatch(declarations, /!important/);
 });
 
 test("no state message points readers at a Google map the page no longer embeds", () => {

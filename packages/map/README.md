@@ -85,6 +85,37 @@ currently shorter, avoiding dead space below short cards while preserving a
 reading order that runs across the columns. Consumers must allow the module to
 manage the lineup container's layout and must not apply CSS grid to it.
 
+## Relationship to the sapporchfest.org copy
+
+This module is a **port**, not the original. The version running in production
+lives in the separate private `sapporchfest-site` repository as
+`static/js/porchfest-map.js`, `static/css/style.css`, and
+`tools/test-porchfest-map.js`. Both copies exist on purpose right now: the site
+serves the live 2026 map today, and this package is mountable but not yet
+mounted.
+
+There is deliberately **no automated sync** between them. The two are scheduled
+to converge rather than to coexist indefinitely: once the platform serves its
+own map data and the site points at that endpoint, one of these copies stops
+existing. Building a diff gate for a seam with a planned retirement date would
+be the wrong investment, and it could not run anyway -- the site repository has
+no CI, and this repository's CI cannot reach a separate private repo.
+
+What that costs, and what to do about it: a fix in one copy does not reach the
+other, and drift is silent. When you change either copy, port the change by hand
+in the same session and keep the two test-name lists identical -- they are the
+cheapest drift detector available. As of the last sync both suites had the same
+84 test names. Two defects have already had to be fixed twice by hand; see
+`docs/solutions/logic-errors/css-important-discards-the-geometry-a-js-library-writes-inline.md`
+and
+`docs/solutions/conventions/a-hand-rolled-fake-must-mirror-the-real-api-or-fail-loudly.md`.
+
+The known intentional differences are the module system and tooling (this copy
+is ESM on vitest and reads `../assets/`; the site copy is CommonJS on
+`node:test` and reads `static/`), and the stylesheet scope (this package ships a
+self-contained `porchfest-map.css`, while the site's rules live inside its full
+`style.css`). Everything else should match.
+
 ## License
 
 MIT, consistent with the repository `LICENSE`.
