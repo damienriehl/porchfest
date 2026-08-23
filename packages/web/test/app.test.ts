@@ -46,6 +46,12 @@ describe("application scaffold", () => {
       { method: "GET", path: "/admin/setup", tier: "organizer" },
       { method: "POST", path: "/admin/setup", tier: "organizer" },
       { method: "POST", path: "/admin/sign-out", tier: "organizer" },
+      { method: "GET", path: "/admin/retention", tier: "organizer" },
+      {
+        method: "POST",
+        path: "/admin/retention/:id/anonymize",
+        tier: "organizer",
+      },
       { method: "POST", path: "/admin/queue/dismiss", tier: "organizer" },
       {
         method: "POST",

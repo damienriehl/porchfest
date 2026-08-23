@@ -5,6 +5,7 @@ import { Hono, type Context } from "hono";
 import { RouteRegistry, type TrustAuthorizer } from "./router/registry.js";
 import { announceBootstrapLink, registerAdminRoutes } from "./routes/admin.js";
 import { registerAdminRecordRoutes } from "./routes/admin-records.js";
+import { registerAdminRetentionRoutes } from "./routes/admin-retention.js";
 import {
   registerSignupRoutes,
   type SignupRouteOptions,
@@ -82,6 +83,8 @@ export function createApp(options: AppOptions): PorchfestApp {
       options.resolveSocketPeerAddress ?? defaultSocketPeerAddress,
     cookie: options.sessionCookie,
   });
+
+  registerAdminRetentionRoutes({ core: options.core, routes, csrfTokenFor });
 
   registerAdminRecordRoutes({ core: options.core, routes, csrfTokenFor });
 
