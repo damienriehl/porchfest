@@ -188,7 +188,9 @@
   position: relative;
   width: 44px !important;
   height: 44px !important;
-  margin: 0 !important;
+  /* No margin override here: Leaflet implements iconAnchor as inline
+     margin-left/-top, and an !important margin silently discards it,
+     leaving every pin 22px east and 40px south of its true coordinate. */
   border: 0;
   background: transparent;
 }
