@@ -65,6 +65,15 @@ export type {
   OrganizerSession,
 } from "./storage/schema.js";
 export {
+  createSeasonSetup,
+  SeasonSetupError,
+  type SeasonSetupInput,
+  type SeasonSetupRepository,
+  type SeasonSetupResult,
+  type TimeSlotInput,
+} from "./setup.js";
+export type { SeasonTimeSlot } from "./storage/schema.js";
+export {
   isValidTimeZone,
   parseWallClock,
   zonedWallClockToUtc,
@@ -73,6 +82,7 @@ export {
 
 import type { AdapterPorts } from "./ports/index.js";
 import { createAccessRepository, type AccessRepository } from "./access.js";
+import { createSeasonSetup, type SeasonSetupRepository } from "./setup.js";
 import { createSeasonRepository } from "./season.js";
 import type { CoreDatabase } from "./storage/repository-errors.js";
 
@@ -82,6 +92,7 @@ export interface CoreRuntime {
   readonly ports: AdapterPorts;
   readonly seasons: SeasonRepository;
   readonly access: AccessRepository;
+  readonly setup: SeasonSetupRepository;
 }
 
 export function createCore(
@@ -92,5 +103,6 @@ export function createCore(
     ports: Object.freeze({ ...ports }),
     seasons: createSeasonRepository(database),
     access: createAccessRepository(database),
+    setup: createSeasonSetup(database),
   });
 }

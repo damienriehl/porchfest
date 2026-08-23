@@ -43,6 +43,8 @@ describe("application scaffold", () => {
       { method: "GET", path: "/admin", tier: "organizer" },
       { method: "GET", path: "/admin/sign-in", tier: "public" },
       { method: "POST", path: "/admin/sign-in", tier: "public" },
+      { method: "GET", path: "/admin/setup", tier: "organizer" },
+      { method: "POST", path: "/admin/setup", tier: "organizer" },
       { method: "POST", path: "/admin/sign-out", tier: "organizer" },
     ]);
   });

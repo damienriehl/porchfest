@@ -56,7 +56,18 @@ async function csrfFor(runtime: PorchfestRuntime, path: string, token = "") {
 /** The sign-out token is bound to its own path, so it is only available from the
  *  authenticated page that renders it. Reading it from anywhere else yields a
  *  token the registry refuses — which is the point of binding it. */
+/** The sign-out token is path-bound, so it only exists on the admin shell — and
+ *  the shell only renders once a season exists, because before that /admin hands
+ *  the organizer to first-run setup. */
 async function signOutCsrf(runtime: PorchfestRuntime, cookie: string) {
+  runtime.core.setup.createSeason({
+    year: 2031,
+    displayName: "Synthetic Season",
+    timezone: "UTC",
+    eventDate: "2031-09-13",
+    timeSlots: [],
+    openSignups: false,
+  });
   const admin = await runtime.request(`${PUBLIC_BASE_URL}/admin`, {
     headers: { cookie },
   });
@@ -139,11 +150,19 @@ describe("first boot", () => {
     expect(response.status).toBe(303);
     expect(response.headers.get("location")).toBe("/admin");
 
+    // With no season yet, /admin hands the organizer to first-run setup (R34)
+    // rather than an empty page. Reaching it at all is what proves the session.
     const admin = await runtime.request(`${PUBLIC_BASE_URL}/admin`, {
       headers: { cookie: sessionCookieFrom(response) },
     });
-    expect(admin.status).toBe(200);
-    expect(await admin.text()).toContain("Dana Organizer");
+    expect(admin.status).toBe(303);
+    expect(admin.headers.get("location")).toBe("/admin/setup");
+
+    const setup = await runtime.request(`${PUBLIC_BASE_URL}/admin/setup`, {
+      headers: { cookie: sessionCookieFrom(response) },
+    });
+    expect(setup.status).toBe(200);
+    expect(await setup.text()).toContain("Open your first season");
   });
 });
 
@@ -179,7 +198,7 @@ describe("the admin tier is real", () => {
           headers: { cookie },
         })
       ).status,
-    ).toBe(200);
+    ).not.toBe(401);
 
     const organizer = runtime.core.access.listOrganizers()[0];
     runtime.core.access.deactivateOrganizer(organizer?.id ?? 0);

@@ -130,11 +130,11 @@ button,
   font: 400 1rem/1.4 var(--font-body);
 }
 
-input[type="text"],
-input[type="email"],
-input[type="tel"],
-input[type="number"],
-input[type="datetime-local"],
+/* Every text-like control, by exclusion rather than by list. The enumerated
+   version silently missed url, date and time when the setup form introduced
+   them, so those inputs rendered at the browser's default width beside
+   full-width neighbours. A new input type should not need a CSS edit. */
+input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),
 textarea {
   width: 100%;
   min-height: 44px;
