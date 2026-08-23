@@ -75,12 +75,58 @@ export const seasons = sqliteTable(
     // turns "2:00 PM" into an instant. It defaults to UTC rather than guessing a
     // locality: a season that never sets it stores exactly what was typed.
     timezone: text("timezone").notNull().default("UTC"),
+    // --- R34 first-run configuration -------------------------------------
+    // A deployment that installs successfully and still cannot open a season is
+    // a failed install, so everything an organizer must decide to run a season
+    // lives here and is captured in one flow.
+    eventDate: text("event_date"), // YYYY-MM-DD in the season's own timezone
+    signupOpensAt: integer("signup_opens_at", { mode: "timestamp" }),
+    signupClosesAt: integer("signup_closes_at", { mode: "timestamp" }),
+    // The locality R17 sanity-checks geocoded coordinates against. Stored as a
+    // plain box because that is what the check needs and what an organizer can
+    // read back; a null box means the check has nothing to assert yet.
+    localityName: text("locality_name"),
+    boundsNorth: real("bounds_north"),
+    boundsSouth: real("bounds_south"),
+    boundsEast: real("bounds_east"),
+    boundsWest: real("bounds_west"),
+    publicSiteUrl: text("public_site_url"),
+    publicMapUrl: text("public_map_url"),
+    senderName: text("sender_name"),
+    senderEmail: text("sender_email"),
+    // R35's deployer-configurable retention window.
+    retentionDays: integer("retention_days"),
     ...mutableColumns(),
   },
   (table) => [
     check(
       "seasons_state_check",
       sql`${table.state} in ('setup', 'signups_open', 'signups_closed', 'assigning', 'locked', 'archived')`,
+    ),
+  ],
+);
+
+export const seasonTimeSlots = sqliteTable(
+  "season_time_slots",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    seasonId: integer("season_id")
+      .notNull()
+      .references(() => seasons.id),
+    position: integer("position").notNull(),
+    startsAt: integer("starts_at", { mode: "timestamp" }).notNull(),
+    endsAt: integer("ends_at", { mode: "timestamp" }).notNull(),
+    ...mutableColumns(),
+  },
+  (table) => [
+    index("season_time_slots_season_id_idx").on(table.seasonId),
+    uniqueIndex("season_time_slots_season_position_uidx").on(
+      table.seasonId,
+      table.position,
+    ),
+    check(
+      "season_time_slots_window_check",
+      sql`${table.endsAt} > ${table.startsAt}`,
     ),
   ],
 );
@@ -467,6 +513,7 @@ const schemaTables = [
   organizers,
   organizerSessions,
   organizerInvites,
+  seasonTimeSlots,
 ] as const;
 
 export const schemaTableDefinitions = Object.freeze(
@@ -487,6 +534,8 @@ export const schemaTableDefinitions = Object.freeze(
 export const schemaTableNames = Object.freeze(
   schemaTableDefinitions.map(({ name }) => name),
 );
+
+export type SeasonTimeSlot = typeof seasonTimeSlots.$inferSelect;
 
 export type Organizer = typeof organizers.$inferSelect;
 export type NewOrganizer = typeof organizers.$inferInsert;
