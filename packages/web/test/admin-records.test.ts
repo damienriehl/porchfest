@@ -3,12 +3,17 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { SeasonActionError } from "@porchfest/core";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createTestingRuntime,
   type PorchfestRuntime,
   type PorchfestTestingRuntime,
 } from "../src/composition.js";
+import {
+  lifecycleRefusal,
+  placeholderSeasonRefusal,
+} from "../src/routes/admin-records.js";
 
 const PUBLIC_BASE_URL = "https://porchfest.example";
 const temporaryRoots: string[] = [];
@@ -558,6 +563,16 @@ describe("placeholder and supersession actions", () => {
     expect(body).toContain('value="Preserved Archived Act"');
   });
 
+  it("names a non-archived state when placeholder creation is refused", async () => {
+    const refusal = placeholderSeasonRefusal(
+      new SeasonActionError("locked", "hold"),
+    );
+
+    expect(refusal).toContain("current state is locked");
+    expect(refusal).not.toContain("season is archived");
+    expect(refusal).toContain("Your answers are still here");
+  });
+
   it("renders an assigned-act promotion collision as an actionable refusal", async () => {
     const { runtime, season, alice, signup } = await boot();
     const placeholder = runtime.core.seasons.createPlaceholderAct({
@@ -1027,6 +1042,64 @@ describe("the record editor", () => {
     );
   });
 
+  it("renders an archived-season field edit as an actionable refusal", async () => {
+    const { runtime, season, alice, signup } = await boot();
+    const proposedAddress = "synthetic-refused-address";
+    const request = runtime.core.changeRequests.record({
+      seasonId: season.id,
+      recordType: "venue",
+      recordId: signup.venue.id,
+      recordVersion: signup.venue.version,
+      kind: "address",
+      proposedAddress,
+    });
+    const page = await get(
+      runtime,
+      `/admin/records/venue/${signup.venue.id}?season=${season.id}&change_request=${request.id}`,
+      alice,
+    );
+    runtime.core.seasons.transitionSeason(
+      season.id,
+      season.version,
+      "archived",
+    );
+
+    const refused = await post(
+      runtime,
+      `/admin/records/venue/${signup.venue.id}`,
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(page, `/admin/records/venue/${signup.venue.id}`),
+        season: String(season.id),
+        version: String(signup.venue.version),
+        change_request: String(request.id),
+        title: "Preserved Refused Venue",
+        address: proposedAddress,
+        spaceDescription: "synthetic-space-description",
+        hasPower: "yes",
+        rainBackup: "no",
+        notes: "synthetic-refused-notes",
+      }),
+    );
+    const body = await refused.text();
+
+    expect(refused.status).toBe(409);
+    expect(body).toContain("correction could not be completed");
+    expect(body).toContain("season is archived");
+    expect(body).toContain("records were left unchanged");
+    expect(body).toContain('value="Preserved Refused Venue"');
+    expect(body).toContain(`name="change_request" value="${request.id}"`);
+    expect(runtime.core.changeRequests.find(request.id)?.status).toBe(
+      "pending",
+    );
+    const stored = runtime.core.queue
+      .listForOrganizer(season.id, 1)
+      .find((item) => item.recordType === "venue");
+    expect(stored?.recordType === "venue" && stored.record.title).toBe(
+      signup.venue.title,
+    );
+  });
+
   it("re-arms the refused form so a second save can go through", async () => {
     const { runtime, season, alice, signup } = await boot();
     const page = await get(
@@ -1254,6 +1327,17 @@ describe("record status", () => {
     expect(stored?.recordType === "venue" && stored.record.status).toBe(
       "tentative",
     );
+  });
+
+  it("names a non-archived state in a lifecycle refusal", async () => {
+    const refusal = lifecycleRefusal(
+      "status change",
+      new SeasonActionError("locked", "hold"),
+    );
+
+    expect(refusal.message).toContain("current state is locked");
+    expect(refusal.message).not.toContain("season is archived");
+    expect(refusal.message).toContain("records were left unchanged");
   });
 
   it("returns not found for a status change targeting an unknown record", async () => {
