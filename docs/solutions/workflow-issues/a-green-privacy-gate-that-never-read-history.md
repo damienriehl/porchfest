@@ -115,6 +115,44 @@ purged it from all four commits that carried it, and the verification is
   The reserved-range argument is correct and irrelevant: the scanner is pattern-based
   by design, and a scanner that trusted area codes would be the weaker tool.
 
+## It happened again the same day, in the sibling gate
+
+Hours after this was written, the identical shape appeared in the _other_ checker.
+
+`scripts/check-core-boundary.mjs` refuses a dotted `get(` call under
+`packages/web/src`, because that reads as a route registered outside the central
+registry. A refactor added a shared `admin-http.ts` whose doc comment _explained that
+rule_ — and wrote the offending accessor out three times to explain it. The scanner
+reads comments. Three violations.
+
+It survived a full local gate run, because `npm test` was:
+
+```
+vitest run && node scripts/check-core-boundary.test.mjs && node scripts/clean-room-scan.test.mjs
+```
+
+Two **self**-tests and no real check, exactly as described above. CI ran
+`npm run check:boundaries` and `npm run check:clean-room` as separate steps, so CI
+would have caught it and the local command could not.
+
+The fix was not another rule for humans to remember. `npm test` now runs both self-tests
+**and** both real checks, so the routine command matches what CI actually enforces:
+
+```
+vitest run
+  && node scripts/check-core-boundary.test.mjs && npm run check:boundaries
+  && node scripts/clean-room-scan.test.mjs   && npm run check:clean-room
+```
+
+It prints six `OK:` lines now instead of three. Verified by mutation: reintroducing the
+accessor into that comment makes `npm test` exit 1 and name the file and line; removing
+it restores the file byte-identically.
+
+**The general rule:** when a check has a self-test and a real run, the routine command
+must run BOTH, or the self-test becomes a decoy that reads like coverage. Two different
+gates in this repo had that shape, and both were found by accident rather than by the
+suite.
+
 ## The wider point
 
 This is the same failure family as suppressing stderr on a check whose empty output you
