@@ -528,8 +528,9 @@ export function registerAdminRecordRoutes(
             error instanceof SeasonActionError ||
             error instanceof SeasonLifecycleError
           ) {
-            // A lifecycle refusal did not save, so keep both the organizer's
-            // typed correction and any pending address-review context intact.
+            // A lifecycle refusal did not save. While corrections remain open,
+            // keep the organizer's typed values and address-review context; a
+            // closed season renders the stored record read-only instead.
             return html(
               renderLifecycleRecordPage(
                 options,
@@ -545,8 +546,9 @@ export function registerAdminRecordRoutes(
               409,
             );
           }
-          // R32: name the conflict rather than overwriting, and keep what the
-          // organizer typed so a re-save is one click rather than a retype.
+          // R32: while corrections remain open, name the conflict rather than
+          // overwriting and keep what the organizer typed for a deliberate
+          // re-save. A closed season renders the stored record read-only.
           const stored = valuesOf(recordType, current.record);
           const conflicts: ConflictDetail[] = RECORD_FIELDS[recordType]
             .filter(
@@ -831,22 +833,24 @@ function renderLifecycleRecordPage(
   } = {},
 ): string {
   const correctionsClosed = areCorrectionsClosed(options.core, seasonId);
-  const candidates = options.core.queue
-    .listForOrganizer(seasonId, organizerId)
-    .filter(
-      (candidate) =>
-        candidate.recordType === item.recordType &&
-        candidate.record.id !== item.record.id,
-    )
-    .map((candidate) => ({
-      id: candidate.record.id,
-      version: candidate.version,
-      title: recordTitle(candidate),
-      placeholder:
-        candidate.recordType === "contact"
-          ? false
-          : candidate.record.placeholder,
-    }));
+  const candidates = correctionsClosed
+    ? []
+    : options.core.queue
+        .listForOrganizer(seasonId, organizerId)
+        .filter(
+          (candidate) =>
+            candidate.recordType === item.recordType &&
+            candidate.record.id !== item.record.id,
+        )
+        .map((candidate) => ({
+          id: candidate.record.id,
+          version: candidate.version,
+          title: recordTitle(candidate),
+          placeholder:
+            candidate.recordType === "contact"
+              ? false
+              : candidate.record.placeholder,
+        }));
   const promotion =
     item.recordType !== "contact" && item.record.placeholder
       ? {
