@@ -26,6 +26,7 @@ import {
   renderRecordPage,
   type ConflictDetail,
 } from "../views/admin-records.js";
+import { escapeHtml } from "../views/signup-view.js";
 import { CONTACT_EMAIL_PATTERN } from "./signup.js";
 
 const RECORD_TYPES: readonly QueueRecordType[] = ["act", "venue", "contact"];
@@ -130,9 +131,11 @@ export function registerAdminRecordRoutes(
           error instanceof SeasonActionError ||
           error instanceof SeasonLifecycleError
         ) {
+          // A lifecycle message is composed elsewhere, so escape it here the
+          // way the record views do rather than trusting its shape.
           const refusal = lifecycleRefusal("change request", error);
           return html(
-            `<h1>${refusal.title}</h1><p>${refusal.message}</p>`,
+            `<h1>${escapeHtml(refusal.title)}</h1><p>${escapeHtml(refusal.message)}</p>`,
             409,
           );
         }
