@@ -104,9 +104,7 @@ describe("central route registry", () => {
     });
 
     expect(response.status).toBe(303);
-    expect(response.headers.get("location")).toBe(
-      "/organizer-sign-in?next=%2Forganizer",
-    );
+    expect(response.headers.get("location")).toBe("/organizer-sign-in");
   });
 
   it("never redirects the organizer sign-in destination to itself", async () => {
@@ -162,7 +160,7 @@ describe("central route registry", () => {
     expect(response.status).toBe(401);
     expect(response.headers.get("location")).toBeNull();
     expect(response.headers.get("content-type")).toContain("text/html");
-    expect(html).toContain('href="/organizer-sign-in?next=%2Forganizer"');
+    expect(html).toContain('href="/organizer-sign-in"');
     expect(html).toContain("Your changes were not submitted");
   });
 
@@ -189,9 +187,7 @@ describe("central route registry", () => {
     });
 
     expect(response.status).toBe(303);
-    expect(response.headers.get("location")).toBe(
-      "/organizer-sign-in?next=%2Forganizer%2Frecord%3Fseason%3Dsynthetic",
-    );
+    expect(response.headers.get("location")).toBe("/organizer-sign-in");
   });
 
   it("does not redirect an unauthenticated participant HTML request", async () => {

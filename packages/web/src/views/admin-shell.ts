@@ -27,7 +27,7 @@ export function renderOrganizerSignInRequiredPage(options: {
     `    <header class="signup-header">
       <p class="eyebrow">Organizers</p>
       <h1>Your session has ended</h1>
-      <p class="lede">Your changes were not submitted. Sign in again, then return to the record you were editing.</p>
+      <p class="lede">Your changes were not submitted. Sign in again.</p>
       <p><a class="secondary-action" href="${escapeHtml(options.organizerSignInPath)}">Go to organizer sign-in</a></p>
     </header>`,
   );
@@ -38,7 +38,6 @@ export function renderSignInPage(options: {
   readonly csrfToken: string;
   readonly needsEmail: boolean;
   readonly errors: readonly string[];
-  readonly next?: string;
 }): string {
   if (!options.token && options.errors.length === 0) {
     const nextStep = options.needsEmail
@@ -73,7 +72,6 @@ export function renderSignInPage(options: {
     <form class="signup-form" id="signup-form" method="post" action="${ADMIN_SIGN_IN_PATH}">
       <input type="hidden" name="_csrf" value="${escapeHtml(options.csrfToken)}">
       <input type="hidden" name="token" value="${escapeHtml(options.token)}">
-      ${options.next ? `<input type="hidden" name="next" value="${escapeHtml(options.next)}">` : ""}
       <fieldset>
         <legend>Who you are</legend>
         <div class="field">

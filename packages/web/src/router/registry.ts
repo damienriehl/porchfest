@@ -177,12 +177,11 @@ export class RouteRegistry {
           organizerSignInPath &&
           acceptsHtml(context)
         ) {
+          // A fresh one-use link reaches the organizer out of band, so this
+          // page cannot carry the refused request's destination through sign-in.
           return new Response(
             renderOrganizerSignInRequiredPage({
-              organizerSignInPath: signInDestination(
-                context,
-                organizerSignInPath,
-              ),
+              organizerSignInPath,
             }),
             { status: 401, headers: adminHeaders() },
           );
@@ -244,10 +243,12 @@ export class RouteRegistry {
       requestPath !== organizerSignInPath &&
       acceptsHtml(context)
     ) {
+      // Fresh sign-in links arrive out of band and cannot preserve this URL,
+      // so the browser can only continue to the generic sign-in page.
       return new Response(null, {
         status: 303,
         headers: adminHeaders({
-          location: signInDestination(context, organizerSignInPath),
+          location: organizerSignInPath,
         }),
       });
     }
@@ -261,13 +262,6 @@ export class RouteRegistry {
   list(): readonly RouteDeclaration[] {
     return [...this.#routes];
   }
-}
-
-function signInDestination(context: Context, signInPath: string): string {
-  const requestUrl = new URL(context.req.url);
-  const requestedPath = `${requestUrl.pathname}${requestUrl.search}`;
-  const separator = signInPath.includes("?") ? "&" : "?";
-  return `${signInPath}${separator}next=${encodeURIComponent(requestedPath)}`;
 }
 
 function acceptsHtml(context: Context): boolean {
