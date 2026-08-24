@@ -1356,6 +1356,75 @@ describe("participant change requests", () => {
     );
   });
 
+  it("reports a venue save as successful when its linked review is malformed", async () => {
+    const { runtime, season, alice, signup } = await boot();
+    const proposedAddress = "synthetic-corrupted-review-address";
+    const request = runtime.core.changeRequests.record({
+      seasonId: season.id,
+      recordType: "venue",
+      recordId: signup.venue.id,
+      recordVersion: signup.venue.version,
+      kind: "address",
+      proposedAddress,
+    });
+    const queue = await get(runtime, `/admin?season=${season.id}`, alice);
+    const review = await post(
+      runtime,
+      `/admin/change-requests/${request.id}/apply`,
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(
+          queue,
+          `/admin/change-requests/${request.id}/apply`,
+        ),
+        season: String(season.id),
+        version: String(request.version),
+      }),
+    );
+    const editor = await get(
+      runtime,
+      review.headers.get("location") ?? "",
+      alice,
+    );
+    const editorCsrf = await csrfFrom(
+      editor,
+      `/admin/records/venue/${signup.venue.id}`,
+    );
+    runtime.coreTesting.corruptChangeRequestProposal(request.id, null);
+
+    const saved = await post(
+      runtime,
+      `/admin/records/venue/${signup.venue.id}`,
+      alice,
+      new URLSearchParams({
+        _csrf: editorCsrf,
+        season: String(season.id),
+        version: String(signup.venue.version),
+        change_request: String(request.id),
+        title: signup.venue.title,
+        address: proposedAddress,
+        spaceDescription: signup.venue.spaceDescription ?? "",
+        hasPower: "yes",
+        rainBackup: "no",
+        notes: "",
+      }),
+    );
+
+    expect(saved.status).toBe(303);
+    expect(saved.headers.get("location")).toBe(
+      `/admin/records/venue/${signup.venue.id}?season=${season.id}&saved=1`,
+    );
+    const stored = runtime.core.queue
+      .listForOrganizer(season.id, 1)
+      .find((item) => item.recordType === "venue");
+    expect(stored?.recordType === "venue" && stored.record.address).toBe(
+      proposedAddress,
+    );
+    expect(runtime.coreTesting.readChangeRequestStatus(request.id)).toEqual({
+      status: "pending",
+    });
+  });
+
   it("leaves an address correction pending when the saved address differs", async () => {
     const { runtime, season, alice, signup } = await boot();
     const request = runtime.core.changeRequests.record({
@@ -1581,6 +1650,52 @@ describe("participant change requests", () => {
     expect(rejected.status).toBe(303);
     expect(runtime.coreTesting.readChangeRequestStatus(request.id)).toEqual({
       status: "rejected",
+    });
+  });
+
+  it("refuses to apply a malformed request instead of returning a server error", async () => {
+    const { runtime, season, alice } = await boot();
+    const performer = createPerformer(
+      runtime,
+      season.id,
+      "Malformed Apply Act",
+      "malformed-apply@example.invalid",
+    );
+    const request = runtime.core.changeRequests.record({
+      seasonId: season.id,
+      recordType: "act",
+      recordId: performer.act.id,
+      recordVersion: performer.act.version,
+      kind: "availability",
+      proposedAvailability: [],
+    });
+    const queue = await get(runtime, `/admin?season=${season.id}`, alice);
+    const csrf = await csrfFrom(
+      queue,
+      `/admin/change-requests/${request.id}/apply`,
+    );
+    runtime.coreTesting.corruptChangeRequestProposal(
+      request.id,
+      "malformed-apply-proposal",
+    );
+
+    const refused = await post(
+      runtime,
+      `/admin/change-requests/${request.id}/apply`,
+      alice,
+      new URLSearchParams({
+        _csrf: csrf,
+        season: String(season.id),
+        version: String(request.version),
+      }),
+    );
+    const body = await refused.text();
+
+    expect(refused.status).toBe(409);
+    expect(body).toContain("could not be applied");
+    expect(body).toContain("Reject it from the activity queue");
+    expect(runtime.coreTesting.readChangeRequestStatus(request.id)).toEqual({
+      status: "pending",
     });
   });
 

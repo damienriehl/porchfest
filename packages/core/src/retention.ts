@@ -5,8 +5,9 @@ import {
   and,
   desc,
   eq,
+  exists,
   inArray,
-  isNull,
+  isNotNull,
   lt,
   notExists,
   or,
@@ -98,6 +99,21 @@ export function createRetentionRepository(
   const now = options.now ?? (() => new Date());
   const retentionMonths = normalizeRetentionMonths(options.retentionMonths);
 
+  function isEligible(executor: CoreExecutor, cutoff: Date) {
+    return or(
+      lt(contacts.updatedAt, cutoff),
+      and(
+        isNotNull(contacts.canonicalContactId),
+        exists(
+          executor
+            .select({ id: deletionReceipts.id })
+            .from(deletionReceipts)
+            .where(eq(deletionReceipts.contactId, contacts.canonicalContactId)),
+        ),
+      ),
+    );
+  }
+
   function listEligibleWith(executor: CoreExecutor): Contact[] {
     const cutoff = retentionCutoff(now(), retentionMonths);
     return executor
@@ -105,8 +121,7 @@ export function createRetentionRepository(
       .from(contacts)
       .where(
         and(
-          lt(contacts.updatedAt, cutoff),
-          isNull(contacts.canonicalContactId),
+          isEligible(executor, cutoff),
           notExists(
             executor
               .select({ id: deletionReceipts.id })
@@ -120,6 +135,12 @@ export function createRetentionRepository(
 
   function listEligible(): Contact[] {
     return listEligibleWith(db);
+  }
+
+  function findParticipant(contactId: number): Contact | null {
+    return (
+      db.select().from(contacts).where(eq(contacts.id, contactId)).get() ?? null
+    );
   }
 
   function listReceipts(): DeletionReceipt[] {
@@ -161,6 +182,7 @@ export function createRetentionRepository(
     action: DeletionReceiptAction,
   ): AnonymizationResult {
     const stamp = now();
+    const cutoff = retentionCutoff(stamp, retentionMonths);
     const changed = executor
       .update(contacts)
       .set({
@@ -174,7 +196,10 @@ export function createRetentionRepository(
         and(
           eq(contacts.id, input.contactId),
           eq(contacts.version, input.expectedVersion),
-          isNull(contacts.canonicalContactId),
+          // R35: eligibility belongs inside the irreversible mutation. A
+          // superseded row whose canonical receipt already exists is also due,
+          // because otherwise that newly linked identity is unreachable.
+          isEligible(executor, cutoff),
           notExists(
             executor
               .select({ id: deletionReceipts.id })
@@ -211,7 +236,7 @@ export function createRetentionRepository(
     const contactsById = new Map(
       seasonContacts.map((contact) => [contact.id, contact]),
     );
-    const supersededContactIds = seasonContacts
+    const descendantContactIds = seasonContacts
       .filter((candidate) => {
         if (candidate.id === canonicalContact.id) return false;
         let current = candidate;
@@ -227,6 +252,20 @@ export function createRetentionRepository(
         return false;
       })
       .map(({ id }) => id);
+    const receiptedContactIds =
+      descendantContactIds.length === 0
+        ? new Set<number>()
+        : new Set(
+            executor
+              .select({ contactId: deletionReceipts.contactId })
+              .from(deletionReceipts)
+              .where(inArray(deletionReceipts.contactId, descendantContactIds))
+              .all()
+              .map(({ contactId }) => contactId),
+          );
+    const supersededContactIds = descendantContactIds.filter(
+      (contactId) => !receiptedContactIds.has(contactId),
+    );
     if (supersededContactIds.length > 0) {
       executor
         .update(contacts)
@@ -268,8 +307,10 @@ export function createRetentionRepository(
         .update(venues)
         .set({
           address: null,
+          spaceDescription: null,
           latitude: null,
           longitude: null,
+          notes: null,
           version: sql`${venues.version} + 1`,
           updatedAt: stamp,
         })
@@ -279,6 +320,7 @@ export function createRetentionRepository(
         .update(changeRequests)
         .set({
           proposedValue: null,
+          status: sql`case when ${changeRequests.status} = 'pending' then 'rejected' else ${changeRequests.status} end`,
           version: sql`${changeRequests.version} + 1`,
           updatedAt: stamp,
         })
@@ -319,6 +361,7 @@ export function createRetentionRepository(
         .update(changeRequests)
         .set({
           proposedValue: null,
+          status: sql`case when ${changeRequests.status} = 'pending' then 'rejected' else ${changeRequests.status} end`,
           version: sql`${changeRequests.version} + 1`,
           updatedAt: stamp,
         })
@@ -362,20 +405,29 @@ export function createRetentionRepository(
 
     // email_log is deliberately untouched. Once its contact row is scrubbed,
     // it is R35's non-identifying evidence that a matching wave was sent.
+    const receiptValues = (contactId: number) => ({
+      contactId,
+      action,
+      applicationAnonymizedAt: stamp,
+      backupStatus: "pending" as const,
+      backupCompletedAt: null,
+      version: 1,
+      createdAt: stamp,
+      updatedAt: stamp,
+    });
     const receipt = executor
       .insert(deletionReceipts)
-      .values({
-        contactId: input.contactId,
-        action,
-        applicationAnonymizedAt: stamp,
-        backupStatus: "pending",
-        backupCompletedAt: null,
-        version: 1,
-        createdAt: stamp,
-        updatedAt: stamp,
-      })
+      .values(receiptValues(input.contactId))
       .returning()
       .get();
+    if (supersededContactIds.length > 0) {
+      // R35: every identity scrub gets its own idempotence receipt. A later
+      // eligibility pass must not mutate an already-anonymized descendant.
+      executor
+        .insert(deletionReceipts)
+        .values(supersededContactIds.map(receiptValues))
+        .run();
+    }
     return { contact: canonicalContact, receipt };
   }
 
@@ -389,14 +441,25 @@ export function createRetentionRepository(
 
   function anonymizeEligible(): AnonymizationResult[] {
     return db.transaction(
-      (tx) =>
-        listEligibleWith(tx).map((contact) =>
-          anonymizeWith(
-            tx,
-            { contactId: contact.id, expectedVersion: contact.version },
-            "retention",
-          ),
-        ),
+      (tx) => {
+        const results: AnonymizationResult[] = [];
+        for (const contact of listEligibleWith(tx)) {
+          const alreadyAnonymized = tx
+            .select({ id: deletionReceipts.id })
+            .from(deletionReceipts)
+            .where(eq(deletionReceipts.contactId, contact.id))
+            .get();
+          if (alreadyAnonymized) continue;
+          results.push(
+            anonymizeWith(
+              tx,
+              { contactId: contact.id, expectedVersion: contact.version },
+              "retention",
+            ),
+          );
+        }
+        return results;
+      },
       { behavior: "immediate" },
     );
   }
@@ -404,6 +467,7 @@ export function createRetentionRepository(
   return Object.freeze({
     retentionMonths,
     listEligible,
+    findParticipant,
     anonymizeParticipant,
     anonymizeEligible,
     listReceipts,

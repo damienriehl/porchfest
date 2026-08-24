@@ -84,16 +84,26 @@ export function registerAdminRecordRoutes(
       const fields = await readFields(context);
       const seasonId = Number(fields.season ?? "");
       const version = Number(fields.version ?? "");
-      const pending = options.core.changeRequests.find(requestId);
-      if (
-        !pending ||
-        pending.seasonId !== seasonId ||
-        !Number.isSafeInteger(version)
-      ) {
-        return notFound();
-      }
-
       try {
+        let pending;
+        try {
+          pending = options.core.changeRequests.find(requestId);
+        } catch (error) {
+          // R33: malformed proposals stay rejectable, but apply must refuse
+          // them instead of leaking a decode failure as a server error.
+          if (!(error instanceof ChangeRequestLifecycleError)) throw error;
+          return html(
+            `<h1>This change request could not be applied</h1><p>Its proposal is invalid. Reject it from the activity queue to dismiss it.</p>`,
+            409,
+          );
+        }
+        if (
+          !pending ||
+          pending.seasonId !== seasonId ||
+          !Number.isSafeInteger(version)
+        ) {
+          return notFound();
+        }
         if (pending.kind === "address") {
           if (
             pending.status !== "pending" ||
@@ -842,24 +852,30 @@ function completeAddressReviewAfterSave(
 ): void {
   const review = changeRequestId(requestIdValue);
   if (!review) return;
-  const request = core.changeRequests.find(review.id);
-  if (
-    !request ||
-    request.status !== "pending" ||
-    request.kind !== "address" ||
-    recordType !== "venue" ||
-    request.seasonId !== seasonId ||
-    request.recordId !== recordId ||
-    request.proposedAddress !== savedAddress
-  ) {
-    return;
-  }
   try {
+    const request = core.changeRequests.find(review.id);
+    if (
+      !request ||
+      request.status !== "pending" ||
+      request.kind !== "address" ||
+      recordType !== "venue" ||
+      request.seasonId !== seasonId ||
+      request.recordId !== recordId ||
+      request.proposedAddress !== savedAddress
+    ) {
+      return;
+    }
     core.changeRequests.completeAddressReview(request.id, request.version);
   } catch (error) {
-    // R33: the venue save already succeeded. Another organizer resolving the
-    // proposal first must not turn that successful save into a 500.
-    if (error instanceof ChangeRequestConflictError) return;
+    // R33: the venue save already succeeded. A malformed proposal or another
+    // organizer resolving it first must not turn that successful save into a
+    // 500 that invites the organizer to repeat the committed write.
+    if (
+      error instanceof ChangeRequestLifecycleError ||
+      error instanceof ChangeRequestConflictError
+    ) {
+      return;
+    }
     throw error;
   }
 }

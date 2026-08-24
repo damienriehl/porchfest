@@ -54,15 +54,22 @@ function fixtures(state: "signups_open" | "archived" = "signups_open") {
     venue: {
       title: "Synthetic Porch",
       address: "synthetic-host-address",
-      spaceDescription: "Synthetic space",
+      spaceDescription:
+        "Synthetic Host uses the private synthetic-unit entrance",
       hasPower: true,
       rainBackup: false,
-      notes: null,
+      notes:
+        "Ask Synthetic Host at synthetic-host-phone about the synthetic-unit access",
     },
     gear: [],
     drinks: [],
     amenities: [],
   });
+  database.db
+    .update(contacts)
+    .set({ updatedAt: new Date("2030-07-14T12:00:00.000Z") })
+    .where(eq(contacts.id, signup.contact.id))
+    .run();
   database.db
     .update(venues)
     .set({ latitude: 0.25, longitude: -0.5 })
@@ -193,8 +200,10 @@ describe("participant anonymization", () => {
     ).toMatchObject({
       title: "Synthetic Porch",
       address: null,
+      spaceDescription: null,
       latitude: null,
       longitude: null,
+      notes: null,
     });
     expect(
       database.db.select().from(acts).where(eq(acts.id, act.id)).get(),
@@ -218,7 +227,7 @@ describe("participant anonymization", () => {
         .from(changeRequests)
         .where(eq(changeRequests.id, request.id))
         .get(),
-    ).toMatchObject({ proposedValue: null });
+    ).toMatchObject({ proposedValue: null, status: "rejected" });
     expect(
       database.db
         .select()
@@ -258,6 +267,29 @@ describe("participant anonymization", () => {
         .where(eq(venues.id, signup.venue.id))
         .get(),
     ).toMatchObject({ address: null, latitude: null, longitude: null });
+  });
+
+  it("closes a pending proposal when anonymization makes it undecodable", () => {
+    const { request, signup } = fixtures();
+    const retention = createRetentionRepository(database.db, {
+      now: () => clock,
+    });
+
+    retention.anonymizeParticipant({
+      contactId: signup.contact.id,
+      expectedVersion: signup.contact.version,
+    });
+
+    expect(
+      database.db
+        .select({
+          proposedValue: changeRequests.proposedValue,
+          status: changeRequests.status,
+        })
+        .from(changeRequests)
+        .where(eq(changeRequests.id, request.id))
+        .get(),
+    ).toEqual({ proposedValue: null, status: "rejected" });
   });
 
   it("refuses a stale version", () => {
@@ -431,5 +463,130 @@ describe("retention eligibility", () => {
         )
         .get(),
     ).toBeDefined();
+  });
+
+  it("refuses a direct anonymization inside the retention window", () => {
+    const { season } = fixtures();
+    const recent = database.db
+      .insert(contacts)
+      .values({
+        seasonId: season.id,
+        name: "Synthetic Recent Direct",
+        email: "synthetic-recent-direct@example.invalid",
+        phone: "synthetic-recent-direct-phone",
+        updatedAt: clock,
+      })
+      .returning()
+      .get();
+    const retention = createRetentionRepository(database.db, {
+      now: () => clock,
+      retentionMonths: 24,
+    });
+
+    expect(() =>
+      retention.anonymizeParticipant({
+        contactId: recent.id,
+        expectedVersion: recent.version,
+      }),
+    ).toThrow(RetentionConflictError);
+    expect(retention.findParticipant(recent.id)).toMatchObject({
+      name: "Synthetic Recent Direct",
+      email: "synthetic-recent-direct@example.invalid",
+      phone: "synthetic-recent-direct-phone",
+    });
+  });
+
+  it("anonymizes an old superseded identity while its canonical stays recent", () => {
+    const { season, signup } = fixtures();
+    const seasons = createSeasonRepository(database.db, { now: () => clock });
+    const recentCanonical = seasons.updateContact(
+      signup.contact.id,
+      signup.contact.version,
+      { name: "Synthetic Canonical Revised" },
+    );
+    const oldSuperseded = database.db
+      .insert(contacts)
+      .values({
+        seasonId: season.id,
+        name: "Synthetic Old Duplicate",
+        email: "synthetic-old-duplicate@example.invalid",
+        phone: "synthetic-old-duplicate-phone",
+        canonicalContactId: signup.contact.id,
+        createdAt: new Date("2030-07-14T12:00:00.000Z"),
+        updatedAt: new Date("2030-07-14T12:00:00.000Z"),
+      })
+      .returning()
+      .get();
+    const retention = createRetentionRepository(database.db, {
+      now: () => clock,
+      retentionMonths: 24,
+    });
+
+    expect(retention.listEligible().map(({ id }) => id)).toContain(
+      oldSuperseded.id,
+    );
+    retention.anonymizeEligible();
+
+    expect(retention.findParticipant(oldSuperseded.id)).toMatchObject({
+      name: ANONYMIZED_CONTACT_NAME,
+      email: null,
+      phone: null,
+    });
+    expect(retention.findParticipant(recentCanonical.id)).toMatchObject({
+      name: "Synthetic Canonical Revised",
+      email: "synthetic-host@example.invalid",
+      phone: "synthetic-host-phone",
+    });
+  });
+
+  it("reaches a contact newly superseded into an anonymized canonical", () => {
+    const { season, signup } = fixtures();
+    const retention = createRetentionRepository(database.db, {
+      now: () => clock,
+      retentionMonths: 24,
+    });
+    const canonicalResult = retention.anonymizeParticipant({
+      contactId: signup.contact.id,
+      expectedVersion: signup.contact.version,
+    });
+    const recentDuplicate = database.db
+      .insert(contacts)
+      .values({
+        seasonId: season.id,
+        name: "Synthetic Newly Superseded",
+        email: "synthetic-newly-superseded@example.invalid",
+        phone: "synthetic-newly-superseded-phone",
+        createdAt: clock,
+        updatedAt: clock,
+      })
+      .returning()
+      .get();
+    const seasons = createSeasonRepository(database.db, { now: () => clock });
+    const superseded = seasons.supersedeContact(
+      recentDuplicate.id,
+      recentDuplicate.version,
+      canonicalResult.contact.id,
+    );
+
+    expect(retention.listEligible().map(({ id }) => id)).toContain(
+      superseded.id,
+    );
+    retention.anonymizeEligible();
+    const versionAfterAnonymization = retention.findParticipant(
+      superseded.id,
+    )?.version;
+
+    expect(retention.findParticipant(superseded.id)).toMatchObject({
+      name: ANONYMIZED_CONTACT_NAME,
+      email: null,
+      phone: null,
+    });
+    expect(retention.listReceipts().map(({ contactId }) => contactId)).toEqual(
+      expect.arrayContaining([canonicalResult.contact.id, superseded.id]),
+    );
+    expect(retention.anonymizeEligible()).toEqual([]);
+    expect(retention.findParticipant(superseded.id)?.version).toBe(
+      versionAfterAnonymization,
+    );
   });
 });

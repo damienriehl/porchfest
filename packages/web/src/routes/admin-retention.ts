@@ -111,8 +111,8 @@ function retentionPage(
 
 function participantNameFor(core: CoreRuntime, contactId: number): string {
   return (
-    core.retention.listEligible().find((contact) => contact.id === contactId)
-      ?.name ?? `Participant ${contactId}`
+    core.retention.findParticipant(contactId)?.name ??
+    `Participant ${contactId}`
   );
 }
 

@@ -242,6 +242,59 @@ describe("the organizer retention surface", () => {
     ).toBe("Synthetic Host revised");
   });
 
+  it("refuses an in-window POST and names the readable participant", async () => {
+    const { runtime, signup, cookie } = await boot();
+    const recent = runtime.core.seasons.createPerformerSignup({
+      seasonId: signup.contact.seasonId,
+      contact: {
+        name: "Synthetic Recent Participant",
+        email: "synthetic-recent-participant@example.invalid",
+        phone: "synthetic-recent-participant-phone",
+      },
+      act: {
+        name: "Synthetic Recent Act",
+        genre: "Synthetic genre",
+        description: "Synthetic description",
+        links: "https://example.invalid/synthetic-recent-act",
+        durationMinutes: 30,
+        requiresAmplification: false,
+        housePreference: null,
+        canLendGear: false,
+        notes: null,
+      },
+      availabilities: [],
+    });
+    const eligibleAction = `/admin/retention/${signup.contact.id}/anonymize`;
+    const recentAction = `/admin/retention/${recent.contact.id}/anonymize`;
+    const page = await get(runtime, "/admin/retention", cookie);
+
+    const refused = await post(
+      runtime,
+      recentAction,
+      cookie,
+      new URLSearchParams({
+        _csrf: await csrfFrom(page, eligibleAction),
+        version: String(recent.contact.version),
+        confirmation: "anonymize",
+      }),
+    );
+    const html = await refused.text();
+
+    expect(refused.status).toBe(409);
+    expect(html).toContain(
+      "Synthetic Recent Participant changed since you opened this page",
+    );
+    expect(html).not.toContain(`action="${recentAction}"`);
+    expect(
+      runtime.core.retention.findParticipant(recent.contact.id),
+    ).toMatchObject({
+      name: "Synthetic Recent Participant",
+      email: "synthetic-recent-participant@example.invalid",
+      phone: "synthetic-recent-participant-phone",
+    });
+    expect(runtime.core.retention.listReceipts()).toHaveLength(0);
+  });
+
   it("requires the organizer's explicit irreversible-action confirmation", async () => {
     const { runtime, signup, cookie } = await boot();
     const action = `/admin/retention/${signup.contact.id}/anonymize`;
