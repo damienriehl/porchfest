@@ -175,7 +175,9 @@ describe("the admin tier is real", () => {
     });
 
     expect(response.status).toBe(303);
-    expect(response.headers.get("location")).toBe("/admin/sign-in");
+    expect(response.headers.get("location")).toBe(
+      "/admin/sign-in?next=%2Fadmin",
+    );
   });
 
   it("keeps the JSON 401 for an unauthenticated organizer GET that does not request HTML", async () => {
@@ -203,7 +205,9 @@ describe("the admin tier is real", () => {
     expect(response.headers.get("cache-control")).toBe("no-store, private");
     expect(response.headers.get("content-type")).toContain("text/html");
     expect(response.headers.get("location")).toBeNull();
-    expect(await response.text()).toContain('href="/admin/sign-in"');
+    expect(await response.text()).toContain(
+      'href="/admin/sign-in?next=%2Fadmin%2Fsign-out"',
+    );
   });
 
   it("keeps the JSON 401 for an unauthenticated organizer POST that does not request HTML", async () => {
@@ -276,6 +280,24 @@ describe("the admin tier is real", () => {
 });
 
 describe("sign-in link handling", () => {
+  it("shows the reason when a tokenless sign-in submission is refused", async () => {
+    const { runtime, announced } = await boot();
+    const csrf = await csrfFor(
+      runtime,
+      "/admin/sign-in",
+      bootstrapTokenFrom(announced),
+    );
+
+    const response = await post(
+      runtime,
+      "/admin/sign-in",
+      new URLSearchParams({ _csrf: csrf, display_name: "Organizer" }),
+    );
+
+    expect(response.status).toBe(403);
+    expect(await response.text()).toContain("That sign-in link is incomplete.");
+  });
+
   it("explains how to recover when no sign-in token is present", async () => {
     const { runtime } = await boot();
 
@@ -305,6 +327,71 @@ describe("sign-in link handling", () => {
     expect(html).toContain('name="email"');
     expect(html).toContain('type="submit"');
   });
+
+  it("plainly explains recovery when the deployment has only one organizer", async () => {
+    const { runtime, announced } = await boot();
+    await signIn(runtime, bootstrapTokenFrom(announced), {
+      displayName: "Only Organizer",
+      email: "only@example.invalid",
+    });
+
+    const response = await runtime.request(`${PUBLIC_BASE_URL}/admin/sign-in`);
+    const html = await response.text();
+
+    expect(html).toContain("another organizer");
+    expect(html).toContain("operator with database access");
+  });
+
+  it("returns to a validated organizer path after sign-in", async () => {
+    const { runtime, announced } = await boot();
+    const token = bootstrapTokenFrom(announced);
+    const next = "/admin/records/host/12?season=7";
+    const page = await runtime.request(
+      `${PUBLIC_BASE_URL}/admin/sign-in?token=${token}&next=${encodeURIComponent(next)}`,
+    );
+    const html = await page.text();
+    const csrf = html.match(/name="_csrf" value="([^"]+)"/)?.[1] ?? "";
+    expect(html).toContain(`name="next" value="${next}"`);
+
+    const response = await post(
+      runtime,
+      "/admin/sign-in",
+      new URLSearchParams({
+        _csrf: csrf,
+        token,
+        next,
+        display_name: "Returning Organizer",
+        email: "returning@example.invalid",
+      }),
+    );
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe(next);
+  });
+
+  it.each(["//evil.example", "https://evil.example", "/\\evil"])(
+    "falls back to the admin page for a hostile next path: %s",
+    async (next) => {
+      const { runtime, announced } = await boot();
+      const token = bootstrapTokenFrom(announced);
+      const csrf = await csrfFor(runtime, "/admin/sign-in", token);
+
+      const response = await post(
+        runtime,
+        "/admin/sign-in",
+        new URLSearchParams({
+          _csrf: csrf,
+          token,
+          next,
+          display_name: "Safe Organizer",
+          email: "safe@example.invalid",
+        }),
+      );
+
+      expect(response.status).toBe(303);
+      expect(response.headers.get("location")).toBe("/admin");
+    },
+  );
 
   it("refuses a replayed sign-in link", async () => {
     const { runtime, announced } = await boot();

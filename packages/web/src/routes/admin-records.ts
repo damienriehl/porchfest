@@ -346,7 +346,7 @@ export function registerAdminRecordRoutes(
       tier: "organizer",
       handler: (context: Context) => {
         const organizer = currentOrganizer(options.core, context);
-        if (!organizer) return unauthorized();
+        if (!organizer) return options.routes.organizerGetRefusal(context);
         const recordId = Number(context.req.param("id"));
         const seasonId = Number(context.req.query("season") ?? "");
         const item = findItem(

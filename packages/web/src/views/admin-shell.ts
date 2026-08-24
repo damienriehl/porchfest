@@ -38,11 +38,12 @@ export function renderSignInPage(options: {
   readonly csrfToken: string;
   readonly needsEmail: boolean;
   readonly errors: readonly string[];
+  readonly next?: string;
 }): string {
-  if (!options.token) {
+  if (!options.token && options.errors.length === 0) {
     const nextStep = options.needsEmail
       ? "Use the bootstrap sign-in link printed in the container log."
-      : "Ask another organizer for a fresh sign-in link.";
+      : "A new sign-in link must come from another organizer. If you are the only organizer, an operator with database access must issue one.";
     return page(
       "Organizer sign-in",
       `    <header class="signup-header">
@@ -66,12 +67,13 @@ export function renderSignInPage(options: {
     `    <header class="signup-header">
       <p class="eyebrow">Organizers</p>
       <h1>Sign in to Porchfest</h1>
-      <p class="lede">Sign-in links work once. If yours has expired, ask another organizer for a new one.</p>
+      <p class="lede">Sign-in links work once. A new link must come from another organizer. If you are the only organizer, an operator with database access must issue one.</p>
     </header>
     ${errors}
     <form class="signup-form" id="signup-form" method="post" action="${ADMIN_SIGN_IN_PATH}">
       <input type="hidden" name="_csrf" value="${escapeHtml(options.csrfToken)}">
       <input type="hidden" name="token" value="${escapeHtml(options.token)}">
+      ${options.next ? `<input type="hidden" name="next" value="${escapeHtml(options.next)}">` : ""}
       <fieldset>
         <legend>Who you are</legend>
         <div class="field">

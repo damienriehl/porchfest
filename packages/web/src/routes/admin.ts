@@ -127,6 +127,7 @@ export function registerAdminRoutes(options: AdminRouteOptions): void {
     tier: "public",
     handler: (context: Context) => {
       const token = context.req.query("token") ?? "";
+      const next = validatedNext(context.req.query("next"));
       const invited = options.core.access.hasAnyOrganizer();
       return new Response(
         renderSignInPage({
@@ -136,6 +137,7 @@ export function registerAdminRoutes(options: AdminRouteOptions): void {
           // name themselves; an invite already knows the address.
           needsEmail: !invited,
           errors: [],
+          next: next ?? undefined,
         }),
         { status: 200, headers: adminHeaders() },
       );
@@ -151,14 +153,20 @@ export function registerAdminRoutes(options: AdminRouteOptions): void {
       try {
         fields = await readFields(context);
       } catch {
-        return signInRefusal(options, "", "That form could not be read.");
+        return signInRefusal(options, "", null, "That form could not be read.");
       }
       const token = fields.token ?? "";
+      const next = validatedNext(fields.next);
       const displayName = fields.display_name ?? "";
       const email = fields.email ?? "";
 
       if (!token) {
-        return signInRefusal(options, "", "That sign-in link is incomplete.");
+        return signInRefusal(
+          options,
+          "",
+          next,
+          "That sign-in link is incomplete.",
+        );
       }
 
       try {
@@ -173,7 +181,7 @@ export function registerAdminRoutes(options: AdminRouteOptions): void {
           headers: {
             ...adminHeaders(),
             "content-type": "text/plain; charset=UTF-8",
-            location: ADMIN_PATH,
+            location: next ?? ADMIN_PATH,
             "set-cookie": serializeSessionCookie(
               session.token,
               session.expiresAt,
@@ -182,7 +190,7 @@ export function registerAdminRoutes(options: AdminRouteOptions): void {
           },
         });
       } catch (error) {
-        return signInRefusal(options, token, describe(error));
+        return signInRefusal(options, token, next, describe(error));
       }
     },
   });
@@ -374,6 +382,7 @@ function setupRefusal(
 function signInRefusal(
   options: AdminRouteOptions,
   token: string,
+  next: string | null,
   message: string,
 ): Response {
   return new Response(
@@ -382,9 +391,41 @@ function signInRefusal(
       csrfToken: options.csrfTokenFor(ADMIN_SIGN_IN_PATH),
       needsEmail: !options.core.access.hasAnyOrganizer(),
       errors: [message],
+      next: next ?? undefined,
     }),
     { status: 403, headers: adminHeaders() },
   );
+}
+
+function validatedNext(value: string | undefined): string | null {
+  if (!value) return null;
+  // Treat every submitted destination as hostile so sign-in cannot become an
+  // open redirect through URL-parser backslashes, schemes, or invisible bytes.
+  if (
+    !value.startsWith("/") ||
+    value.startsWith("//") ||
+    value.startsWith("/\\") ||
+    value.includes("\\") ||
+    value.includes("#") ||
+    containsControlCharacter(value) ||
+    /[a-z][a-z\d+.-]*:/i.test(value)
+  ) {
+    return null;
+  }
+  try {
+    const parsed = new URL(value, "https://porchfest.invalid");
+    if (parsed.origin !== "https://porchfest.invalid") return null;
+  } catch {
+    return null;
+  }
+  return value;
+}
+
+function containsControlCharacter(value: string): boolean {
+  return Array.from(value).some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint <= 0x1f || codePoint === 0x7f;
+  });
 }
 
 /**

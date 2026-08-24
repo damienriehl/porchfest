@@ -1,8 +1,21 @@
 import { Hono, type Context } from "hono";
 import { describe, expect, it } from "vitest";
 import { RouteRegistry } from "../src/router/registry.js";
+import { renderSignInPage } from "../src/views/admin-shell.js";
 
 describe("central route registry", () => {
+  it("renders a tokenless sign-in refusal's actual error", () => {
+    const html = renderSignInPage({
+      token: "",
+      csrfToken: "synthetic-csrf",
+      needsEmail: false,
+      errors: ["That sign-in link is incomplete."],
+    });
+
+    expect(html).toContain("That sign-in link is incomplete.");
+    expect(html).toContain('role="alert"');
+  });
+
   it("refuses a route with no trust tier and leaves it unreachable", async () => {
     const app = new Hono();
     const routes = new RouteRegistry(app);
@@ -91,7 +104,9 @@ describe("central route registry", () => {
     });
 
     expect(response.status).toBe(303);
-    expect(response.headers.get("location")).toBe("/organizer-sign-in");
+    expect(response.headers.get("location")).toBe(
+      "/organizer-sign-in?next=%2Forganizer",
+    );
   });
 
   it("never redirects the organizer sign-in destination to itself", async () => {
@@ -147,8 +162,36 @@ describe("central route registry", () => {
     expect(response.status).toBe(401);
     expect(response.headers.get("location")).toBeNull();
     expect(response.headers.get("content-type")).toContain("text/html");
-    expect(html).toContain('href="/organizer-sign-in"');
+    expect(html).toContain('href="/organizer-sign-in?next=%2Forganizer"');
     expect(html).toContain("Your changes were not submitted");
+  });
+
+  it("lets a defensive organizer GET check reuse the registry HTML refusal", async () => {
+    const app = new Hono();
+    const routes = new RouteRegistry(
+      app,
+      () => true,
+      undefined,
+      {},
+      {
+        signInPath: "/organizer-sign-in",
+      },
+    );
+    routes.register({
+      method: "GET",
+      path: "/organizer/record",
+      tier: "organizer",
+      handler: (context: Context) => routes.organizerGetRefusal(context),
+    });
+
+    const response = await app.request("/organizer/record?season=synthetic", {
+      headers: { accept: "text/html" },
+    });
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe(
+      "/organizer-sign-in?next=%2Forganizer%2Frecord%3Fseason%3Dsynthetic",
+    );
   });
 
   it("does not redirect an unauthenticated participant HTML request", async () => {

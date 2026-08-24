@@ -4,11 +4,12 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createTestingRuntime,
   type PorchfestRuntime,
 } from "../src/composition.js";
+import { createApp } from "../src/app.js";
 
 const PUBLIC_BASE_URL = "https://porchfest.example";
 const temporaryRoots: string[] = [];
@@ -202,7 +203,15 @@ describe("public signup forms", () => {
       openSignups: true,
     });
 
-    const response = await runtime.request(`${PUBLIC_BASE_URL}/signup/host`);
+    const listSeasons = vi.fn(() => runtime.core.setup.listSeasons());
+    const app = createApp({
+      core: {
+        ...runtime.core,
+        setup: { ...runtime.core.setup, listSeasons },
+      },
+      publicBaseUrl: PUBLIC_BASE_URL,
+    });
+    const response = await app.request(`${PUBLIC_BASE_URL}/signup/host`);
     const html = await response.text();
 
     expect(response.status).toBe(200);
@@ -214,6 +223,7 @@ describe("public signup forms", () => {
     expect(html).not.toContain('name="season_id"');
     expect(html).toContain('class="signup-single-column"');
     expect(html).not.toContain('class="signup-layout"');
+    expect(listSeasons).toHaveBeenCalledTimes(1);
   });
 
   it("renders a closed notice instead of a signup form when no season is open", async () => {

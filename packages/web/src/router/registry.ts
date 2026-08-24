@@ -169,10 +169,7 @@ export class RouteRegistry {
           route.path !== organizerSignInPath &&
           acceptsHtml(context)
         ) {
-          return new Response(null, {
-            status: 303,
-            headers: adminHeaders({ location: organizerSignInPath }),
-          });
+          return this.organizerGetRefusal(context);
         }
         if (
           route.method !== "GET" &&
@@ -181,7 +178,12 @@ export class RouteRegistry {
           acceptsHtml(context)
         ) {
           return new Response(
-            renderOrganizerSignInRequiredPage({ organizerSignInPath }),
+            renderOrganizerSignInRequiredPage({
+              organizerSignInPath: signInDestination(
+                context,
+                organizerSignInPath,
+              ),
+            }),
             { status: 401, headers: adminHeaders() },
           );
         }
@@ -233,9 +235,39 @@ export class RouteRegistry {
     return route;
   }
 
+  /** Keep defensive handler checks aligned with the registry's HTML redirect. */
+  organizerGetRefusal(context: Context): Response {
+    const organizerSignInPath = this.#organizerAccess.signInPath;
+    const requestPath = new URL(context.req.url).pathname;
+    if (
+      organizerSignInPath &&
+      requestPath !== organizerSignInPath &&
+      acceptsHtml(context)
+    ) {
+      return new Response(null, {
+        status: 303,
+        headers: adminHeaders({
+          location: signInDestination(context, organizerSignInPath),
+        }),
+      });
+    }
+    return context.json(
+      { error: "unauthorized" },
+      401,
+      adminHeaders({ "content-type": "application/json" }),
+    );
+  }
+
   list(): readonly RouteDeclaration[] {
     return [...this.#routes];
   }
+}
+
+function signInDestination(context: Context, signInPath: string): string {
+  const requestUrl = new URL(context.req.url);
+  const requestedPath = `${requestUrl.pathname}${requestUrl.search}`;
+  const separator = signInPath.includes("?") ? "&" : "?";
+  return `${signInPath}${separator}next=${encodeURIComponent(requestedPath)}`;
 }
 
 function acceptsHtml(context: Context): boolean {

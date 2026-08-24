@@ -337,7 +337,7 @@ function absentSeasonResponse(
 
   // A missing or ambiguous season has no safe submission target. Stop before
   // rendering participant fields so the page never invites answers it cannot save.
-  return seasonPageResponse(options, kind, [], 200);
+  return seasonPageResponse(options, kind, [], 200, openSeasons);
 }
 
 function seasonPageResponse(
@@ -345,10 +345,13 @@ function seasonPageResponse(
   kind: SignupKind,
   errors: readonly SignupError[],
   status: SignupStatus,
+  knownOpenSeasons?: readonly Season[],
 ): Response {
-  const openSeasons = options.core.setup
-    .listSeasons()
-    .filter((season) => isSeasonActionLegal(season.state, "signup"));
+  const openSeasons =
+    knownOpenSeasons ??
+    options.core.setup
+      .listSeasons()
+      .filter((season) => isSeasonActionLegal(season.state, "signup"));
   return htmlResponse(
     renderSignupSeasonPage({ kind, seasons: openSeasons, errors }),
     status,
