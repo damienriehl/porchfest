@@ -167,12 +167,41 @@ describe("first boot", () => {
 });
 
 describe("the admin tier is real", () => {
-  it("refuses an unauthenticated request to an admin route", async () => {
+  it("redirects an unauthenticated browser GET to organizer sign-in", async () => {
+    const { runtime } = await boot();
+
+    const response = await runtime.request(`${PUBLIC_BASE_URL}/admin`, {
+      headers: { accept: "text/html" },
+    });
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe("/admin/sign-in");
+  });
+
+  it("keeps the JSON 401 for an unauthenticated organizer GET that does not request HTML", async () => {
     const { runtime } = await boot();
 
     const response = await runtime.request(`${PUBLIC_BASE_URL}/admin`);
 
     expect(response.status).toBe(401);
+    expect(response.headers.get("cache-control")).toBe("no-store, private");
+    expect(await response.json()).toEqual({ error: "unauthorized" });
+  });
+
+  it("keeps the JSON 401 for an unauthenticated organizer POST", async () => {
+    const { runtime } = await boot();
+
+    const response = await runtime.request(
+      `${PUBLIC_BASE_URL}/admin/sign-out`,
+      {
+        method: "POST",
+        headers: { accept: "text/html" },
+      },
+    );
+
+    expect(response.status).toBe(401);
+    expect(response.headers.get("cache-control")).toBe("no-store, private");
+    expect(await response.json()).toEqual({ error: "unauthorized" });
   });
 
   it("refuses a made-up session cookie", async () => {

@@ -170,6 +170,85 @@ describe("public signup forms", () => {
     );
   });
 
+  it("auto-selects the only open season for a bare host URL and submits it", async () => {
+    const { runtime, seasonId } = await makeRuntime();
+
+    const response = await runtime.request(`${PUBLIC_BASE_URL}/signup/host`);
+    const html = await response.text();
+    const token = html.match(/name="_csrf" value="([^"]+)"/)?.[1] ?? "";
+
+    expect(response.status).toBe(200);
+    expect(html).toContain('data-signup-form="host"');
+    expect(html).toContain(`name="season_id" value="${seasonId}"`);
+    expect(html).not.toContain('class="error-summary"');
+    expect(token).toBeTruthy();
+
+    const submitted = await submit(
+      runtime,
+      "/signup/host",
+      hostValues(seasonId, token),
+    );
+    expect(submitted.status).toBe(201);
+  });
+
+  it("renders a season chooser instead of a full form when two seasons are open", async () => {
+    const { runtime } = await makeRuntime();
+    runtime.core.setup.createSeason({
+      year: 2032,
+      displayName: "Synthetic 2032 Porchfest",
+      timezone: "UTC",
+      eventDate: "2032-06-01",
+      timeSlots: [],
+      openSignups: true,
+    });
+
+    const response = await runtime.request(`${PUBLIC_BASE_URL}/signup/host`);
+    const html = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(html).toContain("Choose a Porchfest season");
+    expect(html).toContain("Synthetic 2031 Porchfest");
+    expect(html).toContain("Synthetic 2032 Porchfest");
+    expect(html).toContain('name="season"');
+    expect(html).not.toContain('data-signup-form="host"');
+    expect(html).not.toContain('name="season_id"');
+  });
+
+  it("renders a closed notice instead of a signup form when no season is open", async () => {
+    const { runtime, seasonId } = await makeRuntime();
+    const season = runtime.core.seasons.getSeason(seasonId);
+    runtime.core.seasons.transitionSeason(
+      season.id,
+      season.version,
+      "signups_closed",
+    );
+
+    const response = await runtime.request(
+      `${PUBLIC_BASE_URL}/signup/performer`,
+    );
+    const html = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(html).toContain("Signups are not open right now");
+    expect(html).not.toContain("<form");
+    expect(html).not.toContain('data-signup-form="performer"');
+  });
+
+  it("keeps the explicit empty season query on its existing refusal path", async () => {
+    const { runtime } = await makeRuntime();
+
+    const response = await runtime.request(
+      `${PUBLIC_BASE_URL}/signup/host?season=`,
+    );
+    const html = await response.text();
+
+    expect(response.status).toBe(400);
+    expect(html).toContain(
+      "Choose an open Porchfest season before signing up.",
+    );
+    expect(html).toContain('data-signup-form="host"');
+  });
+
   it("renders semantic, labelled host controls and the progressive preview", async () => {
     const { runtime, seasonId } = await makeRuntime();
     const { html } = await csrfToken(runtime, "/signup/host", seasonId);

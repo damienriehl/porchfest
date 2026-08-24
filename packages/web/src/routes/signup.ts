@@ -29,6 +29,7 @@ import {
   renderHostSubmission,
   renderPerformerPreview,
   renderPerformerSubmission,
+  renderSignupSeasonPage,
   type SignupError,
   type SignupValues,
 } from "../views/signup-view.js";
@@ -150,7 +151,10 @@ export function registerSignupRoutes(options: SignupRouteOptions): void {
       path,
       tier: "public",
       handler: (context: Context) => {
-        const requested = context.req.query("season") ?? "";
+        const requested = context.req.query("season");
+        if (requested === undefined) {
+          return absentSeasonResponse(options, challenge, kind);
+        }
         const resolved = resolveSeason(options, requested);
         return formResponse(
           options,
@@ -298,6 +302,38 @@ export function registerSignupRoutes(options: SignupRouteOptions): void {
       },
     });
   }
+}
+
+function absentSeasonResponse(
+  options: SignupRouteOptions,
+  challenge: AntibotClientChallenge | null,
+  kind: SignupKind,
+): Response {
+  const openSeasons = options.core.setup
+    .listSeasons()
+    .filter((season) => isSeasonActionLegal(season.state, "signup"));
+  if (openSeasons.length === 1) {
+    const season = openSeasons[0];
+    if (season) {
+      return formResponse(
+        options,
+        challenge,
+        kind,
+        { season_id: [String(season.id)] },
+        [],
+        200,
+        season,
+      );
+    }
+  }
+
+  // A missing or ambiguous season has no safe submission target. Stop before
+  // rendering participant fields so the page never invites answers it cannot save.
+  return htmlResponse(
+    renderSignupSeasonPage({ kind, seasons: openSeasons }),
+    200,
+    null,
+  );
 }
 
 // ---------------------------------------------------------------------------

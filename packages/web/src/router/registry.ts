@@ -23,6 +23,7 @@ export type TrustAuthorizer = (
 
 export interface MutationProtection {
   readonly allowedOrigin: string | null;
+  readonly organizerSignInPath?: string;
   readonly validateCsrf: (
     token: string | null,
     route: RouteDeclaration,
@@ -150,6 +151,21 @@ export class RouteRegistry {
         route.tier !== "public" &&
         !(await this.#authorize(route.tier, context))
       ) {
+        const organizerSignInPath =
+          this.#mutationProtection?.organizerSignInPath;
+        // Redirect only page navigations: redirecting a refused mutation would
+        // discard its body, and participant auth has no sign-in destination yet.
+        if (
+          route.method === "GET" &&
+          route.tier === "organizer" &&
+          organizerSignInPath &&
+          acceptsHtml(context)
+        ) {
+          return new Response(null, {
+            status: 303,
+            headers: adminHeaders({ location: organizerSignInPath }),
+          });
+        }
         return context.json(
           { error: "unauthorized" },
           401,
@@ -201,6 +217,20 @@ export class RouteRegistry {
   list(): readonly RouteDeclaration[] {
     return [...this.#routes];
   }
+}
+
+function acceptsHtml(context: Context): boolean {
+  return (context.req.header("accept") ?? "").split(",").some((range) => {
+    const [rawMediaType, ...parameters] = range.split(";");
+    const mediaType = rawMediaType?.trim().toLowerCase();
+    const quality = parameters
+      .map((parameter) => parameter.trim().toLowerCase())
+      .find((parameter) => parameter.startsWith("q="));
+    return (
+      (mediaType === "text/html" || mediaType === "application/xhtml+xml") &&
+      (quality === undefined || Number(quality.slice(2)) > 0)
+    );
+  });
 }
 
 function rejectMutationOrigin(

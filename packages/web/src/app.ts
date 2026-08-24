@@ -3,7 +3,11 @@ import type { CoreRuntime } from "@porchfest/core";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { Hono, type Context } from "hono";
 import { RouteRegistry, type TrustAuthorizer } from "./router/registry.js";
-import { announceBootstrapLink, registerAdminRoutes } from "./routes/admin.js";
+import {
+  ADMIN_SIGN_IN_PATH,
+  announceBootstrapLink,
+  registerAdminRoutes,
+} from "./routes/admin.js";
 import { registerAdminRecordRoutes } from "./routes/admin-records.js";
 import { registerAdminRetentionRoutes } from "./routes/admin-retention.js";
 import {
@@ -48,6 +52,7 @@ export function createApp(options: AppOptions): PorchfestApp {
     authorize,
     {
       allowedOrigin,
+      organizerSignInPath: ADMIN_SIGN_IN_PATH,
       validateCsrf: (token, route) => {
         if (!token || !csrfSecret) return false;
         const expected = Buffer.from(csrfTokenFor(route.path));

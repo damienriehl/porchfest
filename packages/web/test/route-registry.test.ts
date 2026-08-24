@@ -50,6 +50,46 @@ describe("central route registry", () => {
     expect(response.headers.get("cache-control")).toBe("no-store, private");
   });
 
+  it("keeps an HTML organizer GET on JSON 401 when no sign-in path is configured", async () => {
+    const app = new Hono();
+    const routes = new RouteRegistry(app);
+    routes.register({
+      method: "GET",
+      path: "/organizer",
+      tier: "organizer",
+      handler: (context: Context) => context.text("organizer"),
+    });
+
+    const response = await app.request("/organizer", {
+      headers: { accept: "text/html" },
+    });
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: "unauthorized" });
+  });
+
+  it("does not redirect an unauthenticated participant HTML request", async () => {
+    const app = new Hono();
+    const routes = new RouteRegistry(app, undefined, {
+      allowedOrigin: null,
+      organizerSignInPath: "/organizer-sign-in",
+      validateCsrf: () => true,
+    });
+    routes.register({
+      method: "GET",
+      path: "/participant",
+      tier: "participant",
+      handler: (context: Context) => context.text("participant"),
+    });
+
+    const response = await app.request("/participant", {
+      headers: { accept: "text/html" },
+    });
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: "unauthorized" });
+  });
+
   it("snapshots a declaration so caller mutations cannot remove protection", async () => {
     const app = new Hono();
     const routes = new RouteRegistry(app);
