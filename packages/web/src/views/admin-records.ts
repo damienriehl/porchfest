@@ -156,6 +156,7 @@ export function renderQueuePage(options: {
       <h1>Welcome, ${escapeHtml(options.organizerName)}</h1>
       <p class="lede">${needsReview === 0 ? "Nothing new for you right now." : `${needsReview} ${needsReview === 1 ? "item needs" : "items need"} your review.`}</p>
       <p class="lede"><a href="/admin/placeholders/act/new?season=${options.seasonId}">Add an act without a submission</a> · <a href="/admin/placeholders/venue/new?season=${options.seasonId}">Add a venue without a submission</a></p>
+      <p class="lede"><a href="/admin/retention">Review participant retention</a></p>
     </header>
     <section aria-labelledby="change-requests-title">
       <h2 id="change-requests-title">Change requests needing a decision</h2>

@@ -90,7 +90,7 @@ export function createCoreTestingRepository(db: CoreExecutor) {
 
   function corruptChangeRequestProposal(
     id: number,
-    proposedValue: string,
+    proposedValue: string | null,
   ): void {
     db.update(changeRequests)
       .set({ proposedValue })

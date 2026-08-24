@@ -6,6 +6,8 @@ import type { UnconfiguredAntibotGuardOptions } from "@porchfest/antibot";
 import {
   CORE_DATABASE_FILENAME,
   createCore,
+  DEFAULT_RETENTION_MONTHS,
+  normalizeRetentionMonths,
   openCoreDatabase,
   type AdapterPorts,
   type CoreRuntime,
@@ -22,6 +24,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { createApp } from "./app.js";
 import type { SessionCookieOptions } from "./auth.js";
+import { createRetentionSweep } from "./retention-sweep.js";
 import { announceBootstrapLink } from "./routes/admin.js";
 import { loadSessionSecret } from "./config/session-secret.js";
 import type { RouteRegistry, TrustAuthorizer } from "./router/registry.js";
@@ -131,12 +134,19 @@ async function createRuntimeWithTesting(
   const trustedProxyHops = parseTrustedProxyHops(
     env.PORCHFEST_TRUSTED_PROXY_HOPS,
   );
+  const retentionMonths = parseRetentionMonths(env.PORCHFEST_RETENTION_MONTHS);
   const databaseConnection = openCoreDatabase(
     join(dataDirectory, CORE_DATABASE_FILENAME),
   );
 
   try {
-    const core = createCore(adapters, databaseConnection.database);
+    const core = createCore(adapters, databaseConnection.database, {
+      retention: { retentionMonths },
+    });
+    const retentionSweep = createRetentionSweep(core);
+    // R35: boot is one of only two opportunities to enforce retention. Failure
+    // is logged inside the trigger and cannot prevent the container from booting.
+    retentionSweep.onBoot();
     const { fetch, request, routes } = createApp({
       core,
       authorize: options.authorize,
@@ -146,6 +156,7 @@ async function createRuntimeWithTesting(
       signupGuardOptions: options.signupGuardOptions,
       trustedProxyHops,
       sessionCookie: options.sessionCookie,
+      onOrganizerActivity: retentionSweep.onOrganizerActivity,
     });
 
     // R9: with no organizer yet, the container log is the delivery channel for
@@ -211,4 +222,12 @@ function parseTrustedProxyHops(value: string | undefined): number | undefined {
     );
   }
   return hops;
+}
+
+function parseRetentionMonths(value: string | undefined): number {
+  const configured = value?.trim();
+  if (!configured) return DEFAULT_RETENTION_MONTHS;
+  // R35 defaults closed to a meaningful window. Invalid deployment input must
+  // never become zero or NaN and immediately anonymize the whole database.
+  return normalizeRetentionMonths(Number(configured));
 }

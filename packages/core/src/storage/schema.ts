@@ -291,6 +291,43 @@ export const contacts = sqliteTable(
   ],
 );
 
+export const deletionReceiptActions = ["organizer", "retention"] as const;
+export const deletionReceiptBackupStatuses = ["pending", "completed"] as const;
+
+/**
+ * R35's durable, non-identifying handoff to off-host backup rotation.
+ *
+ * The contact id remains useful only as a structural key after that contact is
+ * scrubbed. No copied name, address, or delivery field belongs here: a backup
+ * containing this receipt must not become a second source of the data removed.
+ * Status compatibility is enforced in the retention module so this additive
+ * table does not trigger SQLite's migration-rebuild trap.
+ */
+export const deletionReceipts = sqliteTable(
+  "deletion_receipts",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    contactId: integer("contact_id")
+      .notNull()
+      .references(() => contacts.id),
+    action: text("action", { enum: deletionReceiptActions }).notNull(),
+    applicationAnonymizedAt: integer("application_anonymized_at", {
+      mode: "timestamp",
+    }).notNull(),
+    backupStatus: text("backup_status", {
+      enum: deletionReceiptBackupStatuses,
+    })
+      .notNull()
+      .default("pending"),
+    backupCompletedAt: integer("backup_completed_at", { mode: "timestamp" }),
+    ...mutableColumns(),
+  },
+  (table) => [
+    uniqueIndex("deletion_receipts_contact_id_uidx").on(table.contactId),
+    index("deletion_receipts_backup_status_idx").on(table.backupStatus),
+  ],
+);
+
 export const venues = sqliteTable(
   "venues",
   {
@@ -597,6 +634,7 @@ export const annotations = sqliteTable(
 const schemaTables = [
   seasons,
   contacts,
+  deletionReceipts,
   venues,
   acts,
   changeRequests,
@@ -653,6 +691,10 @@ export type Season = typeof seasons.$inferSelect;
 export type NewSeason = typeof seasons.$inferInsert;
 export type Contact = typeof contacts.$inferSelect;
 export type NewContact = typeof contacts.$inferInsert;
+export type DeletionReceipt = typeof deletionReceipts.$inferSelect;
+export type DeletionReceiptAction = (typeof deletionReceiptActions)[number];
+export type DeletionReceiptBackupStatus =
+  (typeof deletionReceiptBackupStatuses)[number];
 export type Venue = typeof venues.$inferSelect;
 export type NewVenue = typeof venues.$inferInsert;
 export type Act = typeof acts.$inferSelect;

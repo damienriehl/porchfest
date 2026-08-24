@@ -18,6 +18,7 @@ import {
 import type { Context } from "hono";
 import { adminHeaders, currentOrganizer } from "../auth.js";
 import type { RouteRegistry } from "../router/registry.js";
+import { readFields, redirect, unauthorized } from "./admin-http.js";
 import {
   RECORD_FIELDS,
   recordTitle,
@@ -83,16 +84,26 @@ export function registerAdminRecordRoutes(
       const fields = await readFields(context);
       const seasonId = Number(fields.season ?? "");
       const version = Number(fields.version ?? "");
-      const pending = options.core.changeRequests.find(requestId);
-      if (
-        !pending ||
-        pending.seasonId !== seasonId ||
-        !Number.isSafeInteger(version)
-      ) {
-        return notFound();
-      }
-
       try {
+        let pending;
+        try {
+          pending = options.core.changeRequests.find(requestId);
+        } catch (error) {
+          // R33: malformed proposals stay rejectable, but apply must refuse
+          // them instead of leaking a decode failure as a server error.
+          if (!(error instanceof ChangeRequestLifecycleError)) throw error;
+          return html(
+            `<h1>This change request could not be applied</h1><p>Its proposal is invalid. Reject it from the activity queue to dismiss it.</p>`,
+            409,
+          );
+        }
+        if (
+          !pending ||
+          pending.seasonId !== seasonId ||
+          !Number.isSafeInteger(version)
+        ) {
+          return notFound();
+        }
         if (pending.kind === "address") {
           if (
             pending.status !== "pending" ||
@@ -841,24 +852,30 @@ function completeAddressReviewAfterSave(
 ): void {
   const review = changeRequestId(requestIdValue);
   if (!review) return;
-  const request = core.changeRequests.find(review.id);
-  if (
-    !request ||
-    request.status !== "pending" ||
-    request.kind !== "address" ||
-    recordType !== "venue" ||
-    request.seasonId !== seasonId ||
-    request.recordId !== recordId ||
-    request.proposedAddress !== savedAddress
-  ) {
-    return;
-  }
   try {
+    const request = core.changeRequests.find(review.id);
+    if (
+      !request ||
+      request.status !== "pending" ||
+      request.kind !== "address" ||
+      recordType !== "venue" ||
+      request.seasonId !== seasonId ||
+      request.recordId !== recordId ||
+      request.proposedAddress !== savedAddress
+    ) {
+      return;
+    }
     core.changeRequests.completeAddressReview(request.id, request.version);
   } catch (error) {
-    // R33: the venue save already succeeded. Another organizer resolving the
-    // proposal first must not turn that successful save into a 500.
-    if (error instanceof ChangeRequestConflictError) return;
+    // R33: the venue save already succeeded. A malformed proposal or another
+    // organizer resolving it first must not turn that successful save into a
+    // 500 that invites the organizer to repeat the committed write.
+    if (
+      error instanceof ChangeRequestLifecycleError ||
+      error instanceof ChangeRequestConflictError
+    ) {
+      return;
+    }
     throw error;
   }
 }
@@ -1044,42 +1061,8 @@ function asPlaceholderType(value: string | undefined): "act" | "venue" | null {
   return value === "act" || value === "venue" ? value : null;
 }
 
-async function readFields(
-  context: Context,
-): Promise<Readonly<Record<string, string>>> {
-  const form = await context.req.formData();
-  const fields: Record<string, string> = Object.create(null) as Record<
-    string,
-    string
-  >;
-  for (const [name, value] of form) {
-    if (typeof value === "string" && fields[name] === undefined) {
-      fields[name] = value;
-    }
-  }
-  return fields;
-}
-
 function html(body: string, status = 200): Response {
   return new Response(body, { status, headers: adminHeaders() });
-}
-
-function redirect(location: string): Response {
-  return new Response(null, {
-    status: 303,
-    headers: {
-      ...adminHeaders(),
-      "content-type": "text/plain; charset=UTF-8",
-      location,
-    },
-  });
-}
-
-function unauthorized(): Response {
-  return new Response(JSON.stringify({ error: "unauthorized" }), {
-    status: 401,
-    headers: { ...adminHeaders(), "content-type": "application/json" },
-  });
 }
 
 function notFound(): Response {

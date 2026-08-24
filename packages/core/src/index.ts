@@ -86,6 +86,19 @@ export {
   type QueueRecord,
   type QueueRepository,
 } from "./queue.js";
+export {
+  ANONYMIZED_ANNOTATION_NOTE,
+  ANONYMIZED_CONTACT_NAME,
+  createRetentionRepository,
+  DEFAULT_RETENTION_MONTHS,
+  normalizeRetentionMonths,
+  RetentionConflictError,
+  RetentionLifecycleError,
+  type AnonymizationResult,
+  type AnonymizeParticipantInput,
+  type RetentionRepository,
+  type RetentionRepositoryOptions,
+} from "./retention.js";
 export type {
   ChangeRequest,
   ChangeRequestKind,
@@ -94,6 +107,9 @@ export type {
   QueueDismissal,
   QueueRecordType,
   RecordStatus,
+  DeletionReceipt,
+  DeletionReceiptAction,
+  DeletionReceiptBackupStatus,
 } from "./storage/schema.js";
 export { recordStatuses } from "./storage/schema.js";
 export {
@@ -119,6 +135,11 @@ import {
   type ChangeRequestRepository,
 } from "./change-requests.js";
 import { createQueueRepository, type QueueRepository } from "./queue.js";
+import {
+  createRetentionRepository,
+  type RetentionRepository,
+  type RetentionRepositoryOptions,
+} from "./retention.js";
 import { createSeasonSetup, type SeasonSetupRepository } from "./setup.js";
 import { createSeasonRepository } from "./season.js";
 import type { CoreDatabase } from "./storage/repository-errors.js";
@@ -132,11 +153,17 @@ export interface CoreRuntime {
   readonly setup: SeasonSetupRepository;
   readonly queue: QueueRepository;
   readonly changeRequests: ChangeRequestRepository;
+  readonly retention: RetentionRepository;
+}
+
+export interface CoreOptions {
+  readonly retention?: RetentionRepositoryOptions;
 }
 
 export function createCore(
   ports: AdapterPorts,
   database: CoreDatabase,
+  options: CoreOptions = {},
 ): CoreRuntime {
   return Object.freeze({
     ports: Object.freeze({ ...ports }),
@@ -145,5 +172,6 @@ export function createCore(
     setup: createSeasonSetup(database),
     queue: createQueueRepository(database),
     changeRequests: createChangeRequestRepository(database),
+    retention: createRetentionRepository(database, options.retention),
   });
 }

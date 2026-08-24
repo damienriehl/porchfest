@@ -286,6 +286,12 @@ export function registerAdminRoutes(options: AdminRouteOptions): void {
  * read a body. Iterating rather than reaching for FormData's accessor also keeps
  * the route-boundary scanner happy: it flags that accessor's name anywhere in
  * `web` because it cannot tell a form read from a route registration.
+ *
+ * This copy stays separate from `./admin-http.js` on purpose: it TRIMS, because the
+ * setup and sign-in forms it parses treat a stray space in an event name or an email
+ * as a typo. The record and retention forms deliberately do not trim, because a
+ * record's stored text belongs to the organizer. Folding this into the shared helper
+ * would silently change what those forms store.
  */
 async function readFields(
   context: Context,
