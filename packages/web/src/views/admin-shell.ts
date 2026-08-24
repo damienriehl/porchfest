@@ -132,9 +132,6 @@ export function renderSetupPage(options: {
         .join("")}</ul>
     </section>`;
 
-  // R35 makes retention a deployment-wide policy, so first-run setup must not
-  // offer a per-season value that the retention sweep cannot honor.
-
   return page(
     "First-run setup",
     `    <header class="signup-header">

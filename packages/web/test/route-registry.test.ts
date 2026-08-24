@@ -103,6 +103,30 @@ describe("central route registry", () => {
     expect(await response.text()).toBe("organizer");
   });
 
+  it("refuses a request whose host does not match the configured origin", async () => {
+    const app = new Hono();
+    const routes = new RouteRegistry(app, undefined, {
+      allowedOrigin: "https://porchfest.example",
+      validateCsrf: () => true,
+    });
+    routes.register({
+      method: "GET",
+      path: "/public-page",
+      tier: "public",
+      handler: (context: Context) => context.text("public"),
+    });
+
+    const response = await app.request(
+      "https://unrecognized.example/public-page",
+    );
+
+    expect(response.status).toBe(421);
+    expect(response.headers.get("content-type")).toBe(
+      "text/plain; charset=UTF-8",
+    );
+    expect(response.headers.get("cache-control")).toBe("no-store, private");
+  });
+
   it("centrally refuses a mutation from the wrong origin", async () => {
     const app = new Hono();
     const routes = new RouteRegistry(app, undefined, {
@@ -217,6 +241,10 @@ describe("central route registry", () => {
     );
 
     expect(response.status).toBe(413);
+    expect(response.headers.get("content-type")).toBe(
+      "text/plain; charset=UTF-8",
+    );
+    expect(response.headers.get("cache-control")).toBe("no-store, private");
   });
 
   it("admits an exact-origin mutation carrying a valid form token", async () => {

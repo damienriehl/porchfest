@@ -93,9 +93,12 @@ function validateRoute(input: unknown): RouteDeclaration {
 }
 
 const denyProtectedRoutes: TrustAuthorizer = () => false;
+const plainTextAdminHeaders = () =>
+  adminHeaders({ "content-type": "text/plain; charset=UTF-8" });
 const mutationBodyLimit = bodyLimit({
   maxSize: 64 * 1024,
-  onError: (context) => context.text("Mutation body is too large.", 413),
+  onError: (context) =>
+    context.text("Mutation body is too large.", 413, plainTextAdminHeaders()),
 });
 
 export class RouteRegistry {
@@ -139,7 +142,7 @@ export class RouteRegistry {
           return context.text(
             "Unrecognized request host.",
             421,
-            adminHeaders(),
+            plainTextAdminHeaders(),
           );
         }
       }
@@ -183,7 +186,11 @@ export class RouteRegistry {
           limitResponse ??
           handled ??
           (context.finalized ? context.res : undefined) ??
-          context.text("Mutation handler returned no response.", 500)
+          context.text(
+            "Mutation handler returned no response.",
+            500,
+            plainTextAdminHeaders(),
+          )
         );
       }
       return route.handler(context, next);
@@ -201,10 +208,18 @@ function rejectMutationOrigin(
   protection: MutationProtection | undefined,
 ): Response | null {
   if (!protection || protection.allowedOrigin === null) {
-    return context.text("Mutation protection is not configured.", 503);
+    return context.text(
+      "Mutation protection is not configured.",
+      503,
+      plainTextAdminHeaders(),
+    );
   }
   if (context.req.header("origin") !== protection.allowedOrigin) {
-    return context.text("Request origin was refused.", 403);
+    return context.text(
+      "Request origin was refused.",
+      403,
+      plainTextAdminHeaders(),
+    );
   }
   return null;
 }
@@ -215,7 +230,11 @@ async function rejectUnsafeMutation(
   protection: MutationProtection | undefined,
 ): Promise<Response | null> {
   if (!protection)
-    return context.text("Mutation protection is not configured.", 503);
+    return context.text(
+      "Mutation protection is not configured.",
+      503,
+      plainTextAdminHeaders(),
+    );
 
   const mediaType = (context.req.header("content-type") ?? "")
     .split(";", 1)[0]
