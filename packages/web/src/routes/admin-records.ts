@@ -119,7 +119,23 @@ export function registerAdminRecordRoutes(
         options.core.changeRequests.apply(requestId, version);
         return redirect(`/admin?season=${seasonId}`);
       } catch (error) {
-        if (!(error instanceof RepositoryConflictError)) throw error;
+        if (
+          !(error instanceof RepositoryConflictError) &&
+          !(error instanceof SeasonActionError) &&
+          !(error instanceof SeasonLifecycleError)
+        ) {
+          throw error;
+        }
+        if (
+          error instanceof SeasonActionError ||
+          error instanceof SeasonLifecycleError
+        ) {
+          const refusal = lifecycleRefusal("change request", error);
+          return html(
+            `<h1>${refusal.title}</h1><p>${refusal.message}</p>`,
+            409,
+          );
+        }
         // R33 refuses the decision rather than risking a schedule mutation made
         // against a record or request another organizer already changed.
         return html(
@@ -386,8 +402,13 @@ export function registerAdminRecordRoutes(
               status,
             );
           } catch (error) {
-            if (!(error instanceof RepositoryConflictError)) throw error;
-            // Same refusal shape as a field edit: named, not overwritten.
+            if (
+              !(error instanceof RepositoryConflictError) &&
+              !(error instanceof SeasonActionError) &&
+              !(error instanceof SeasonLifecycleError)
+            ) {
+              throw error;
+            }
             const current = findItem(
               options.core,
               seasonId,
@@ -396,6 +417,22 @@ export function registerAdminRecordRoutes(
               recordId,
             );
             if (!current) return notFound();
+            if (
+              error instanceof SeasonActionError ||
+              error instanceof SeasonLifecycleError
+            ) {
+              return html(
+                renderLifecycleRecordPage(
+                  options,
+                  organizer.id,
+                  seasonId,
+                  current,
+                  { refusal: lifecycleRefusal("status change", error) },
+                ),
+                409,
+              );
+            }
+            // Same refusal shape as a field edit: named, not overwritten.
             return html(
               renderRecordPage({
                 recordType,
@@ -881,7 +918,7 @@ function completeAddressReviewAfterSave(
 }
 
 function lifecycleRefusal(
-  action: "promotion" | "supersession",
+  action: "change request" | "promotion" | "status change" | "supersession",
   error: SeasonActionError | SeasonLifecycleError,
 ): { readonly title: string; readonly message: string } {
   if (error instanceof SeasonActionError) {

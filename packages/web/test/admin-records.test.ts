@@ -1215,6 +1215,75 @@ describe("record status", () => {
     );
   });
 
+  it("renders an archived-season status change as an actionable refusal", async () => {
+    const { runtime, season, alice, signup } = await boot();
+    const page = await get(
+      runtime,
+      `/admin/records/venue/${signup.venue.id}?season=${season.id}`,
+      alice,
+    );
+    runtime.core.seasons.transitionSeason(
+      season.id,
+      season.version,
+      "archived",
+    );
+
+    const refused = await post(
+      runtime,
+      `/admin/records/venue/${signup.venue.id}/status`,
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(
+          page,
+          `/admin/records/venue/${signup.venue.id}/status`,
+        ),
+        season: String(season.id),
+        version: String(signup.venue.version),
+        status: "withdrawn",
+      }),
+    );
+    const body = await refused.text();
+
+    expect(refused.status).toBe(409);
+    expect(body).toContain("status change could not be completed");
+    expect(body).toContain("season is archived");
+    expect(body).toContain("records were left unchanged");
+    const stored = runtime.core.queue
+      .listForOrganizer(season.id, 1)
+      .find((item) => item.recordType === "venue");
+    expect(stored?.recordType === "venue" && stored.record.status).toBe(
+      "tentative",
+    );
+  });
+
+  it("returns not found for a status change targeting an unknown record", async () => {
+    const { runtime, season, alice, signup } = await boot();
+    const page = await get(
+      runtime,
+      `/admin/records/venue/${signup.venue.id}?season=${season.id}`,
+      alice,
+    );
+    const unknownRecordId = signup.venue.id + 10_000;
+
+    const refused = await post(
+      runtime,
+      `/admin/records/venue/${unknownRecordId}/status`,
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(
+          page,
+          `/admin/records/venue/${signup.venue.id}/status`,
+        ),
+        season: String(season.id),
+        version: "0",
+        status: "withdrawn",
+      }),
+    );
+
+    expect(refused.status).toBe(404);
+    expect(await refused.text()).toContain("No such record in this season");
+  });
+
   it("offers no status control on a contact", async () => {
     const { runtime, season, alice, signup } = await boot();
 
@@ -1731,6 +1800,52 @@ describe("participant change requests", () => {
     expect(await refused.text()).toContain("could not be applied");
     expect(runtime.core.changeRequests.find(request.id)?.status).toBe(
       "pending",
+    );
+  });
+
+  it("renders an archived-season withdrawal request as an actionable refusal", async () => {
+    const { runtime, season, alice, signup } = await boot();
+    const request = runtime.core.changeRequests.record({
+      seasonId: season.id,
+      recordType: "venue",
+      recordId: signup.venue.id,
+      recordVersion: signup.venue.version,
+      kind: "withdrawal",
+    });
+    const queue = await get(runtime, `/admin?season=${season.id}`, alice);
+    runtime.core.seasons.transitionSeason(
+      season.id,
+      season.version,
+      "archived",
+    );
+
+    const refused = await post(
+      runtime,
+      `/admin/change-requests/${request.id}/apply`,
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(
+          queue,
+          `/admin/change-requests/${request.id}/apply`,
+        ),
+        season: String(season.id),
+        version: String(request.version),
+      }),
+    );
+    const body = await refused.text();
+
+    expect(refused.status).toBe(409);
+    expect(body).toContain("change request could not be completed");
+    expect(body).toContain("season is archived");
+    expect(body).toContain("records were left unchanged");
+    expect(runtime.core.changeRequests.find(request.id)?.status).toBe(
+      "pending",
+    );
+    const stored = runtime.core.queue
+      .listForOrganizer(season.id, 1)
+      .find((item) => item.recordType === "venue");
+    expect(stored?.recordType === "venue" && stored.record.status).toBe(
+      "tentative",
     );
   });
 
