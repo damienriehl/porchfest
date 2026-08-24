@@ -1,6 +1,7 @@
 import type { Context, Handler } from "hono";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
+import { adminHeaders } from "../auth.js";
 
 export const TRUST_TIERS = ["public", "participant", "organizer"] as const;
 export type TrustTier = (typeof TRUST_TIERS)[number];
@@ -92,9 +93,12 @@ function validateRoute(input: unknown): RouteDeclaration {
 }
 
 const denyProtectedRoutes: TrustAuthorizer = () => false;
+const plainTextAdminHeaders = () =>
+  adminHeaders({ "content-type": "text/plain; charset=UTF-8" });
 const mutationBodyLimit = bodyLimit({
   maxSize: 64 * 1024,
-  onError: (context) => context.text("Mutation body is too large.", 413),
+  onError: (context) =>
+    context.text("Mutation body is too large.", 413, plainTextAdminHeaders()),
 });
 
 export class RouteRegistry {
@@ -135,14 +139,22 @@ export class RouteRegistry {
           expectedOrigin !== undefined &&
           new URL(context.req.url).origin !== expectedOrigin
         ) {
-          return context.text("Unrecognized request host.", 421);
+          return context.text(
+            "Unrecognized request host.",
+            421,
+            plainTextAdminHeaders(),
+          );
         }
       }
       if (
         route.tier !== "public" &&
         !(await this.#authorize(route.tier, context))
       ) {
-        return context.json({ error: "unauthorized" }, 401);
+        return context.json(
+          { error: "unauthorized" },
+          401,
+          adminHeaders({ "content-type": "application/json" }),
+        );
       }
       if (route.tier === "organizer") {
         try {
@@ -174,7 +186,11 @@ export class RouteRegistry {
           limitResponse ??
           handled ??
           (context.finalized ? context.res : undefined) ??
-          context.text("Mutation handler returned no response.", 500)
+          context.text(
+            "Mutation handler returned no response.",
+            500,
+            plainTextAdminHeaders(),
+          )
         );
       }
       return route.handler(context, next);
@@ -192,10 +208,18 @@ function rejectMutationOrigin(
   protection: MutationProtection | undefined,
 ): Response | null {
   if (!protection || protection.allowedOrigin === null) {
-    return context.text("Mutation protection is not configured.", 503);
+    return context.text(
+      "Mutation protection is not configured.",
+      503,
+      plainTextAdminHeaders(),
+    );
   }
   if (context.req.header("origin") !== protection.allowedOrigin) {
-    return context.text("Request origin was refused.", 403);
+    return context.text(
+      "Request origin was refused.",
+      403,
+      plainTextAdminHeaders(),
+    );
   }
   return null;
 }
@@ -206,7 +230,11 @@ async function rejectUnsafeMutation(
   protection: MutationProtection | undefined,
 ): Promise<Response | null> {
   if (!protection)
-    return context.text("Mutation protection is not configured.", 503);
+    return context.text(
+      "Mutation protection is not configured.",
+      503,
+      plainTextAdminHeaders(),
+    );
 
   const mediaType = (context.req.header("content-type") ?? "")
     .split(";", 1)[0]

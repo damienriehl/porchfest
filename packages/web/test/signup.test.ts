@@ -468,4 +468,33 @@ describe("public signup forms", () => {
     expect(html).toMatch(/no confirmation email will follow/i);
     expect(html).toContain("The Test Porch");
   });
+
+  it("links both receipts back to another signup for the same season", async () => {
+    const { runtime, seasonId } = await makeRuntime();
+    const hostForm = await csrfToken(runtime, "/signup/host", seasonId);
+    const hostReceipt = await submit(
+      runtime,
+      "/signup/host",
+      hostValues(seasonId, hostForm.token),
+    );
+    const performerForm = await csrfToken(
+      runtime,
+      "/signup/performer",
+      seasonId,
+    );
+    const performerReceipt = await submit(
+      runtime,
+      "/signup/performer",
+      performerValues(seasonId, performerForm.token),
+    );
+
+    expect(hostReceipt.status).toBe(201);
+    expect(await hostReceipt.text()).toContain(
+      `href="/signup/host?season=${seasonId}"`,
+    );
+    expect(performerReceipt.status).toBe(201);
+    expect(await performerReceipt.text()).toContain(
+      `href="/signup/performer?season=${seasonId}"`,
+    );
+  });
 });

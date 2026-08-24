@@ -281,6 +281,7 @@ export function registerSignupRoutes(options: SignupRouteOptions): void {
                 ? "Your porch signup is in."
                 : "Your performer signup is in.",
             kind,
+            seasonId: season.id,
             emailConfigured: options.core.ports.email.configured,
             preview:
               kind === "host"

@@ -188,7 +188,6 @@ export function renderSetupPage(options: {
         ${field("public_map_url", "Public map", "Where the map lives.", 'type="url"')}
         ${field("sender_name", "Sender name", "The name organizer email comes from.")}
         ${field("sender_email", "Sender address", "The address organizer email comes from.", 'type="email"')}
-        ${field("retention_days", "Retention window in days", "How long contact details are kept after a season closes. Leave blank to keep them until you delete them.", 'type="number" inputmode="numeric" min="1"')}
       </fieldset>
       <button class="primary-action" type="submit">Open the season</button>
     </form>`,

@@ -88,7 +88,6 @@ function completeSetup(csrf: string, overrides: Record<string, string> = {}) {
     public_map_url: "https://sapporchfest.example/map",
     sender_name: "SAP Porchfest",
     sender_email: "organizers@example.invalid",
-    retention_days: "540",
     open_signups: "yes",
     ...overrides,
   });
@@ -120,6 +119,18 @@ describe("first-run setup", () => {
 
     expect(response.status).toBe(303);
     expect(response.headers.get("location")).toBe("/admin/setup");
+  });
+
+  it("does not offer a per-season retention window", async () => {
+    const { runtime, cookie } = await bootAndSignIn();
+
+    const response = await runtime.request(`${PUBLIC_BASE_URL}/admin/setup`, {
+      headers: { cookie },
+    });
+    const html = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(html).not.toContain('name="retention_days"');
   });
 
   it("takes an empty database to a season that accepts a public signup", async () => {
@@ -174,7 +185,7 @@ describe("first-run setup", () => {
     expect(season.boundsNorth).toBeCloseTo(44.99);
     expect(season.publicMapUrl).toContain("sapporchfest.example/map");
     expect(season.senderEmail).toBe("organizers@example.invalid");
-    expect(season.retentionDays).toBe(540);
+    expect(season.retentionDays).toBeNull();
     expect(runtime.core.setup.listTimeSlots(1)).toHaveLength(2);
   });
 
