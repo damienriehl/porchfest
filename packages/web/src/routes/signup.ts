@@ -156,14 +156,22 @@ export function registerSignupRoutes(options: SignupRouteOptions): void {
           return absentSeasonResponse(options, challenge, kind);
         }
         const resolved = resolveSeason(options, requested);
+        if (!resolved.ok) {
+          return seasonPageResponse(
+            options,
+            kind,
+            [resolved.error],
+            resolved.status,
+          );
+        }
         return formResponse(
           options,
           challenge,
           kind,
           { season_id: [requested] },
-          resolved.ok ? [] : [resolved.error],
-          resolved.ok ? 200 : resolved.status,
-          resolved.ok ? resolved.season : null,
+          [],
+          200,
+          resolved.season,
         );
       },
     });
@@ -329,9 +337,21 @@ function absentSeasonResponse(
 
   // A missing or ambiguous season has no safe submission target. Stop before
   // rendering participant fields so the page never invites answers it cannot save.
+  return seasonPageResponse(options, kind, [], 200);
+}
+
+function seasonPageResponse(
+  options: SignupRouteOptions,
+  kind: SignupKind,
+  errors: readonly SignupError[],
+  status: SignupStatus,
+): Response {
+  const openSeasons = options.core.setup
+    .listSeasons()
+    .filter((season) => isSeasonActionLegal(season.state, "signup"));
   return htmlResponse(
-    renderSignupSeasonPage({ kind, seasons: openSeasons }),
-    200,
+    renderSignupSeasonPage({ kind, seasons: openSeasons, errors }),
+    status,
     null,
   );
 }

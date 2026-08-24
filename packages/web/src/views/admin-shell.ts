@@ -19,12 +19,40 @@ ${body}
 </html>`;
 }
 
+export function renderOrganizerSignInRequiredPage(options: {
+  readonly organizerSignInPath: string;
+}): string {
+  return page(
+    "Sign-in required",
+    `    <header class="signup-header">
+      <p class="eyebrow">Organizers</p>
+      <h1>Your session has ended</h1>
+      <p class="lede">Your changes were not submitted. Sign in again, then return to the record you were editing.</p>
+      <p><a class="secondary-action" href="${escapeHtml(options.organizerSignInPath)}">Go to organizer sign-in</a></p>
+    </header>`,
+  );
+}
+
 export function renderSignInPage(options: {
   readonly token: string;
   readonly csrfToken: string;
   readonly needsEmail: boolean;
   readonly errors: readonly string[];
 }): string {
+  if (!options.token) {
+    const nextStep = options.needsEmail
+      ? "Use the bootstrap sign-in link printed in the container log."
+      : "Ask another organizer for a fresh sign-in link.";
+    return page(
+      "Organizer sign-in",
+      `    <header class="signup-header">
+      <p class="eyebrow">Organizers</p>
+      <h1>Your session has ended</h1>
+      <p class="lede">Sign-in links work once. ${escapeHtml(nextStep)}</p>
+    </header>`,
+    );
+  }
+
   const errors =
     options.errors.length === 0
       ? ""

@@ -52,7 +52,6 @@ export function createApp(options: AppOptions): PorchfestApp {
     authorize,
     {
       allowedOrigin,
-      organizerSignInPath: ADMIN_SIGN_IN_PATH,
       validateCsrf: (token, route) => {
         if (!token || !csrfSecret) return false;
         const expected = Buffer.from(csrfTokenFor(route.path));
@@ -64,6 +63,7 @@ export function createApp(options: AppOptions): PorchfestApp {
       },
     },
     { onOrganizerActivity: options.onOrganizerActivity },
+    { signInPath: ADMIN_SIGN_IN_PATH },
   );
 
   // The health endpoint is deliberately the first member of the canonical route

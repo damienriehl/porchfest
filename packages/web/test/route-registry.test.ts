@@ -68,13 +68,101 @@ describe("central route registry", () => {
     expect(await response.json()).toEqual({ error: "unauthorized" });
   });
 
+  it("redirects an organizer HTML GET without depending on mutation protection", async () => {
+    const app = new Hono();
+    const routes = new RouteRegistry(
+      app,
+      undefined,
+      undefined,
+      {},
+      {
+        signInPath: "/organizer-sign-in",
+      },
+    );
+    routes.register({
+      method: "GET",
+      path: "/organizer",
+      tier: "organizer",
+      handler: (context: Context) => context.text("organizer"),
+    });
+
+    const response = await app.request("/organizer", {
+      headers: { accept: "text/html" },
+    });
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe("/organizer-sign-in");
+  });
+
+  it("never redirects the organizer sign-in destination to itself", async () => {
+    const app = new Hono();
+    const routes = new RouteRegistry(
+      app,
+      undefined,
+      undefined,
+      {},
+      {
+        signInPath: "/organizer-sign-in",
+      },
+    );
+    routes.register({
+      method: "GET",
+      path: "/organizer-sign-in",
+      tier: "organizer",
+      handler: (context: Context) => context.text("organizer"),
+    });
+
+    const response = await app.request("/organizer-sign-in", {
+      headers: { accept: "text/html" },
+    });
+
+    expect(response.status).toBe(401);
+    expect(response.headers.get("location")).toBeNull();
+  });
+
+  it("explains an unauthorized organizer HTML mutation without redirecting", async () => {
+    const app = new Hono();
+    const routes = new RouteRegistry(
+      app,
+      undefined,
+      undefined,
+      {},
+      {
+        signInPath: "/organizer-sign-in",
+      },
+    );
+    routes.register({
+      method: "POST",
+      path: "/organizer",
+      tier: "organizer",
+      handler: (context: Context) => context.text("organizer"),
+    });
+
+    const response = await app.request("/organizer", {
+      method: "POST",
+      headers: { accept: "text/html" },
+    });
+    const html = await response.text();
+
+    expect(response.status).toBe(401);
+    expect(response.headers.get("location")).toBeNull();
+    expect(response.headers.get("content-type")).toContain("text/html");
+    expect(html).toContain('href="/organizer-sign-in"');
+    expect(html).toContain("Your changes were not submitted");
+  });
+
   it("does not redirect an unauthenticated participant HTML request", async () => {
     const app = new Hono();
-    const routes = new RouteRegistry(app, undefined, {
-      allowedOrigin: null,
-      organizerSignInPath: "/organizer-sign-in",
-      validateCsrf: () => true,
-    });
+    const routes = new RouteRegistry(
+      app,
+      undefined,
+      {
+        allowedOrigin: null,
+        validateCsrf: () => true,
+      },
+      {},
+      { signInPath: "/organizer-sign-in" },
+    );
     routes.register({
       method: "GET",
       path: "/participant",

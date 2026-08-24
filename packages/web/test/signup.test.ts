@@ -212,6 +212,8 @@ describe("public signup forms", () => {
     expect(html).toContain('name="season"');
     expect(html).not.toContain('data-signup-form="host"');
     expect(html).not.toContain('name="season_id"');
+    expect(html).toContain('class="signup-single-column"');
+    expect(html).not.toContain('class="signup-layout"');
   });
 
   it("renders a closed notice instead of a signup form when no season is open", async () => {
@@ -230,11 +232,14 @@ describe("public signup forms", () => {
 
     expect(response.status).toBe(200);
     expect(html).toContain("Signups are not open right now");
+    expect(html).toContain('class="confirmation-card"');
+    expect(html).toContain('class="signup-single-column"');
+    expect(html).not.toContain('class="signup-layout"');
     expect(html).not.toContain("<form");
     expect(html).not.toContain('data-signup-form="performer"');
   });
 
-  it("keeps the explicit empty season query on its existing refusal path", async () => {
+  it("keeps the empty-season refusal status and offers an open season", async () => {
     const { runtime } = await makeRuntime();
 
     const response = await runtime.request(
@@ -246,7 +251,25 @@ describe("public signup forms", () => {
     expect(html).toContain(
       "Choose an open Porchfest season before signing up.",
     );
-    expect(html).toContain('data-signup-form="host"');
+    expect(html).toContain("Choose a Porchfest season");
+    expect(html).toContain('name="season"');
+    expect(html).not.toContain('data-signup-form="host"');
+  });
+
+  it("keeps the malformed-season refusal status and offers an open season", async () => {
+    const { runtime } = await makeRuntime();
+
+    const response = await runtime.request(
+      `${PUBLIC_BASE_URL}/signup/host?season=abc`,
+    );
+    const html = await response.text();
+
+    expect(response.status).toBe(400);
+    expect(html).toContain(
+      "Choose an open Porchfest season before signing up.",
+    );
+    expect(html).toContain('name="season"');
+    expect(html).not.toContain('data-signup-form="host"');
   });
 
   it("renders semantic, labelled host controls and the progressive preview", async () => {

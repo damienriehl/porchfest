@@ -518,8 +518,11 @@ describe("season legality is visible before the form is filled in", () => {
     const { runtime } = await makeRuntime();
     const { status, html } = await csrfToken(runtime, "/signup/host", 999_999);
 
-    expect(status).not.toBe(200);
+    expect(status).toBe(400);
     expect(html).toContain("could not be found");
+    expect(html).toContain("Choose a Porchfest season");
+    expect(html).toContain('name="season"');
+    expect(html).not.toContain('data-signup-form="host"');
   });
 
   it("does not render a usable form for a season whose signups are closed", async () => {
@@ -528,6 +531,8 @@ describe("season legality is visible before the form is filled in", () => {
 
     expect(status).toBe(409);
     expect(html).toContain("Signups are not open");
+    expect(html).toContain("Signups are not open right now");
+    expect(html).not.toContain('data-signup-form="host"');
   });
 });
 

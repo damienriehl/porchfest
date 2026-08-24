@@ -2,6 +2,7 @@ import type { Context, Handler } from "hono";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { adminHeaders } from "../auth.js";
+import { renderOrganizerSignInRequiredPage } from "../views/admin-shell.js";
 
 export const TRUST_TIERS = ["public", "participant", "organizer"] as const;
 export type TrustTier = (typeof TRUST_TIERS)[number];
@@ -23,7 +24,6 @@ export type TrustAuthorizer = (
 
 export interface MutationProtection {
   readonly allowedOrigin: string | null;
-  readonly organizerSignInPath?: string;
   readonly validateCsrf: (
     token: string | null,
     route: RouteDeclaration,
@@ -33,6 +33,10 @@ export interface MutationProtection {
 
 export interface RouteActivityHooks {
   readonly onOrganizerActivity?: () => void;
+}
+
+export interface OrganizerAccessOptions {
+  readonly signInPath?: string;
 }
 
 export class RouteRegistrationError extends Error {
@@ -107,6 +111,7 @@ export class RouteRegistry {
   readonly #authorize: TrustAuthorizer;
   readonly #mutationProtection: MutationProtection | undefined;
   readonly #activityHooks: RouteActivityHooks;
+  readonly #organizerAccess: OrganizerAccessOptions;
   readonly #routes: RouteDeclaration[] = [];
   readonly #keys = new Set<string>();
 
@@ -115,11 +120,13 @@ export class RouteRegistry {
     authorize: TrustAuthorizer = denyProtectedRoutes,
     mutationProtection?: MutationProtection,
     activityHooks: RouteActivityHooks = {},
+    organizerAccess: OrganizerAccessOptions = {},
   ) {
     this.#app = app;
     this.#authorize = authorize;
     this.#mutationProtection = mutationProtection;
     this.#activityHooks = activityHooks;
+    this.#organizerAccess = organizerAccess;
   }
 
   register(input: unknown): RouteDeclaration {
@@ -151,20 +158,32 @@ export class RouteRegistry {
         route.tier !== "public" &&
         !(await this.#authorize(route.tier, context))
       ) {
-        const organizerSignInPath =
-          this.#mutationProtection?.organizerSignInPath;
+        const organizerSignInPath = this.#organizerAccess.signInPath;
         // Redirect only page navigations: redirecting a refused mutation would
-        // discard its body, and participant auth has no sign-in destination yet.
+        // discard its body, participant auth has no sign-in destination yet,
+        // and redirecting the destination itself would trap the browser in a loop.
         if (
           route.method === "GET" &&
           route.tier === "organizer" &&
           organizerSignInPath &&
+          route.path !== organizerSignInPath &&
           acceptsHtml(context)
         ) {
           return new Response(null, {
             status: 303,
             headers: adminHeaders({ location: organizerSignInPath }),
           });
+        }
+        if (
+          route.method !== "GET" &&
+          route.tier === "organizer" &&
+          organizerSignInPath &&
+          acceptsHtml(context)
+        ) {
+          return new Response(
+            renderOrganizerSignInRequiredPage({ organizerSignInPath }),
+            { status: 401, headers: adminHeaders() },
+          );
         }
         return context.json(
           { error: "unauthorized" },
