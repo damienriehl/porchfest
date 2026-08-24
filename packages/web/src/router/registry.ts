@@ -29,6 +29,10 @@ export interface MutationProtection {
   ) => boolean | Promise<boolean>;
 }
 
+export interface RouteActivityHooks {
+  readonly onOrganizerActivity?: () => void;
+}
+
 export class RouteRegistrationError extends Error {
   override readonly name = "RouteRegistrationError";
 }
@@ -97,6 +101,7 @@ export class RouteRegistry {
   readonly #app: Hono;
   readonly #authorize: TrustAuthorizer;
   readonly #mutationProtection: MutationProtection | undefined;
+  readonly #activityHooks: RouteActivityHooks;
   readonly #routes: RouteDeclaration[] = [];
   readonly #keys = new Set<string>();
 
@@ -104,10 +109,12 @@ export class RouteRegistry {
     app: Hono,
     authorize: TrustAuthorizer = denyProtectedRoutes,
     mutationProtection?: MutationProtection,
+    activityHooks: RouteActivityHooks = {},
   ) {
     this.#app = app;
     this.#authorize = authorize;
     this.#mutationProtection = mutationProtection;
+    this.#activityHooks = activityHooks;
   }
 
   register(input: unknown): RouteDeclaration {
@@ -136,6 +143,16 @@ export class RouteRegistry {
         !(await this.#authorize(route.tier, context))
       ) {
         return context.json({ error: "unauthorized" }, 401);
+      }
+      if (route.tier === "organizer") {
+        try {
+          // R35: only admitted organizer activity wakes retention enforcement.
+          // The observer is never allowed to turn a background concern into an
+          // admin outage, including if queuing the deferred sweep itself fails.
+          this.#activityHooks.onOrganizerActivity?.();
+        } catch {
+          // The observer owns its failure log and must not affect this request.
+        }
       }
       if (route.method !== "GET") {
         const originRejection = rejectMutationOrigin(

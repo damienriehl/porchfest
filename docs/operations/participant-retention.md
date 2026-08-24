@@ -6,6 +6,18 @@ states. “Application data anonymized” means the live application work is don
 “Backup rotation pending” means older copies may still contain the identity and
 the deletion is not complete.
 
+The live-data window enforces itself opportunistically. The application sweeps
+eligible participants once when the container boots, then at most once every six
+hours when an authenticated organizer uses an admin route. The admin request
+does not wait for the deferred sweep, and no scheduler, timer, or process runs
+while the container is idle. A failed attempt logs a fixed retention warning and
+does not prevent startup, sign-in, or organizer work; a later eligible activity
+can try again after the throttle interval.
+
+Each automatic anonymization writes the same pending deletion receipt as an
+organizer action. Use those receipts for the off-host backup procedure below;
+there is no separate automatic-sweep audit trail.
+
 ## Operator procedure
 
 1. In **Organizer data controls → Participant retention**, note the pending

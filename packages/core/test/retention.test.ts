@@ -465,6 +465,27 @@ describe("retention eligibility", () => {
     ).toBeDefined();
   });
 
+  it("keeps one consistent receipt when two sweep attempts race", async () => {
+    const { signup } = fixtures();
+    const retention = createRetentionRepository(database.db, {
+      now: () => clock,
+      retentionMonths: 24,
+    });
+
+    const [first, second] = await Promise.all([
+      Promise.resolve().then(() => retention.anonymizeEligible()),
+      Promise.resolve().then(() => retention.anonymizeEligible()),
+    ]);
+
+    expect([...first, ...second].map(({ contact }) => contact.id)).toEqual([
+      signup.contact.id,
+    ]);
+    expect(retention.listReceipts()).toMatchObject([
+      { contactId: signup.contact.id, action: "retention", version: 1 },
+    ]);
+    expect(retention.anonymizeEligible()).toEqual([]);
+  });
+
   it("refuses a direct anonymization inside the retention window", () => {
     const { season } = fixtures();
     const recent = database.db

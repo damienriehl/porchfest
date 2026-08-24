@@ -24,6 +24,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { createApp } from "./app.js";
 import type { SessionCookieOptions } from "./auth.js";
+import { createRetentionSweep } from "./retention-sweep.js";
 import { announceBootstrapLink } from "./routes/admin.js";
 import { loadSessionSecret } from "./config/session-secret.js";
 import type { RouteRegistry, TrustAuthorizer } from "./router/registry.js";
@@ -142,6 +143,10 @@ async function createRuntimeWithTesting(
     const core = createCore(adapters, databaseConnection.database, {
       retention: { retentionMonths },
     });
+    const retentionSweep = createRetentionSweep(core);
+    // R35: boot is one of only two opportunities to enforce retention. Failure
+    // is logged inside the trigger and cannot prevent the container from booting.
+    retentionSweep.onBoot();
     const { fetch, request, routes } = createApp({
       core,
       authorize: options.authorize,
@@ -151,6 +156,7 @@ async function createRuntimeWithTesting(
       signupGuardOptions: options.signupGuardOptions,
       trustedProxyHops,
       sessionCookie: options.sessionCookie,
+      onOrganizerActivity: retentionSweep.onOrganizerActivity,
     });
 
     // R9: with no organizer yet, the container log is the delivery channel for

@@ -21,6 +21,7 @@ export interface AppOptions {
   readonly resolveSocketPeerAddress?: SignupRouteOptions["resolveSocketPeerAddress"];
   readonly signupGuardOptions?: SignupRouteOptions["guardOptions"];
   readonly trustedProxyHops?: number;
+  readonly onOrganizerActivity?: () => void;
 }
 
 export interface PorchfestApp {
@@ -42,18 +43,23 @@ export function createApp(options: AppOptions): PorchfestApp {
   // Without an explicit override the registry now gets real organizer auth
   // instead of the deny-everything default the scaffold shipped with.
   const authorize = options.authorize ?? createTrustAuthorizer(options.core);
-  const routes = new RouteRegistry(app, authorize, {
-    allowedOrigin,
-    validateCsrf: (token, route) => {
-      if (!token || !csrfSecret) return false;
-      const expected = Buffer.from(csrfTokenFor(route.path));
-      const submitted = Buffer.from(token);
-      return (
-        expected.length === submitted.length &&
-        timingSafeEqual(expected, submitted)
-      );
+  const routes = new RouteRegistry(
+    app,
+    authorize,
+    {
+      allowedOrigin,
+      validateCsrf: (token, route) => {
+        if (!token || !csrfSecret) return false;
+        const expected = Buffer.from(csrfTokenFor(route.path));
+        const submitted = Buffer.from(token);
+        return (
+          expected.length === submitted.length &&
+          timingSafeEqual(expected, submitted)
+        );
+      },
     },
-  });
+    { onOrganizerActivity: options.onOrganizerActivity },
+  );
 
   // The health endpoint is deliberately the first member of the canonical route
   // registry, so even the scaffold proves that reachability requires a trust tier.
