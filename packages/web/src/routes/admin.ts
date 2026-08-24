@@ -234,9 +234,6 @@ export function registerAdminRoutes(options: AdminRouteOptions): void {
           publicMapUrl: fields.public_map_url ?? null,
           senderName: fields.sender_name ?? null,
           senderEmail: fields.sender_email ?? null,
-          retentionDays: fields.retention_days
-            ? Number(fields.retention_days)
-            : null,
           openSignups: fields.open_signups === "yes",
         });
         return new Response(null, {
@@ -351,7 +348,6 @@ function formFieldFor(field: string): string {
     publicMapUrl: "public_map_url",
     senderName: "sender_name",
     senderEmail: "sender_email",
-    retentionDays: "retention_days",
     "bounds.north": "bounds_north",
     "bounds.south": "bounds_south",
     "bounds.east": "bounds_east",

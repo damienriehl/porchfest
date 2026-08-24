@@ -44,7 +44,10 @@ describe("central route registry", () => {
       handler: (context: Context) => context.text("organizer"),
     });
 
-    expect((await app.request("/organizer")).status).toBe(401);
+    const response = await app.request("/organizer");
+
+    expect(response.status).toBe(401);
+    expect(response.headers.get("cache-control")).toBe("no-store, private");
   });
 
   it("snapshots a declaration so caller mutations cannot remove protection", async () => {

@@ -75,6 +75,7 @@ export function renderSignupPage(options: {
 export function renderConfirmationPage(options: {
   readonly title: string;
   readonly kind: "host" | "performer";
+  readonly seasonId: number;
   readonly emailConfigured: boolean;
   readonly preview: string;
   readonly submission: string;
@@ -82,6 +83,7 @@ export function renderConfirmationPage(options: {
   const kindLabel = options.kind === "host" ? "porch" : "act";
   const formPath =
     options.kind === "host" ? HOST_SIGNUP_PATH : PERFORMER_SIGNUP_PATH;
+  const formHref = escapeHtml(`${formPath}?season=${options.seasonId}`);
   const emailNotice = options.emailConfigured
     ? "If the organizers send confirmation by email, it will go to the address you provided."
     : "No confirmation email will follow because email delivery is not configured for this deployment.";
@@ -107,7 +109,7 @@ export function renderConfirmationPage(options: {
       ${options.preview}
     </section>
     ${options.submission}
-    <a class="secondary-action" href="${formPath}">Submit another ${kindLabel}</a>
+    <a class="secondary-action" href="${formHref}">Submit another ${kindLabel}</a>
   </main>
 </body>
 </html>`;

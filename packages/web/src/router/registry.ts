@@ -1,6 +1,7 @@
 import type { Context, Handler } from "hono";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
+import { adminHeaders } from "../auth.js";
 
 export const TRUST_TIERS = ["public", "participant", "organizer"] as const;
 export type TrustTier = (typeof TRUST_TIERS)[number];
@@ -135,14 +136,22 @@ export class RouteRegistry {
           expectedOrigin !== undefined &&
           new URL(context.req.url).origin !== expectedOrigin
         ) {
-          return context.text("Unrecognized request host.", 421);
+          return context.text(
+            "Unrecognized request host.",
+            421,
+            adminHeaders(),
+          );
         }
       }
       if (
         route.tier !== "public" &&
         !(await this.#authorize(route.tier, context))
       ) {
-        return context.json({ error: "unauthorized" }, 401);
+        return context.json(
+          { error: "unauthorized" },
+          401,
+          adminHeaders({ "content-type": "application/json" }),
+        );
       }
       if (route.tier === "organizer") {
         try {
