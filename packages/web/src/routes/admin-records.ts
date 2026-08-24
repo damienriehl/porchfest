@@ -5,6 +5,7 @@
 import {
   ChangeRequestConflictError,
   ChangeRequestLifecycleError,
+  isSeasonActionLegal,
   RecordLifecycleError,
   recordStatuses,
   RepositoryConflictError,
@@ -26,6 +27,7 @@ import {
   renderRecordPage,
   type ConflictDetail,
 } from "../views/admin-records.js";
+import { escapeHtml } from "../views/signup-view.js";
 import { CONTACT_EMAIL_PATTERN } from "./signup.js";
 
 const RECORD_TYPES: readonly QueueRecordType[] = ["act", "venue", "contact"];
@@ -112,6 +114,10 @@ export function registerAdminRecordRoutes(
           ) {
             throw new ChangeRequestConflictError(requestId, ["recordVersion"]);
           }
+          const season = options.core.seasons.getSeason(seasonId);
+          if (!isSeasonActionLegal(season.state, "correction")) {
+            throw new SeasonActionError(season.state, "correction");
+          }
           return redirect(
             `/admin/records/venue/${pending.recordId}?season=${seasonId}&change_request=${pending.id}`,
           );
@@ -119,7 +125,25 @@ export function registerAdminRecordRoutes(
         options.core.changeRequests.apply(requestId, version);
         return redirect(`/admin?season=${seasonId}`);
       } catch (error) {
-        if (!(error instanceof RepositoryConflictError)) throw error;
+        if (
+          !(error instanceof RepositoryConflictError) &&
+          !(error instanceof SeasonActionError) &&
+          !(error instanceof SeasonLifecycleError)
+        ) {
+          throw error;
+        }
+        if (
+          error instanceof SeasonActionError ||
+          error instanceof SeasonLifecycleError
+        ) {
+          // A lifecycle message is composed elsewhere, so escape it here the
+          // way the record views do rather than trusting its shape.
+          const refusal = lifecycleRefusal("change request", error);
+          return html(
+            `<h1>${escapeHtml(refusal.title)}</h1><p>${escapeHtml(refusal.message)}</p>`,
+            409,
+          );
+        }
         // R33 refuses the decision rather than risking a schedule mutation made
         // against a record or request another organizer already changed.
         return html(
@@ -285,7 +309,7 @@ export function registerAdminRecordRoutes(
             values: fields,
             error:
               error instanceof SeasonActionError
-                ? "This season is archived, so placeholders can no longer be added. Your answers are still here."
+                ? placeholderSeasonRefusal(error)
                 : "That contact is no longer available. Choose another contact or enter a direct email address.",
           }),
           409,
@@ -386,8 +410,13 @@ export function registerAdminRecordRoutes(
               status,
             );
           } catch (error) {
-            if (!(error instanceof RepositoryConflictError)) throw error;
-            // Same refusal shape as a field edit: named, not overwritten.
+            if (
+              !(error instanceof RepositoryConflictError) &&
+              !(error instanceof SeasonActionError) &&
+              !(error instanceof SeasonLifecycleError)
+            ) {
+              throw error;
+            }
             const current = findItem(
               options.core,
               seasonId,
@@ -396,6 +425,22 @@ export function registerAdminRecordRoutes(
               recordId,
             );
             if (!current) return notFound();
+            if (
+              error instanceof SeasonActionError ||
+              error instanceof SeasonLifecycleError
+            ) {
+              return html(
+                renderLifecycleRecordPage(
+                  options,
+                  organizer.id,
+                  seasonId,
+                  current,
+                  { refusal: lifecycleRefusal("status change", error) },
+                ),
+                409,
+              );
+            }
+            // Same refusal shape as a field edit: named, not overwritten.
             return html(
               renderRecordPage({
                 recordType,
@@ -463,9 +508,13 @@ export function registerAdminRecordRoutes(
             `/admin/records/${recordType}/${recordId}?season=${seasonId}&saved=1`,
           );
         } catch (error) {
-          if (!(error instanceof RepositoryConflictError)) throw error;
-          // R32: name the conflict rather than overwriting, and keep what the
-          // organizer typed so a re-save is one click rather than a retype.
+          if (
+            !(error instanceof RepositoryConflictError) &&
+            !(error instanceof SeasonActionError) &&
+            !(error instanceof SeasonLifecycleError)
+          ) {
+            throw error;
+          }
           const current = findItem(
             options.core,
             seasonId,
@@ -474,6 +523,29 @@ export function registerAdminRecordRoutes(
             recordId,
           );
           if (!current) return notFound();
+          if (
+            error instanceof SeasonActionError ||
+            error instanceof SeasonLifecycleError
+          ) {
+            // A lifecycle refusal did not save, so keep both the organizer's
+            // typed correction and any pending address-review context intact.
+            return html(
+              renderLifecycleRecordPage(
+                options,
+                organizer.id,
+                seasonId,
+                current,
+                {
+                  refusal: lifecycleRefusal("correction", error),
+                  values: pick(RECORD_FIELDS[recordType], fields),
+                  changeRequestReview: changeRequestId(fields.change_request),
+                },
+              ),
+              409,
+            );
+          }
+          // R32: name the conflict rather than overwriting, and keep what the
+          // organizer typed so a re-save is one click rather than a retype.
           const stored = valuesOf(recordType, current.record);
           const conflicts: ConflictDetail[] = RECORD_FIELDS[recordType]
             .filter(
@@ -880,20 +952,41 @@ function completeAddressReviewAfterSave(
   }
 }
 
-function lifecycleRefusal(
-  action: "promotion" | "supersession",
+export function lifecycleRefusal(
+  action:
+    | "change request"
+    | "correction"
+    | "promotion"
+    | "status change"
+    | "supersession",
   error: SeasonActionError | SeasonLifecycleError,
 ): { readonly title: string; readonly message: string } {
   if (error instanceof SeasonActionError) {
     return {
       title: `This ${action} could not be completed`,
-      message: `This season is archived, so the ${action} is no longer allowed. The records were left unchanged.`,
+      message:
+        error.state === "archived"
+          ? `This season is archived, so the ${action} is no longer allowed. The records were left unchanged.`
+          : `The season's current state is ${error.state}, which does not allow the ${action}. The records were left unchanged.`,
+    };
+  }
+  if (action !== "promotion" && action !== "supersession") {
+    return {
+      title: `This ${action} could not be completed`,
+      message:
+        "This record is no longer available. Reload the activity queue to review its current state. The records were left unchanged.",
     };
   }
   return {
     title: `This ${action} could not be completed`,
     message: `${error.message}. Review the records' schedule assignments before trying again.`,
   };
+}
+
+export function placeholderSeasonRefusal(error: SeasonActionError): string {
+  return error.state === "archived"
+    ? "This season is archived, so placeholders can no longer be added. Your answers are still here."
+    : `The season's current state is ${error.state}, which does not allow placeholders to be added. Your answers are still here.`;
 }
 
 function contactOptions(

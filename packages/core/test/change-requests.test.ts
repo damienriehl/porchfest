@@ -223,6 +223,53 @@ describe("participant change requests", () => {
     ).toEqual({ starts_at: 1_947_074_400 });
   });
 
+  it("refuses a withdrawal change after the season is archived", () => {
+    const { season, seasons, requests, host, performer } = fixtures();
+    seasons.setRecordStatus(
+      "act",
+      performer.act.id,
+      performer.act.version,
+      "confirmed",
+    );
+    const slot = database.sqlite
+      .prepare(
+        "insert into slots (season_id, venue_id, starts_at, ends_at) values (?, ?, ?, ?) returning id, version",
+      )
+      .get(season.id, host.venue.id, 1_946_889_600, 1_946_893_200) as {
+      id: number;
+      version: number;
+    };
+    seasons.assignSlot(slot.id, slot.version, performer.act.id);
+    const request = requests.record({
+      seasonId: season.id,
+      recordType: "act",
+      recordId: performer.act.id,
+      recordVersion: performer.act.version + 1,
+      kind: "withdrawal",
+    });
+    seasons.transitionSeason(season.id, season.version, "archived");
+
+    expect(() => requests.apply(request.id, request.version)).toThrowError(
+      SeasonActionError,
+    );
+    expect(requests.find(request.id)?.status).toBe("pending");
+    expect(
+      database.sqlite
+        .prepare("select status from acts where id = ?")
+        .get(performer.act.id),
+    ).toEqual({ status: "confirmed" });
+    expect(
+      database.sqlite
+        .prepare("select state from slots where id = ?")
+        .get(slot.id),
+    ).toEqual({ state: "assigned" });
+    expect(
+      database.sqlite
+        .prepare("select count(*) as count from assignments where slot_id = ?")
+        .get(slot.id),
+    ).toEqual({ count: 1 });
+  });
+
   it("keeps address requests pending until the editor save completes review", () => {
     const { season, seasons, requests, host } = fixtures();
     const request = requests.record({

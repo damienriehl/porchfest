@@ -3,12 +3,17 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { SeasonActionError, SeasonLifecycleError } from "@porchfest/core";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createTestingRuntime,
   type PorchfestRuntime,
   type PorchfestTestingRuntime,
 } from "../src/composition.js";
+import {
+  lifecycleRefusal,
+  placeholderSeasonRefusal,
+} from "../src/routes/admin-records.js";
 
 const PUBLIC_BASE_URL = "https://porchfest.example";
 const temporaryRoots: string[] = [];
@@ -938,6 +943,44 @@ describe("placeholder and supersession actions", () => {
   });
 });
 
+describe("refusal copy helpers", () => {
+  // Correction-gated routes currently only refuse archived seasons. These
+  // defensive branches stay explicit in case a future catch reaches them.
+  it("guards placeholder copy for a non-archived state routes cannot produce", () => {
+    const refusal = placeholderSeasonRefusal(
+      new SeasonActionError("locked", "hold"),
+    );
+
+    expect(refusal).toContain("current state is locked");
+    expect(refusal).not.toContain("season is archived");
+    expect(refusal).toContain("Your answers are still here");
+  });
+
+  it("guards lifecycle copy for a non-archived state routes cannot produce", () => {
+    const refusal = lifecycleRefusal(
+      "status change",
+      new SeasonActionError("locked", "hold"),
+    );
+
+    expect(refusal.message).toContain("current state is locked");
+    expect(refusal.message).not.toContain("season is archived");
+    expect(refusal.message).toContain("records were left unchanged");
+  });
+
+  it("does not expose a missing record id as lifecycle refusal guidance", () => {
+    const refusal = lifecycleRefusal(
+      "change request",
+      new SeasonLifecycleError("act 42 does not exist"),
+    );
+
+    expect(refusal.message).toContain("record is no longer available");
+    expect(refusal.message).toContain("Reload the activity queue");
+    expect(refusal.message).toContain("records were left unchanged");
+    expect(refusal.message).not.toContain("42");
+    expect(refusal.message).not.toContain("schedule assignments");
+  });
+});
+
 describe("the record editor", () => {
   it("saves a corrected field", async () => {
     const { runtime, season, alice, signup } = await boot();
@@ -1024,6 +1067,64 @@ describe("the record editor", () => {
       .find((item) => item.recordType === "venue");
     expect(stored?.recordType === "venue" && stored.record.title).toBe(
       "Bob's Title",
+    );
+  });
+
+  it("renders an archived-season field edit as an actionable refusal", async () => {
+    const { runtime, season, alice, signup } = await boot();
+    const proposedAddress = "synthetic-refused-address";
+    const request = runtime.core.changeRequests.record({
+      seasonId: season.id,
+      recordType: "venue",
+      recordId: signup.venue.id,
+      recordVersion: signup.venue.version,
+      kind: "address",
+      proposedAddress,
+    });
+    const page = await get(
+      runtime,
+      `/admin/records/venue/${signup.venue.id}?season=${season.id}&change_request=${request.id}`,
+      alice,
+    );
+    runtime.core.seasons.transitionSeason(
+      season.id,
+      season.version,
+      "archived",
+    );
+
+    const refused = await post(
+      runtime,
+      `/admin/records/venue/${signup.venue.id}`,
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(page, `/admin/records/venue/${signup.venue.id}`),
+        season: String(season.id),
+        version: String(signup.venue.version),
+        change_request: String(request.id),
+        title: "Preserved Refused Venue",
+        address: proposedAddress,
+        spaceDescription: "synthetic-space-description",
+        hasPower: "yes",
+        rainBackup: "no",
+        notes: "synthetic-refused-notes",
+      }),
+    );
+    const body = await refused.text();
+
+    expect(refused.status).toBe(409);
+    expect(body).toContain("correction could not be completed");
+    expect(body).toContain("season is archived");
+    expect(body).toContain("records were left unchanged");
+    expect(body).toContain('value="Preserved Refused Venue"');
+    expect(body).toContain(`name="change_request" value="${request.id}"`);
+    expect(runtime.core.changeRequests.find(request.id)?.status).toBe(
+      "pending",
+    );
+    const stored = runtime.core.queue
+      .listForOrganizer(season.id, 1)
+      .find((item) => item.recordType === "venue");
+    expect(stored?.recordType === "venue" && stored.record.title).toBe(
+      signup.venue.title,
     );
   });
 
@@ -1215,6 +1316,75 @@ describe("record status", () => {
     );
   });
 
+  it("renders an archived-season status change as an actionable refusal", async () => {
+    const { runtime, season, alice, signup } = await boot();
+    const page = await get(
+      runtime,
+      `/admin/records/venue/${signup.venue.id}?season=${season.id}`,
+      alice,
+    );
+    runtime.core.seasons.transitionSeason(
+      season.id,
+      season.version,
+      "archived",
+    );
+
+    const refused = await post(
+      runtime,
+      `/admin/records/venue/${signup.venue.id}/status`,
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(
+          page,
+          `/admin/records/venue/${signup.venue.id}/status`,
+        ),
+        season: String(season.id),
+        version: String(signup.venue.version),
+        status: "withdrawn",
+      }),
+    );
+    const body = await refused.text();
+
+    expect(refused.status).toBe(409);
+    expect(body).toContain("status change could not be completed");
+    expect(body).toContain("season is archived");
+    expect(body).toContain("records were left unchanged");
+    const stored = runtime.core.queue
+      .listForOrganizer(season.id, 1)
+      .find((item) => item.recordType === "venue");
+    expect(stored?.recordType === "venue" && stored.record.status).toBe(
+      "tentative",
+    );
+  });
+
+  it("returns not found for a status change targeting an unknown record", async () => {
+    const { runtime, season, alice, signup } = await boot();
+    const page = await get(
+      runtime,
+      `/admin/records/venue/${signup.venue.id}?season=${season.id}`,
+      alice,
+    );
+    const unknownRecordId = signup.venue.id + 10_000;
+
+    const refused = await post(
+      runtime,
+      `/admin/records/venue/${unknownRecordId}/status`,
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(
+          page,
+          `/admin/records/venue/${signup.venue.id}/status`,
+        ),
+        season: String(season.id),
+        version: "0",
+        status: "withdrawn",
+      }),
+    );
+
+    expect(refused.status).toBe(404);
+    expect(await refused.text()).toContain("No such record in this season");
+  });
+
   it("offers no status control on a contact", async () => {
     const { runtime, season, alice, signup } = await boot();
 
@@ -1353,6 +1523,47 @@ describe("participant change requests", () => {
     );
     expect(runtime.core.changeRequests.find(request.id)?.status).toBe(
       "applied",
+    );
+  });
+
+  it("refuses an archived-season address request before opening the editor", async () => {
+    const { runtime, season, alice, signup } = await boot();
+    const request = runtime.core.changeRequests.record({
+      seasonId: season.id,
+      recordType: "venue",
+      recordId: signup.venue.id,
+      recordVersion: signup.venue.version,
+      kind: "address",
+      proposedAddress: "synthetic-proposed-address",
+    });
+    const queue = await get(runtime, `/admin?season=${season.id}`, alice);
+    runtime.core.seasons.transitionSeason(
+      season.id,
+      season.version,
+      "archived",
+    );
+
+    const refused = await post(
+      runtime,
+      `/admin/change-requests/${request.id}/apply`,
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(
+          queue,
+          `/admin/change-requests/${request.id}/apply`,
+        ),
+        season: String(season.id),
+        version: String(request.version),
+      }),
+    );
+    const body = await refused.text();
+
+    expect(refused.status).toBe(409);
+    expect(body).toContain("change request could not be completed");
+    expect(body).toContain("season is archived");
+    expect(body).toContain("records were left unchanged");
+    expect(runtime.core.changeRequests.find(request.id)?.status).toBe(
+      "pending",
     );
   });
 
@@ -1731,6 +1942,52 @@ describe("participant change requests", () => {
     expect(await refused.text()).toContain("could not be applied");
     expect(runtime.core.changeRequests.find(request.id)?.status).toBe(
       "pending",
+    );
+  });
+
+  it("renders an archived-season withdrawal request as an actionable refusal", async () => {
+    const { runtime, season, alice, signup } = await boot();
+    const request = runtime.core.changeRequests.record({
+      seasonId: season.id,
+      recordType: "venue",
+      recordId: signup.venue.id,
+      recordVersion: signup.venue.version,
+      kind: "withdrawal",
+    });
+    const queue = await get(runtime, `/admin?season=${season.id}`, alice);
+    runtime.core.seasons.transitionSeason(
+      season.id,
+      season.version,
+      "archived",
+    );
+
+    const refused = await post(
+      runtime,
+      `/admin/change-requests/${request.id}/apply`,
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(
+          queue,
+          `/admin/change-requests/${request.id}/apply`,
+        ),
+        season: String(season.id),
+        version: String(request.version),
+      }),
+    );
+    const body = await refused.text();
+
+    expect(refused.status).toBe(409);
+    expect(body).toContain("change request could not be completed");
+    expect(body).toContain("season is archived");
+    expect(body).toContain("records were left unchanged");
+    expect(runtime.core.changeRequests.find(request.id)?.status).toBe(
+      "pending",
+    );
+    const stored = runtime.core.queue
+      .listForOrganizer(season.id, 1)
+      .find((item) => item.recordType === "venue");
+    expect(stored?.recordType === "venue" && stored.record.status).toBe(
+      "tentative",
     );
   });
 

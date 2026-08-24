@@ -736,6 +736,11 @@ describe("season domain", () => {
       season.id,
       "Archived Correction Target",
     );
+    const statusAct = insertVersionedAct(season.id, "Archived Status Act");
+    const statusVenue = insertVersionedVenue(
+      season.id,
+      "Archived Status Venue",
+    );
     const placeholder = insertVersionedAct(
       season.id,
       "Archived Placeholder",
@@ -753,6 +758,22 @@ describe("season domain", () => {
         correctionTarget.id,
         correctionTarget.version,
         { name: "Forbidden Correction" },
+      ),
+    ).toThrowError("season state archived refuses action correction");
+    expect(() =>
+      seasonRepository.setRecordStatus(
+        "act",
+        statusAct.id,
+        statusAct.version,
+        "withdrawn",
+      ),
+    ).toThrowError("season state archived refuses action correction");
+    expect(() =>
+      seasonRepository.setRecordStatus(
+        "venue",
+        statusVenue.id,
+        statusVenue.version,
+        "withdrawn",
       ),
     ).toThrowError("season state archived refuses action correction");
     expect(() =>
@@ -775,6 +796,14 @@ describe("season domain", () => {
         .prepare("select name from acts where id = ?")
         .get(correctionTarget.id),
     ).toEqual({ name: "Archived Correction Target" });
+    expect(
+      sqlite.prepare("select status from acts where id = ?").get(statusAct.id),
+    ).toEqual({ status: "tentative" });
+    expect(
+      sqlite
+        .prepare("select status from venues where id = ?")
+        .get(statusVenue.id),
+    ).toEqual({ status: "tentative" });
   });
 
   it("rolls back season state changed during a failed delegated record write", () => {
