@@ -5,6 +5,7 @@
 import {
   ChangeRequestConflictError,
   ChangeRequestLifecycleError,
+  isSeasonActionLegal,
   RecordLifecycleError,
   recordStatuses,
   RepositoryConflictError,
@@ -112,6 +113,10 @@ export function registerAdminRecordRoutes(
             !pending.applicable
           ) {
             throw new ChangeRequestConflictError(requestId, ["recordVersion"]);
+          }
+          const season = options.core.seasons.getSeason(seasonId);
+          if (!isSeasonActionLegal(season.state, "correction")) {
+            throw new SeasonActionError(season.state, "correction");
           }
           return redirect(
             `/admin/records/venue/${pending.recordId}?season=${seasonId}&change_request=${pending.id}`,
@@ -963,6 +968,13 @@ export function lifecycleRefusal(
         error.state === "archived"
           ? `This season is archived, so the ${action} is no longer allowed. The records were left unchanged.`
           : `The season's current state is ${error.state}, which does not allow the ${action}. The records were left unchanged.`,
+    };
+  }
+  if (action !== "promotion" && action !== "supersession") {
+    return {
+      title: `This ${action} could not be completed`,
+      message:
+        "This record is no longer available. Reload the activity queue to review its current state. The records were left unchanged.",
     };
   }
   return {

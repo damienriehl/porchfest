@@ -3,7 +3,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SeasonActionError } from "@porchfest/core";
+import { SeasonActionError, SeasonLifecycleError } from "@porchfest/core";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createTestingRuntime,
@@ -563,16 +563,6 @@ describe("placeholder and supersession actions", () => {
     expect(body).toContain('value="Preserved Archived Act"');
   });
 
-  it("names a non-archived state when placeholder creation is refused", async () => {
-    const refusal = placeholderSeasonRefusal(
-      new SeasonActionError("locked", "hold"),
-    );
-
-    expect(refusal).toContain("current state is locked");
-    expect(refusal).not.toContain("season is archived");
-    expect(refusal).toContain("Your answers are still here");
-  });
-
   it("renders an assigned-act promotion collision as an actionable refusal", async () => {
     const { runtime, season, alice, signup } = await boot();
     const placeholder = runtime.core.seasons.createPlaceholderAct({
@@ -953,6 +943,44 @@ describe("placeholder and supersession actions", () => {
   });
 });
 
+describe("refusal copy helpers", () => {
+  // Correction-gated routes currently only refuse archived seasons. These
+  // defensive branches stay explicit in case a future catch reaches them.
+  it("guards placeholder copy for a non-archived state routes cannot produce", () => {
+    const refusal = placeholderSeasonRefusal(
+      new SeasonActionError("locked", "hold"),
+    );
+
+    expect(refusal).toContain("current state is locked");
+    expect(refusal).not.toContain("season is archived");
+    expect(refusal).toContain("Your answers are still here");
+  });
+
+  it("guards lifecycle copy for a non-archived state routes cannot produce", () => {
+    const refusal = lifecycleRefusal(
+      "status change",
+      new SeasonActionError("locked", "hold"),
+    );
+
+    expect(refusal.message).toContain("current state is locked");
+    expect(refusal.message).not.toContain("season is archived");
+    expect(refusal.message).toContain("records were left unchanged");
+  });
+
+  it("does not expose a missing record id as lifecycle refusal guidance", () => {
+    const refusal = lifecycleRefusal(
+      "change request",
+      new SeasonLifecycleError("act 42 does not exist"),
+    );
+
+    expect(refusal.message).toContain("record is no longer available");
+    expect(refusal.message).toContain("Reload the activity queue");
+    expect(refusal.message).toContain("records were left unchanged");
+    expect(refusal.message).not.toContain("42");
+    expect(refusal.message).not.toContain("schedule assignments");
+  });
+});
+
 describe("the record editor", () => {
   it("saves a corrected field", async () => {
     const { runtime, season, alice, signup } = await boot();
@@ -1329,17 +1357,6 @@ describe("record status", () => {
     );
   });
 
-  it("names a non-archived state in a lifecycle refusal", async () => {
-    const refusal = lifecycleRefusal(
-      "status change",
-      new SeasonActionError("locked", "hold"),
-    );
-
-    expect(refusal.message).toContain("current state is locked");
-    expect(refusal.message).not.toContain("season is archived");
-    expect(refusal.message).toContain("records were left unchanged");
-  });
-
   it("returns not found for a status change targeting an unknown record", async () => {
     const { runtime, season, alice, signup } = await boot();
     const page = await get(
@@ -1506,6 +1523,47 @@ describe("participant change requests", () => {
     );
     expect(runtime.core.changeRequests.find(request.id)?.status).toBe(
       "applied",
+    );
+  });
+
+  it("refuses an archived-season address request before opening the editor", async () => {
+    const { runtime, season, alice, signup } = await boot();
+    const request = runtime.core.changeRequests.record({
+      seasonId: season.id,
+      recordType: "venue",
+      recordId: signup.venue.id,
+      recordVersion: signup.venue.version,
+      kind: "address",
+      proposedAddress: "synthetic-proposed-address",
+    });
+    const queue = await get(runtime, `/admin?season=${season.id}`, alice);
+    runtime.core.seasons.transitionSeason(
+      season.id,
+      season.version,
+      "archived",
+    );
+
+    const refused = await post(
+      runtime,
+      `/admin/change-requests/${request.id}/apply`,
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(
+          queue,
+          `/admin/change-requests/${request.id}/apply`,
+        ),
+        season: String(season.id),
+        version: String(request.version),
+      }),
+    );
+    const body = await refused.text();
+
+    expect(refused.status).toBe(409);
+    expect(body).toContain("change request could not be completed");
+    expect(body).toContain("season is archived");
+    expect(body).toContain("records were left unchanged");
+    expect(runtime.core.changeRequests.find(request.id)?.status).toBe(
+      "pending",
     );
   });
 

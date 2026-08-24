@@ -267,6 +267,8 @@ export function createSeasonRepository(
       (tx) => {
         // Status changes can release schedule assignments, so archival must
         // refuse them before either the record or its slots are touched.
+        // This existence read also means a missing row raises a lifecycle
+        // error, not the conflict error returned by the versioned update.
         const record = recordType === "act" ? getAct(id, tx) : getVenue(id, tx);
         assertCorrectionLegal(record.seasonId, tx);
         const table = recordType === "act" ? acts : venues;
