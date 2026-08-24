@@ -1,40 +1,28 @@
 ---
 artifact_contract: "ce-handoff/v1"
 created_at: "2026-08-24T03:00:00Z"
-title: "U5 merged; the withdrawal-gate fix is reviewed and pushed, waiting on a PR"
-summary: "All six U5 PRs are on main. The withdrawal-gate follow-up is four commits on a pushed branch, reviewed three times with every finding closed — but no PR exists, because the gh token went invalid mid-session."
+title: "U5 merged, the archival gate merged, and archived records are read-only"
+summary: "All six U5 PRs plus #18 and #21 are on main at 450 tests. U5 still is not Done: its Definition of Done is a human UAT no agent can perform. U6 is next."
 keywords:
   ["porchfest", "u5", "u6", "withdrawal-gate", "archival", "r33", "gh-auth"]
-resume_focus: "Open and merge the withdrawal-gate PR once gh is re-authenticated, then U6"
+resume_focus: "U6 — assignment and deterministic suggestions — then the human UAT that closes U5"
 repository: "porchfest"
-branch: "fix/withdrawal-season-gate"
-head: "10165333f9222dd4b4640aeab71d2f7fb50703ab"
+branch: "main"
+head: "34d40d0f183db13e0ad782e56351b5f2050ea277"
 ---
 
-# U5 is merged; one follow-up branch is finished but unopened
+# U5 is merged, archival is closed off, and archived records read as records
 
-## The one thing blocking you
+## Where this stands
 
-`gh` is unauthenticated. It worked for both U5 merges, then began returning
-`HTTP 401` from the GraphQL endpoint; `gh auth status` reports the token invalid
-for **both** `damienriehl` and `damienriehlfc`. `git push` still works because it
-goes through a separate credential helper, which is why the branch is on the
-remote and the PR is not.
+Nothing is blocking. Both PRs opened and merged after `gh` was re-authenticated:
 
-```
-gh auth login -h github.com
-```
+| PR      | Contents                                                                      | Merge commit |
+| ------- | ----------------------------------------------------------------------------- | ------------ |
+| **#18** | The archival gate, and four admin paths that name a refusal instead of 500ing | `2e27a12`    |
+| **#21** | The archived record page is read-only, per Damien's decision-sheet answer     | `34d40d0`    |
 
-Then open the PR against `main` from `fix/withdrawal-season-gate`. **The body is
-already written** — it is the private copy at
-`2026-08-24-withdrawal-gate-pr-body.md` in this repo's ce-handoffs state
-directory (path in the private handoff). Title:
-
-> `fix: archival refuses every record mutation, and every route says so`
-
-No agent read the credential helper's token to work around this, and nothing was
-pushed to `main` directly to avoid the PR — that would skip CI and the
-squash-merge convention every other PR here has followed.
+`main` is at **450 tests / 30 files**, six `OK:` lines, clean-room scan green.
 
 ## What landed on main
 
@@ -162,14 +150,43 @@ needs subagent dispatch and this session was instructed not to spawn agents
 unasked. Same call the previous session made, same caveat: a future session with
 that constraint lifted should use the full CE review roster.
 
+## Two environment traps that cost real time today
+
+**Node 25 breaks the whole suite, and it looks like a catastrophic regression.**
+This project targets Node 24 — `engines: ">=24"`, both CI jobs pin
+`node-version: 24`, and the Dockerfile is `node:24-slim`. But nvm's default on
+this box is v25.2.1, and `better-sqlite3`'s compiled binary is
+`NODE_MODULE_VERSION 137` (Node 24) while Node 25 demands 141. Switch node and
+**258 tests fail across every file**, including files nobody touched. It reads
+exactly like a broken change.
+
+The fix is `nvm use 24`, not `npm rebuild` — rebuilding would compile against
+Node 25 and break parity with CI and the container. A `.nvmrc` would prevent it
+outright; Damien has not been asked whether he wants one, since it is a choice
+about his own tooling.
+
+**A second agent works in this repo.** Two commits that this session did not
+author — `83deeed` and `f84fef5` — appeared on its working branch mid-run,
+editing the same file toward the same goal, and were pushed to
+`feat/archived-season-read-only`. Damien's ruling: _that is another agent; let
+them do their work, and do yours — push and merge your own work, not theirs._
+So this session moved its work to `feat/archived-records-read-only` and shipped
+that as #21. **`feat/archived-season-read-only` is the other agent's branch.**
+Its base `0a088ba` reached `main` through #21's squash, so that branch needs a
+rebase before it can land — but it is not this session's to rebase.
+
+Practical consequence for a later session: before dispatching a worker here,
+expect the canonical checkout to move under you. The controller refuses
+`integrate` with "canonical HEAD advanced outside the recorded wave" and
+refuses `prepare` with "canonical branch changed" — both are that, not a bug.
+
 ## Next, in order
 
-1. **Re-auth `gh`, open the PR, merge it.** Everything else is ready.
-2. **Answer the board ask** if the archived-season page matters before U6.
-3. **U6 — assignment and deterministic suggestions.** Double-booking guards,
+1. **U6 — assignment and deterministic suggestions.** Double-booking guards,
    shared-member conflicts, ranked explainable suggestions, AE3. A large unit
    that deserves a fresh session with full budget.
-4. **The human UAT that actually closes U5.**
+2. **The human UAT that actually closes U5.**
+3. Two residuals nobody has decided, listed above.
 
 ## References
 
