@@ -449,6 +449,7 @@ export function registerAdminRecordRoutes(
                 title: recordTitle(current),
                 version: current.version,
                 values: valuesOf(recordType, current.record),
+                correctionsClosed: areCorrectionsClosed(options.core, seasonId),
                 csrfToken: options.csrfTokenFor(
                   `/admin/records/${recordType}/:id`,
                 ),
@@ -568,6 +569,7 @@ export function registerAdminRecordRoutes(
               // save is a deliberate overwrite rather than another refusal.
               version: current.version,
               values: pick(RECORD_FIELDS[recordType], fields),
+              correctionsClosed: areCorrectionsClosed(options.core, seasonId),
               csrfToken: options.csrfTokenFor(
                 `/admin/records/${recordType}/:id`,
               ),
@@ -828,6 +830,7 @@ function renderLifecycleRecordPage(
     };
   } = {},
 ): string {
+  const correctionsClosed = areCorrectionsClosed(options.core, seasonId);
   const candidates = options.core.queue
     .listForOrganizer(seasonId, organizerId)
     .filter(
@@ -868,7 +871,12 @@ function renderLifecycleRecordPage(
     seasonId,
     title: recordTitle(item),
     version: item.version,
-    values: overrides.values ?? valuesOf(item.recordType, item.record),
+    // Once corrections close, this page is a record lookup rather than a
+    // retry surface, so show the stored row instead of an attempted mutation.
+    values: correctionsClosed
+      ? valuesOf(item.recordType, item.record)
+      : (overrides.values ?? valuesOf(item.recordType, item.record)),
+    correctionsClosed,
     csrfToken: options.csrfTokenFor(`/admin/records/${item.recordType}/:id`),
     statusCsrfToken: options.csrfTokenFor(
       `/admin/records/${item.recordType}/:id/status`,
@@ -881,6 +889,13 @@ function renderLifecycleRecordPage(
     promotion,
     supersession,
   });
+}
+
+/** Record pages reflect the correction rule up front so an organizer never has
+ *  to submit an action merely to learn that the season no longer permits it. */
+function areCorrectionsClosed(core: CoreRuntime, seasonId: number): boolean {
+  const season = core.seasons.getSeason(seasonId);
+  return !isSeasonActionLegal(season.state, "correction");
 }
 
 function addressRequestFor(

@@ -305,6 +305,7 @@ export function renderRecordPage(options: {
   readonly version: number;
   readonly values: Readonly<Record<string, string>>;
   readonly csrfToken: string;
+  readonly correctionsClosed: boolean;
   readonly saved?: boolean;
   readonly statusCsrfToken?: string;
   readonly conflicts?: readonly ConflictDetail[];
@@ -328,6 +329,9 @@ export function renderRecordPage(options: {
     options.changeRequestReview?.presentation === "proposal";
   const refusalBlock = options.refusal
     ? `<section class="error-summary" role="alert"><h2>${escapeHtml(options.refusal.title)}</h2><p>${escapeHtml(options.refusal.message)}</p></section>`
+    : "";
+  const correctionsClosedBlock = options.correctionsClosed
+    ? `<section class="confirmation" role="status" tabindex="-1" aria-labelledby="corrections-closed-title"><h2 id="corrections-closed-title">This season is archived. Records can no longer be changed.</h2></section>`
     : "";
 
   const control = (spec: RecordFieldSpec) => {
@@ -365,8 +369,9 @@ export function renderRecordPage(options: {
         .join("")}</dl>
     </section>`;
 
-  const promotionBlock = options.promotion
-    ? `<form class="signup-form" method="post" action="/admin/records/${escapeHtml(options.recordType)}/${options.recordId}/promote">
+  const promotionBlock =
+    !options.correctionsClosed && options.promotion
+      ? `<form class="signup-form" method="post" action="/admin/records/${escapeHtml(options.recordType)}/${options.recordId}/promote">
       <input type="hidden" name="_csrf" value="${escapeHtml(options.promotion.csrfToken)}">
       <input type="hidden" name="season" value="${options.seasonId}">
       <input type="hidden" name="version" value="${options.version}">
@@ -380,10 +385,11 @@ export function renderRecordPage(options: {
       </fieldset>
       <button class="primary-action" type="submit">Promote submission</button>
     </form>`
-    : "";
+      : "";
 
-  const supersessionBlock = options.supersession
-    ? `<form class="signup-form" method="post" action="/admin/records/${escapeHtml(options.recordType)}/${options.recordId}/supersede">
+  const supersessionBlock =
+    !options.correctionsClosed && options.supersession
+      ? `<form class="signup-form" method="post" action="/admin/records/${escapeHtml(options.recordType)}/${options.recordId}/supersede">
       <input type="hidden" name="_csrf" value="${escapeHtml(options.supersession.csrfToken)}">
       <input type="hidden" name="season" value="${options.seasonId}">
       <input type="hidden" name="version" value="${options.version}">
@@ -397,7 +403,7 @@ export function renderRecordPage(options: {
       </fieldset>
       <button class="secondary-action" type="submit">Mark this record superseded</button>
     </form>`
-    : "";
+      : "";
 
   return shell(
     options.title,
@@ -406,10 +412,11 @@ export function renderRecordPage(options: {
       <h1>${escapeHtml(options.title || "Untitled")}</h1>
       <p class="lede"><a href="/admin?season=${options.seasonId}">Back to the queue</a></p>
     </header>
+    ${correctionsClosedBlock}
     ${options.saved ? `<section class="confirmation" role="status"><p class="eyebrow success-mark">Saved</p></section>` : ""}
     ${refusalBlock}
     ${
-      options.status
+      !options.correctionsClosed && options.status
         ? `<form class="signup-form status-form" method="post" action="/admin/records/${escapeHtml(options.recordType)}/${options.recordId}/status">
       <input type="hidden" name="_csrf" value="${escapeHtml(options.statusCsrfToken ?? "")}">
       <input type="hidden" name="season" value="${options.seasonId}">
@@ -431,7 +438,26 @@ export function renderRecordPage(options: {
     ${conflictBlock}
     ${promotionBlock}
     ${supersessionBlock}
-    <form class="signup-form" method="post" action="/admin/records/${escapeHtml(options.recordType)}/${options.recordId}">
+    ${
+      options.correctionsClosed
+        ? `<section class="submission" aria-labelledby="record-details-title">
+      <h2 id="record-details-title">Details</h2>
+      <dl class="submission-list">${[
+        ...(options.status
+          ? [{ label: "Status", value: readableStaticValue(options.status) }]
+          : []),
+        ...fields.map((spec) => ({
+          label: spec.label,
+          value: readableStaticValue(options.values[spec.name] ?? "", spec),
+        })),
+      ]
+        .map(
+          ({ label, value }) =>
+            `<div class="submission-row"><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`,
+        )
+        .join("")}</dl>
+    </section>`
+        : `<form class="signup-form" method="post" action="/admin/records/${escapeHtml(options.recordType)}/${options.recordId}">
       <input type="hidden" name="_csrf" value="${escapeHtml(options.csrfToken)}">
       <input type="hidden" name="season" value="${options.seasonId}">
       <input type="hidden" name="version" value="${options.version}">
@@ -449,6 +475,15 @@ export function renderRecordPage(options: {
           .join("")}
       </fieldset>
       <button class="primary-action" type="submit">Save changes</button>
-    </form>`,
+    </form>`
+    }`,
   );
+}
+
+function readableStaticValue(value: string, spec?: RecordFieldSpec): string {
+  if (value.length === 0) return "(empty)";
+  if (spec?.kind === "boolean" || spec === undefined) {
+    return `${value[0]?.toUpperCase()}${value.slice(1)}`;
+  }
+  return value;
 }
