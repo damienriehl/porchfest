@@ -32,6 +32,60 @@ export function allValues(
   return values[name] ?? [];
 }
 
+export function renderSignupSeasonPage(options: {
+  readonly kind: "host" | "performer";
+  readonly seasons: readonly {
+    readonly id: number;
+    readonly displayName: string;
+  }[];
+  readonly errors: readonly SignupError[];
+}): string {
+  const path =
+    options.kind === "host" ? HOST_SIGNUP_PATH : PERFORMER_SIGNUP_PATH;
+  const title =
+    options.kind === "host" ? "Host a Porchfest stage" : "Play Porchfest";
+  const eyebrow = options.kind === "host" ? "Host signup" : "Performer signup";
+  const content =
+    options.seasons.length === 0
+      ? `<section class="confirmation-card" id="signup-form" aria-labelledby="signup-availability-heading">
+      <h2 id="signup-availability-heading">Signups are not open right now</h2>
+      <p>Please check back when the organizers open a Porchfest season.</p>
+    </section>`
+      : `<form class="signup-form" id="signup-form" method="get" action="${path}">
+      <fieldset class="choice-group">
+        <legend>Choose a Porchfest season</legend>
+        <p class="help">Choose the Porchfest you want to join.</p>
+        <div class="choices">${options.seasons
+          .map(
+            (season) =>
+              `<label class="choice"><input type="radio" name="season" value="${season.id}" required><span>${escapeHtml(season.displayName)}</span></label>`,
+          )
+          .join("")}</div>
+      </fieldset>
+      <button class="primary-action" type="submit">Continue</button>
+    </form>`;
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${escapeHtml(title)} · Porchfest</title>
+  <link rel="stylesheet" href="/signup/assets/signup.css">
+</head>
+<body>
+  <main class="signup-page">
+    <header class="signup-header">
+      <p class="eyebrow">${escapeHtml(eyebrow)}</p>
+      <h1>${escapeHtml(title)}</h1>
+    </header>
+    ${renderErrorSummary(options.errors)}
+    <div class="signup-single-column">${content}</div>
+  </main>
+</body>
+</html>`;
+}
+
 export function renderSignupPage(options: {
   readonly title: string;
   readonly eyebrow: string;

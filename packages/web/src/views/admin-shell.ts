@@ -19,12 +19,40 @@ ${body}
 </html>`;
 }
 
+export function renderOrganizerSignInRequiredPage(options: {
+  readonly organizerSignInPath: string;
+}): string {
+  return page(
+    "Sign-in required",
+    `    <header class="signup-header">
+      <p class="eyebrow">Organizers</p>
+      <h1>Your session has ended</h1>
+      <p class="lede">Your changes were not submitted. Sign in again.</p>
+      <p><a class="secondary-action" href="${escapeHtml(options.organizerSignInPath)}">Go to organizer sign-in</a></p>
+    </header>`,
+  );
+}
+
 export function renderSignInPage(options: {
   readonly token: string;
   readonly csrfToken: string;
   readonly needsEmail: boolean;
   readonly errors: readonly string[];
 }): string {
+  if (!options.token && options.errors.length === 0) {
+    const nextStep = options.needsEmail
+      ? "Use the bootstrap sign-in link printed in the container log."
+      : "A new sign-in link must come from another organizer. If you are the only organizer, an operator with database access must issue one.";
+    return page(
+      "Organizer sign-in",
+      `    <header class="signup-header">
+      <p class="eyebrow">Organizers</p>
+      <h1>Your session has ended</h1>
+      <p class="lede">Sign-in links work once. ${escapeHtml(nextStep)}</p>
+    </header>`,
+    );
+  }
+
   const errors =
     options.errors.length === 0
       ? ""
@@ -38,7 +66,7 @@ export function renderSignInPage(options: {
     `    <header class="signup-header">
       <p class="eyebrow">Organizers</p>
       <h1>Sign in to Porchfest</h1>
-      <p class="lede">Sign-in links work once. If yours has expired, ask another organizer for a new one.</p>
+      <p class="lede">Sign-in links work once. A new link must come from another organizer. If you are the only organizer, an operator with database access must issue one.</p>
     </header>
     ${errors}
     <form class="signup-form" id="signup-form" method="post" action="${ADMIN_SIGN_IN_PATH}">

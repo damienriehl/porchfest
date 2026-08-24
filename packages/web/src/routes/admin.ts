@@ -61,10 +61,7 @@ export function registerAdminRoutes(options: AdminRouteOptions): void {
         });
       }
       if (!organizer) {
-        return new Response(JSON.stringify({ error: "unauthorized" }), {
-          status: 401,
-          headers: { ...adminHeaders(), "content-type": "application/json" },
-        });
+        return options.routes.organizerGetRefusal(context);
       }
 
       // Which season the organizer is working. With one season the choice is

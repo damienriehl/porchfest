@@ -2,6 +2,7 @@ import type { Context, Handler } from "hono";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { adminHeaders } from "../auth.js";
+import { renderOrganizerSignInRequiredPage } from "../views/admin-shell.js";
 
 export const TRUST_TIERS = ["public", "participant", "organizer"] as const;
 export type TrustTier = (typeof TRUST_TIERS)[number];
@@ -32,6 +33,10 @@ export interface MutationProtection {
 
 export interface RouteActivityHooks {
   readonly onOrganizerActivity?: () => void;
+}
+
+export interface OrganizerAccessOptions {
+  readonly signInPath?: string;
 }
 
 export class RouteRegistrationError extends Error {
@@ -106,6 +111,7 @@ export class RouteRegistry {
   readonly #authorize: TrustAuthorizer;
   readonly #mutationProtection: MutationProtection | undefined;
   readonly #activityHooks: RouteActivityHooks;
+  readonly #organizerAccess: OrganizerAccessOptions;
   readonly #routes: RouteDeclaration[] = [];
   readonly #keys = new Set<string>();
 
@@ -114,11 +120,13 @@ export class RouteRegistry {
     authorize: TrustAuthorizer = denyProtectedRoutes,
     mutationProtection?: MutationProtection,
     activityHooks: RouteActivityHooks = {},
+    organizerAccess: OrganizerAccessOptions = {},
   ) {
     this.#app = app;
     this.#authorize = authorize;
     this.#mutationProtection = mutationProtection;
     this.#activityHooks = activityHooks;
+    this.#organizerAccess = organizerAccess;
   }
 
   register(input: unknown): RouteDeclaration {
@@ -150,6 +158,34 @@ export class RouteRegistry {
         route.tier !== "public" &&
         !(await this.#authorize(route.tier, context))
       ) {
+        const organizerSignInPath = this.#organizerAccess.signInPath;
+        // Redirect only page navigations: redirecting a refused mutation would
+        // discard its body, participant auth has no sign-in destination yet,
+        // and redirecting the destination itself would trap the browser in a loop.
+        if (
+          route.method === "GET" &&
+          route.tier === "organizer" &&
+          organizerSignInPath &&
+          route.path !== organizerSignInPath &&
+          acceptsHtml(context)
+        ) {
+          return this.organizerGetRefusal(context);
+        }
+        if (
+          route.method !== "GET" &&
+          route.tier === "organizer" &&
+          organizerSignInPath &&
+          acceptsHtml(context)
+        ) {
+          // A fresh one-use link reaches the organizer out of band, so this
+          // page cannot carry the refused request's destination through sign-in.
+          return new Response(
+            renderOrganizerSignInRequiredPage({
+              organizerSignInPath,
+            }),
+            { status: 401, headers: adminHeaders() },
+          );
+        }
         return context.json(
           { error: "unauthorized" },
           401,
@@ -198,9 +234,48 @@ export class RouteRegistry {
     return route;
   }
 
+  /** Keep defensive handler checks aligned with the registry's HTML redirect. */
+  organizerGetRefusal(context: Context): Response {
+    const organizerSignInPath = this.#organizerAccess.signInPath;
+    const requestPath = new URL(context.req.url).pathname;
+    if (
+      organizerSignInPath &&
+      requestPath !== organizerSignInPath &&
+      acceptsHtml(context)
+    ) {
+      // Fresh sign-in links arrive out of band and cannot preserve this URL,
+      // so the browser can only continue to the generic sign-in page.
+      return new Response(null, {
+        status: 303,
+        headers: adminHeaders({
+          location: organizerSignInPath,
+        }),
+      });
+    }
+    return context.json(
+      { error: "unauthorized" },
+      401,
+      adminHeaders({ "content-type": "application/json" }),
+    );
+  }
+
   list(): readonly RouteDeclaration[] {
     return [...this.#routes];
   }
+}
+
+function acceptsHtml(context: Context): boolean {
+  return (context.req.header("accept") ?? "").split(",").some((range) => {
+    const [rawMediaType, ...parameters] = range.split(";");
+    const mediaType = rawMediaType?.trim().toLowerCase();
+    const quality = parameters
+      .map((parameter) => parameter.trim().toLowerCase())
+      .find((parameter) => parameter.startsWith("q="));
+    return (
+      (mediaType === "text/html" || mediaType === "application/xhtml+xml") &&
+      (quality === undefined || Number(quality.slice(2)) > 0)
+    );
+  });
 }
 
 function rejectMutationOrigin(

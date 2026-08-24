@@ -31,7 +31,8 @@ export function registerAdminRetentionRoutes(
     path: ADMIN_RETENTION_PATH,
     tier: "organizer",
     handler: (context: Context) => {
-      if (!currentOrganizer(options.core, context)) return unauthorized();
+      if (!currentOrganizer(options.core, context))
+        return options.routes.organizerGetRefusal(context);
       return retentionPage(
         options,
         200,

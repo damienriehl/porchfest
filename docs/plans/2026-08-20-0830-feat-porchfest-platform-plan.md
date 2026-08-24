@@ -449,12 +449,23 @@ The Hetzner box is stood up as soon as the U2 scaffold exists — literal named 
   - The admin JS bundle loads on a public page without error when no admin container is present.
 - **Verification:** an organizer **other than Damien** completes the Tuesday-night loop unaided — review, correct, set a status — against a local instance.
 
-### U6. Assignment and deterministic suggestions
+### U6. Assignment, deterministic suggestions, and season state transitions
 
-- **Goal:** Organizers assign acts to slots with explainable hints and no double-booking.
-- **Requirements:** R1, R7, R8, R25. Implements KD4.
+- **Rebaselined 2026-08-24 (owner-approved):** the organizer surface for **season
+  state transitions** was never assigned to any unit. U3 built the state machine
+  in the domain layer and explicitly kept it out of the UI; U5's scope is the
+  queue, records, first-run setup, and field edits. So R28's states and F4's
+  "Season turnover" flow had no implementing unit, and a 2026-08-24 UAT confirmed
+  the consequence: no route calls `transitionSeason`, so an organizer cannot close
+  signups, lock a season, or archive one. Retention's premise ("after a season
+  closes") and the archived read-only record page were both unreachable. Damien's
+  call on the `uat-findings` sheet: **U6 owns it**, because closing signups and
+  locking are exactly when assignment work makes them matter. Same class of gap,
+  and same resolution, as the record-creation rebaseline recorded in U3.
+- **Goal:** Organizers assign acts to slots with explainable hints and no double-booking, and move a season through its states.
+- **Requirements:** R1, R7, R8, R25, R28. Implements KD4.
 - **Dependencies:** U3, U5.
-- **Files:** `packages/core/src/matching.ts`, `packages/web/src/routes/assign.ts`, `packages/web/src/views/assign-venue.ts`, `packages/web/src/views/assign-act.ts`, `packages/core/test/matching.test.ts`, `packages/web/test/assign.test.ts`.
+- **Files:** `packages/core/src/matching.ts`, `packages/web/src/routes/assign.ts`, `packages/web/src/routes/season-lifecycle.ts`, `packages/web/src/views/assign-venue.ts`, `packages/web/src/views/assign-act.ts`, `packages/core/test/matching.test.ts`, `packages/web/test/assign.test.ts`, `packages/web/test/season-lifecycle.test.ts`.
 - **Approach:** suggestions are pure functions over season data — mutual name requests first, then genre preference fit, gear and power compatibility, slot availability. Every suggestion returns its reasons so the UI can show why. Assignment refuses conflicts (R7) and honors holds (R25). **Shared members are modelled explicitly:** the performer form has captured "is your band member in another SAP Porchfest band, too?" since 2026 precisely so a drummer in two acts is not booked into one slot twice — link the acts, surface the link in both views, and refuse the same-slot assignment unless an organizer records an override. Two views share the one engine: venue-first (a venue, its slots, ranked candidate acts) is the primary screen and matches how the 2026 season was worked, porch by porch; act-first (an act, its ranked candidate slots) covers the leftover-act pass at the end of matching. Each shows the top-ranked candidates with their reasons beside the assign action, not hidden behind a hover.
 - **Test scenarios:**
   - Covers R7 / AE3. Assigning an act to a slot it already occupies elsewhere is refused and names the conflict.
@@ -466,6 +477,8 @@ The Hetzner box is stood up as soon as the U2 scaffold exists — literal named 
   - Covers R8. Every returned suggestion carries at least one human-readable reason.
   - Covers R25. A held slot is excluded from suggestions until released.
   - Covers R8. The venue-first and act-first views return the same ranking and reasons for the same pairing.
+  - Covers R28 / F4. An organizer moves a season through its states from the admin, each transition names what it will stop allowing before it is taken, and an illegal transition is refused by name rather than by a bare error.
+  - Covers R28. Archiving a season makes its record pages read-only, which is the state the archived-record rendering already shipped for and could not previously be reached.
 - **Verification:** suggestions run against a checked-in fixture season produce stable, reason-carrying rankings. The imported-2026 fidelity claim belongs to U10 and the Verification Contract's 2026-fidelity gate.
 
 ### U7. Email waves, outbox, and provider adapters

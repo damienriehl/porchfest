@@ -29,6 +29,7 @@ import {
   renderHostSubmission,
   renderPerformerPreview,
   renderPerformerSubmission,
+  renderSignupSeasonPage,
   type SignupError,
   type SignupValues,
 } from "../views/signup-view.js";
@@ -150,16 +151,27 @@ export function registerSignupRoutes(options: SignupRouteOptions): void {
       path,
       tier: "public",
       handler: (context: Context) => {
-        const requested = context.req.query("season") ?? "";
+        const requested = context.req.query("season");
+        if (requested === undefined) {
+          return absentSeasonResponse(options, challenge, kind);
+        }
         const resolved = resolveSeason(options, requested);
+        if (!resolved.ok) {
+          return seasonPageResponse(
+            options,
+            kind,
+            [resolved.error],
+            resolved.status,
+          );
+        }
         return formResponse(
           options,
           challenge,
           kind,
           { season_id: [requested] },
-          resolved.ok ? [] : [resolved.error],
-          resolved.ok ? 200 : resolved.status,
-          resolved.ok ? resolved.season : null,
+          [],
+          200,
+          resolved.season,
         );
       },
     });
@@ -298,6 +310,53 @@ export function registerSignupRoutes(options: SignupRouteOptions): void {
       },
     });
   }
+}
+
+function absentSeasonResponse(
+  options: SignupRouteOptions,
+  challenge: AntibotClientChallenge | null,
+  kind: SignupKind,
+): Response {
+  const openSeasons = options.core.setup
+    .listSeasons()
+    .filter((season) => isSeasonActionLegal(season.state, "signup"));
+  if (openSeasons.length === 1) {
+    const season = openSeasons[0];
+    if (season) {
+      return formResponse(
+        options,
+        challenge,
+        kind,
+        { season_id: [String(season.id)] },
+        [],
+        200,
+        season,
+      );
+    }
+  }
+
+  // A missing or ambiguous season has no safe submission target. Stop before
+  // rendering participant fields so the page never invites answers it cannot save.
+  return seasonPageResponse(options, kind, [], 200, openSeasons);
+}
+
+function seasonPageResponse(
+  options: SignupRouteOptions,
+  kind: SignupKind,
+  errors: readonly SignupError[],
+  status: SignupStatus,
+  knownOpenSeasons?: readonly Season[],
+): Response {
+  const openSeasons =
+    knownOpenSeasons ??
+    options.core.setup
+      .listSeasons()
+      .filter((season) => isSeasonActionLegal(season.state, "signup"));
+  return htmlResponse(
+    renderSignupSeasonPage({ kind, seasons: openSeasons, errors }),
+    status,
+    null,
+  );
 }
 
 // ---------------------------------------------------------------------------

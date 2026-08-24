@@ -79,6 +79,11 @@ h1 {
   justify-content: center;
 }
 
+.signup-single-column {
+  width: min(100%, 34rem);
+  margin-inline: auto;
+}
+
 .signup-form {
   width: min(100%, 34rem);
 }

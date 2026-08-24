@@ -3,7 +3,7 @@ import type { CoreRuntime } from "@porchfest/core";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { Hono, type Context } from "hono";
 import { RouteRegistry, type TrustAuthorizer } from "./router/registry.js";
-import { announceBootstrapLink, registerAdminRoutes } from "./routes/admin.js";
+import { ADMIN_SIGN_IN_PATH, registerAdminRoutes } from "./routes/admin.js";
 import { registerAdminRecordRoutes } from "./routes/admin-records.js";
 import { registerAdminRetentionRoutes } from "./routes/admin-retention.js";
 import {
@@ -59,6 +59,7 @@ export function createApp(options: AppOptions): PorchfestApp {
       },
     },
     { onOrganizerActivity: options.onOrganizerActivity },
+    { signInPath: ADMIN_SIGN_IN_PATH },
   );
 
   // The health endpoint is deliberately the first member of the canonical route
