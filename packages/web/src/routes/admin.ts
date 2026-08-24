@@ -4,6 +4,7 @@
 
 import {
   AccessError,
+  isSeasonActionLegal,
   SeasonSetupError,
   type CoreRuntime,
 } from "@porchfest/core";
@@ -101,6 +102,7 @@ export function registerAdminRoutes(options: AdminRouteOptions): void {
           organizerName: organizer.displayName,
           seasonName: season.displayName,
           seasonId: season.id,
+          correctionsClosed: !isSeasonActionLegal(season.state, "correction"),
           items: options.core.queue.listForOrganizer(season.id, organizer.id),
           changeRequests: options.core.changeRequests.listPendingForSeason(
             season.id,
