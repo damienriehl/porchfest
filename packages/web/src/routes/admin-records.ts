@@ -550,6 +550,10 @@ export function registerAdminRecordRoutes(
           // overwriting and keep what the organizer typed for a deliberate
           // re-save. A closed season renders the stored record read-only.
           const stored = valuesOf(recordType, current.record);
+          const correctionsClosed = areCorrectionsClosed(
+            options.core,
+            seasonId,
+          );
           const conflicts: ConflictDetail[] = RECORD_FIELDS[recordType]
             .filter(
               (spec) => (fields[spec.name] ?? "") !== (stored[spec.name] ?? ""),
@@ -567,11 +571,13 @@ export function registerAdminRecordRoutes(
               recordId,
               seasonId,
               title: recordTitle(current),
-              // Re-armed against the refreshed version, so the organizer's next
-              // save is a deliberate overwrite rather than another refusal.
+              // A live conflict re-arms against the refreshed version; a closed
+              // season keeps the version internal to its read-only rendering.
               version: current.version,
-              values: pick(RECORD_FIELDS[recordType], fields),
-              correctionsClosed: areCorrectionsClosed(options.core, seasonId),
+              values: correctionsClosed
+                ? stored
+                : pick(RECORD_FIELDS[recordType], fields),
+              correctionsClosed,
               csrfToken: options.csrfTokenFor(
                 `/admin/records/${recordType}/:id`,
               ),
@@ -852,7 +858,9 @@ function renderLifecycleRecordPage(
               : candidate.record.placeholder,
         }));
   const promotion =
-    item.recordType !== "contact" && item.record.placeholder
+    !correctionsClosed &&
+    item.recordType !== "contact" &&
+    item.record.placeholder
       ? {
           csrfToken: options.csrfTokenFor(
             `/admin/records/${item.recordType}/:id/promote`,
