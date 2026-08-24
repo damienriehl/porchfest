@@ -209,6 +209,24 @@ export function registerAdminRecordRoutes(
       ) {
         return notFound();
       }
+      const season = options.core.seasons.getSeason(seasonId);
+      if (!isSeasonActionLegal(season.state, "correction")) {
+        // Refuse before rendering controls so an organizer does not complete a
+        // form only to discover at submission that placeholders are closed.
+        return html(
+          renderPlaceholderPage({
+            recordType,
+            seasonId,
+            csrfToken: options.csrfTokenFor("/admin/placeholders/:recordType"),
+            contacts: [],
+            error: placeholderSeasonRefusal(
+              new SeasonActionError(season.state, "correction"),
+            ),
+            formDisabled: true,
+          }),
+          409,
+        );
+      }
       return html(
         renderPlaceholderPage({
           recordType,
@@ -440,32 +458,25 @@ export function registerAdminRecordRoutes(
                 409,
               );
             }
-            // Same refusal shape as a field edit: named, not overwritten.
+            // Use the lifecycle renderer because archival can land after the
+            // write conflict but before this response is assembled.
             return html(
-              renderRecordPage({
-                recordType,
-                recordId,
+              renderLifecycleRecordPage(
+                options,
+                organizer.id,
                 seasonId,
-                title: recordTitle(current),
-                version: current.version,
-                values: valuesOf(recordType, current.record),
-                correctionsClosed: areCorrectionsClosed(options.core, seasonId),
-                csrfToken: options.csrfTokenFor(
-                  `/admin/records/${recordType}/:id`,
-                ),
-                statusCsrfToken: options.csrfTokenFor(
-                  `/admin/records/${recordType}/:id/status`,
-                ),
-                status: statusOf(current.record),
-                conflicts: [
-                  {
-                    field: "status",
-                    label: "Status",
-                    attempted: status,
-                    stored: statusOf(current.record) ?? "",
-                  },
-                ],
-              }),
+                current,
+                {
+                  conflicts: [
+                    {
+                      field: "status",
+                      label: "Status",
+                      attempted: status,
+                      stored: statusOf(current.record) ?? "",
+                    },
+                  ],
+                },
+              ),
               409,
             );
           }
@@ -559,23 +570,20 @@ export function registerAdminRecordRoutes(
               stored: stored[spec.name] ?? "",
             }));
 
+          // Archival can land after the conflict but before rendering, so use
+          // the same stored-record fallback as every other lifecycle response.
           return html(
-            renderRecordPage({
-              recordType,
-              recordId,
+            renderLifecycleRecordPage(
+              options,
+              organizer.id,
               seasonId,
-              title: recordTitle(current),
-              // Re-armed against the refreshed version, so the organizer's next
-              // save is a deliberate overwrite rather than another refusal.
-              version: current.version,
-              values: pick(RECORD_FIELDS[recordType], fields),
-              correctionsClosed: areCorrectionsClosed(options.core, seasonId),
-              csrfToken: options.csrfTokenFor(
-                `/admin/records/${recordType}/:id`,
-              ),
-              conflicts,
-              changeRequestReview: changeRequestId(fields.change_request),
-            }),
+              current,
+              {
+                values: pick(RECORD_FIELDS[recordType], fields),
+                conflicts,
+                changeRequestReview: changeRequestId(fields.change_request),
+              },
+            ),
             409,
           );
         }
@@ -830,7 +838,8 @@ function renderLifecycleRecordPage(
     };
   } = {},
 ): string {
-  const correctionsClosed = areCorrectionsClosed(options.core, seasonId);
+  const season = options.core.seasons.getSeason(seasonId);
+  const correctionsClosed = !isSeasonActionLegal(season.state, "correction");
   const candidates = options.core.queue
     .listForOrganizer(seasonId, organizerId)
     .filter(
@@ -871,31 +880,26 @@ function renderLifecycleRecordPage(
     seasonId,
     title: recordTitle(item),
     version: item.version,
-    // Once corrections close, this page is a record lookup rather than a
-    // retry surface, so show the stored row instead of an attempted mutation.
-    values: correctionsClosed
-      ? valuesOf(item.recordType, item.record)
-      : (overrides.values ?? valuesOf(item.recordType, item.record)),
+    values: overrides.values ?? valuesOf(item.recordType, item.record),
+    staticValues: staticValuesOf(item.recordType, item.record),
     correctionsClosed,
+    seasonState: season.state,
     csrfToken: options.csrfTokenFor(`/admin/records/${item.recordType}/:id`),
     statusCsrfToken: options.csrfTokenFor(
       `/admin/records/${item.recordType}/:id/status`,
     ),
     status: statusOf(item.record),
     saved: overrides.saved,
-    conflicts: overrides.conflicts,
+    // Once corrections close, this page is a record lookup rather than an
+    // interrupted retry or proposal-review surface.
+    conflicts: correctionsClosed ? undefined : overrides.conflicts,
     refusal: overrides.refusal,
-    changeRequestReview: overrides.changeRequestReview,
+    changeRequestReview: correctionsClosed
+      ? undefined
+      : overrides.changeRequestReview,
     promotion,
     supersession,
   });
-}
-
-/** Record pages reflect the correction rule up front so an organizer never has
- *  to submit an action merely to learn that the season no longer permits it. */
-function areCorrectionsClosed(core: CoreRuntime, seasonId: number): boolean {
-  const season = core.seasons.getSeason(seasonId);
-  return !isSeasonActionLegal(season.state, "correction");
 }
 
 function addressRequestFor(
@@ -1132,6 +1136,21 @@ function valuesOf(
     if (spec.kind === "boolean") values[spec.name] = raw ? "yes" : "no";
     else if (raw === null || raw === undefined) values[spec.name] = "";
     else values[spec.name] = String(raw);
+  }
+  return values;
+}
+
+/** Static records preserve unanswered booleans as empty. This stays separate
+ *  because the editable form's existing null-radio fallback is intentional. */
+function staticValuesOf(
+  recordType: QueueRecordType,
+  record: Record<string, unknown>,
+): Record<string, string> {
+  const values = valuesOf(recordType, record);
+  for (const spec of RECORD_FIELDS[recordType]) {
+    if (spec.kind === "boolean" && record[spec.name] == null) {
+      values[spec.name] = "";
+    }
   }
   return values;
 }

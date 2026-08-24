@@ -2,6 +2,7 @@ import type {
   ParticipantChangeRequest,
   QueueItem,
   QueueRecordType,
+  SeasonState,
 } from "@porchfest/core";
 import { escapeHtml } from "./signup-view.js";
 
@@ -76,6 +77,7 @@ export function renderQueuePage(options: {
   readonly seasonId: number;
   readonly items: readonly QueueItem[];
   readonly changeRequests: readonly ParticipantChangeRequest[];
+  readonly correctionsClosed: boolean;
   readonly csrfToken: string;
   readonly applyChangeCsrfToken: string;
   readonly rejectChangeCsrfToken: string;
@@ -155,7 +157,7 @@ export function renderQueuePage(options: {
       <p class="eyebrow">${escapeHtml(options.seasonName)}</p>
       <h1>Welcome, ${escapeHtml(options.organizerName)}</h1>
       <p class="lede">${needsReview === 0 ? "Nothing new for you right now." : `${needsReview} ${needsReview === 1 ? "item needs" : "items need"} your review.`}</p>
-      <p class="lede"><a href="/admin/placeholders/act/new?season=${options.seasonId}">Add an act without a submission</a> · <a href="/admin/placeholders/venue/new?season=${options.seasonId}">Add a venue without a submission</a></p>
+      ${options.correctionsClosed ? "" : `<p class="lede"><a href="/admin/placeholders/act/new?season=${options.seasonId}">Add an act without a submission</a> · <a href="/admin/placeholders/venue/new?season=${options.seasonId}">Add a venue without a submission</a></p>`}
       <p class="lede"><a href="/admin/retention">Review participant retention</a></p>
     </header>
     <section aria-labelledby="change-requests-title">
@@ -228,6 +230,7 @@ export function renderPlaceholderPage(options: {
   readonly contacts: readonly ReachContactOption[];
   readonly values?: Readonly<Record<string, string>>;
   readonly error?: string;
+  readonly formDisabled?: boolean;
 }): string {
   const fields = RECORD_FIELDS[options.recordType];
   const values = options.values ?? {};
@@ -256,7 +259,10 @@ export function renderPlaceholderPage(options: {
       <p class="lede"><a href="/admin?season=${options.seasonId}">Back to the queue</a></p>
     </header>
     ${options.error ? `<section class="error-summary" role="alert"><h2>Check the placeholder</h2><p>${escapeHtml(options.error)}</p></section>` : ""}
-    <form class="signup-form" method="post" action="/admin/placeholders/${kind}">
+    ${
+      options.formDisabled
+        ? ""
+        : `<form class="signup-form" method="post" action="/admin/placeholders/${kind}">
       <input type="hidden" name="_csrf" value="${escapeHtml(options.csrfToken)}">
       <input type="hidden" name="season" value="${options.seasonId}">
       <fieldset>
@@ -285,7 +291,8 @@ export function renderPlaceholderPage(options: {
         <div class="field"><label for="manual_phone">Direct phone (optional)</label><input id="manual_phone" name="manual_phone" type="text" value="${escapeHtml(values.manual_phone ?? "")}"></div>
       </fieldset>
       <button class="primary-action" type="submit">Create placeholder</button>
-    </form>`,
+    </form>`
+    }`,
   );
 }
 
@@ -304,8 +311,10 @@ export function renderRecordPage(options: {
   readonly title: string;
   readonly version: number;
   readonly values: Readonly<Record<string, string>>;
+  readonly staticValues: Readonly<Record<string, string>>;
   readonly csrfToken: string;
   readonly correctionsClosed: boolean;
+  readonly seasonState: SeasonState;
   readonly saved?: boolean;
   readonly statusCsrfToken?: string;
   readonly conflicts?: readonly ConflictDetail[];
@@ -324,14 +333,14 @@ export function renderRecordPage(options: {
   };
 }): string {
   const fields = RECORD_FIELDS[options.recordType];
-  const conflicts = options.conflicts ?? [];
+  const conflicts = options.correctionsClosed ? [] : (options.conflicts ?? []);
   const proposalPresentation =
     options.changeRequestReview?.presentation === "proposal";
   const refusalBlock = options.refusal
     ? `<section class="error-summary" role="alert"><h2>${escapeHtml(options.refusal.title)}</h2><p>${escapeHtml(options.refusal.message)}</p></section>`
     : "";
   const correctionsClosedBlock = options.correctionsClosed
-    ? `<section class="confirmation" role="status" tabindex="-1" aria-labelledby="corrections-closed-title"><h2 id="corrections-closed-title">This season is archived. Records can no longer be changed.</h2></section>`
+    ? `<section class="confirmation" role="status" tabindex="-1" aria-labelledby="corrections-closed-title"><h2 id="corrections-closed-title">${escapeHtml(correctionsClosedMessage(options.seasonState))}</h2></section>`
     : "";
 
   const control = (spec: RecordFieldSpec) => {
@@ -448,7 +457,10 @@ export function renderRecordPage(options: {
           : []),
         ...fields.map((spec) => ({
           label: spec.label,
-          value: readableStaticValue(options.values[spec.name] ?? "", spec),
+          value: readableStaticValue(
+            options.staticValues[spec.name] ?? "",
+            spec,
+          ),
         })),
       ]
         .map(
@@ -478,6 +490,12 @@ export function renderRecordPage(options: {
     </form>`
     }`,
   );
+}
+
+function correctionsClosedMessage(state: SeasonState): string {
+  return state === "archived"
+    ? "This season is archived. Records can no longer be changed."
+    : `The season's current state is ${state}. Records can no longer be changed.`;
 }
 
 function readableStaticValue(value: string, spec?: RecordFieldSpec): string {
