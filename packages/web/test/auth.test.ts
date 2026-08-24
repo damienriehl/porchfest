@@ -335,7 +335,8 @@ describe("sign-in link handling", () => {
     const html = await response.text();
 
     expect(html).toContain("another organizer");
-    expect(html).toContain("operator with database access");
+    expect(html).toContain("operator with access to the deployment");
+    expect(html).not.toContain("docs/operations/organizer-recovery.md");
   });
 
   it("refuses a replayed sign-in link", async () => {

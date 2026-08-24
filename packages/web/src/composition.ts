@@ -188,7 +188,7 @@ async function createRuntimeWithTesting(
   }
 }
 
-function parsePublicBaseUrl(value: string | undefined): string | null {
+export function parsePublicBaseUrl(value: string | undefined): string | null {
   const configured = value?.trim();
   if (!configured) return null;
   let url: URL;

@@ -42,7 +42,7 @@ export function renderSignInPage(options: {
   if (!options.token && options.errors.length === 0) {
     const nextStep = options.needsEmail
       ? "Use the bootstrap sign-in link printed in the container log."
-      : "A new sign-in link must come from another organizer. If you are the only organizer, an operator with database access must issue one.";
+      : "A new sign-in link must come from another organizer. If you are the only organizer, an operator with access to the deployment must issue a new link.";
     return page(
       "Organizer sign-in",
       `    <header class="signup-header">
@@ -66,7 +66,7 @@ export function renderSignInPage(options: {
     `    <header class="signup-header">
       <p class="eyebrow">Organizers</p>
       <h1>Sign in to Porchfest</h1>
-      <p class="lede">Sign-in links work once. A new link must come from another organizer. If you are the only organizer, an operator with database access must issue one.</p>
+      <p class="lede">Sign-in links work once. A new link must come from another organizer. If you are the only organizer, an operator with access to the deployment must issue a new link.</p>
     </header>
     ${errors}
     <form class="signup-form" id="signup-form" method="post" action="${ADMIN_SIGN_IN_PATH}">

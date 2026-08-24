@@ -21,6 +21,7 @@ RUN npm install --include-workspace-root --workspaces
 
 COPY tsconfig.json drizzle.config.ts vitest.config.ts eslint.config.js ./
 COPY packages ./packages
+COPY scripts ./scripts
 RUN npm run build
 
 # Keep the native better-sqlite3 binary built above and the production tsx entry.
@@ -41,6 +42,7 @@ RUN mkdir -p /data && chown -R node:node /data
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/packages ./packages
 COPY --from=builder /app/package.json ./package.json
+COPY --from=builder /app/scripts/organizer-link.ts ./scripts/organizer-link.ts
 
 VOLUME ["/data"]
 EXPOSE 9398

@@ -46,6 +46,11 @@ The application refuses to start when the configured session secret is still the
 placeholder. With the variable absent or empty, first boot creates a unique key at
 `/data/session-secret` with mode `0600`; later boots reuse it.
 
+If the only organizer's session expires, an operator with shell access can print a fresh
+single-use sign-in link with `docker compose exec app npm run organizer:link` — no HTTP surface
+and no direct database access involved. The full procedure is in
+[docs/operations/organizer-recovery.md](docs/operations/organizer-recovery.md).
+
 ## Zero-configuration provider mode
 
 All three external seams start with null implementations:
