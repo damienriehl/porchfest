@@ -2,7 +2,7 @@
 // owns two KTD7 tokens: its own version prevents double decisions, and the
 // captured record version prevents accepting a request against a changed target.
 
-import { and, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { createSeasonRepository } from "./season.js";
 import {
   acts,
@@ -323,6 +323,7 @@ export function createChangeRequestRepository(
     id: number,
     expectedVersion: number,
     status: "applied" | "rejected",
+    seasonId?: number,
   ): void {
     const result = executor
       .update(changeRequests)
@@ -336,6 +337,9 @@ export function createChangeRequestRepository(
           eq(changeRequests.id, id),
           eq(changeRequests.version, expectedVersion),
           eq(changeRequests.status, "pending"),
+          seasonId === undefined
+            ? undefined
+            : eq(changeRequests.seasonId, seasonId),
         ),
       )
       .run();
@@ -375,24 +379,15 @@ export function createChangeRequestRepository(
               "withdrawn",
             );
           } else if (request.kind === "availability") {
-            const changed = tx
-              .update(acts)
-              .set({
-                version: sql`${acts.version} + 1`,
-                updatedAt: now(),
-              })
-              .where(
-                and(
-                  eq(acts.id, request.recordId),
-                  eq(acts.version, request.recordVersion),
-                  eq(acts.seasonId, request.seasonId),
-                  isNull(acts.canonicalActId),
-                ),
-              )
-              .run();
-            if (changed.changes !== 1) {
-              throw new ChangeRequestConflictError(id, ["recordVersion"]);
-            }
+            // R33: availability is the participant-proposed equivalent of the
+            // organizer edit, so it must share that edit's season gate. The
+            // empty change set deliberately leaves KTD7's version verdict in
+            // the mutation that bumps the act before replacing its windows.
+            createSeasonRepository(tx, { now }).updateAct(
+              request.recordId,
+              request.recordVersion,
+              {},
+            );
             tx.delete(actAvailabilities)
               .where(eq(actAvailabilities.actId, request.recordId))
               .run();
@@ -465,15 +460,32 @@ export function createChangeRequestRepository(
   function reject(
     id: number,
     expectedVersion: number,
+    seasonId?: number,
   ): ParticipantChangeRequest {
     return db.transaction(
       (tx) => {
-        claim(tx, id, expectedVersion, "rejected");
-        const rejected = findWith(tx, id);
+        // R33: rejection is the recovery path for an undecodable proposal, so
+        // it consumes the KTD7 token without decoding proposed_value first.
+        claim(tx, id, expectedVersion, "rejected", seasonId);
+        const rejected = tx
+          .select()
+          .from(changeRequests)
+          .where(eq(changeRequests.id, id))
+          .get();
         if (!rejected) {
           throw new ChangeRequestConflictError(id, ["version"]);
         }
-        return rejected;
+        try {
+          return decode(tx, rejected);
+        } catch (error) {
+          if (!(error instanceof ChangeRequestLifecycleError)) throw error;
+          return {
+            ...rejected,
+            proposedAddress: null,
+            proposedAvailability: null,
+            applicable: targetMatches(tx, rejected),
+          };
+        }
       },
       { behavior: "immediate" },
     );

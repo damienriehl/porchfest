@@ -4,10 +4,12 @@
 
 import {
   ChangeRequestConflictError,
+  ChangeRequestLifecycleError,
   RecordLifecycleError,
   recordStatuses,
   RepositoryConflictError,
   SeasonActionError,
+  SeasonLifecycleError,
   type CoreRuntime,
   type PlaceholderReachInput,
   type QueueItem,
@@ -128,17 +130,23 @@ export function registerAdminRecordRoutes(
       const fields = await readFields(context);
       const seasonId = Number(fields.season ?? "");
       const version = Number(fields.version ?? "");
-      const pending = options.core.changeRequests.find(requestId);
-      if (
-        !pending ||
-        pending.seasonId !== seasonId ||
-        !Number.isSafeInteger(version)
-      ) {
-        return notFound();
-      }
 
       try {
-        options.core.changeRequests.reject(requestId, version);
+        try {
+          const pending = options.core.changeRequests.find(requestId);
+          if (
+            !pending ||
+            pending.seasonId !== seasonId ||
+            !Number.isSafeInteger(version)
+          ) {
+            return notFound();
+          }
+        } catch (error) {
+          // R33: malformed proposals are intentionally absent from the queue,
+          // but reject remains their organizer-controlled recovery path.
+          if (!(error instanceof ChangeRequestLifecycleError)) throw error;
+        }
+        options.core.changeRequests.reject(requestId, version, seasonId);
       } catch (error) {
         if (!(error instanceof RepositoryConflictError)) throw error;
         return html(
@@ -438,6 +446,7 @@ export function registerAdminRecordRoutes(
             seasonId,
             recordType,
             recordId,
+            changes.address,
           );
           return redirect(
             `/admin/records/${recordType}/${recordId}?season=${seasonId}&saved=1`,
@@ -549,7 +558,13 @@ export function registerAdminRecordRoutes(
               );
             }
           } catch (error) {
-            if (!(error instanceof RepositoryConflictError)) throw error;
+            if (
+              !(error instanceof RepositoryConflictError) &&
+              !(error instanceof SeasonActionError) &&
+              !(error instanceof SeasonLifecycleError)
+            ) {
+              throw error;
+            }
             const refreshed = findItem(
               options.core,
               seasonId,
@@ -558,6 +573,21 @@ export function registerAdminRecordRoutes(
               recordId,
             );
             if (!refreshed) return notFound();
+            if (
+              error instanceof SeasonActionError ||
+              error instanceof SeasonLifecycleError
+            ) {
+              return html(
+                renderLifecycleRecordPage(
+                  options,
+                  organizer.id,
+                  seasonId,
+                  refreshed,
+                  { refusal: lifecycleRefusal("promotion", error) },
+                ),
+                409,
+              );
+            }
             return html(
               renderLifecycleRecordPage(
                 options,
@@ -641,7 +671,13 @@ export function registerAdminRecordRoutes(
             );
           }
         } catch (error) {
-          if (!(error instanceof RepositoryConflictError)) throw error;
+          if (
+            !(error instanceof RepositoryConflictError) &&
+            !(error instanceof SeasonActionError) &&
+            !(error instanceof SeasonLifecycleError)
+          ) {
+            throw error;
+          }
           const refreshed = findItem(
             options.core,
             seasonId,
@@ -650,6 +686,21 @@ export function registerAdminRecordRoutes(
             recordId,
           );
           if (!refreshed) return notFound();
+          if (
+            error instanceof SeasonActionError ||
+            error instanceof SeasonLifecycleError
+          ) {
+            return html(
+              renderLifecycleRecordPage(
+                options,
+                organizer.id,
+                seasonId,
+                refreshed,
+                { refusal: lifecycleRefusal("supersession", error) },
+              ),
+              409,
+            );
+          }
           return html(
             renderLifecycleRecordPage(
               options,
@@ -686,6 +737,7 @@ function renderLifecycleRecordPage(
   overrides: {
     readonly saved?: boolean;
     readonly conflicts?: readonly ConflictDetail[];
+    readonly refusal?: { readonly title: string; readonly message: string };
     readonly values?: Readonly<Record<string, string>>;
     readonly changeRequestReview?: {
       readonly id: number;
@@ -741,6 +793,7 @@ function renderLifecycleRecordPage(
     status: statusOf(item.record),
     saved: overrides.saved,
     conflicts: overrides.conflicts,
+    refusal: overrides.refusal,
     changeRequestReview: overrides.changeRequestReview,
     promotion,
     supersession,
@@ -784,6 +837,7 @@ function completeAddressReviewAfterSave(
   seasonId: number,
   recordType: QueueRecordType,
   recordId: number,
+  savedAddress: unknown,
 ): void {
   const review = changeRequestId(requestIdValue);
   if (!review) return;
@@ -794,7 +848,8 @@ function completeAddressReviewAfterSave(
     request.kind !== "address" ||
     recordType !== "venue" ||
     request.seasonId !== seasonId ||
-    request.recordId !== recordId
+    request.recordId !== recordId ||
+    request.proposedAddress !== savedAddress
   ) {
     return;
   }
@@ -806,6 +861,22 @@ function completeAddressReviewAfterSave(
     if (error instanceof ChangeRequestConflictError) return;
     throw error;
   }
+}
+
+function lifecycleRefusal(
+  action: "promotion" | "supersession",
+  error: SeasonActionError | SeasonLifecycleError,
+): { readonly title: string; readonly message: string } {
+  if (error instanceof SeasonActionError) {
+    return {
+      title: `This ${action} could not be completed`,
+      message: `This season is archived, so the ${action} is no longer allowed. The records were left unchanged.`,
+    };
+  }
+  return {
+    title: `This ${action} could not be completed`,
+    message: `${error.message}. Review the records' schedule assignments before trying again.`,
+  };
 }
 
 function contactOptions(

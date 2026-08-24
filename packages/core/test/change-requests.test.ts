@@ -7,7 +7,7 @@ import {
   ChangeRequestTargetConflictError,
   createChangeRequestRepository,
 } from "../src/change-requests.js";
-import { createSeasonRepository } from "../src/season.js";
+import { createSeasonRepository, SeasonActionError } from "../src/season.js";
 import { createSeasonSetup } from "../src/setup.js";
 import { openTestDatabase, type TestDatabase } from "./support/db.js";
 
@@ -195,6 +195,34 @@ describe("participant change requests", () => {
     expect(requests.find(request.id)?.status).toBe("applied");
   });
 
+  it("refuses an availability change after the season is archived", () => {
+    const { season, seasons, requests, performer } = fixtures();
+    const request = requests.record({
+      seasonId: season.id,
+      recordType: "act",
+      recordId: performer.act.id,
+      recordVersion: performer.act.version,
+      kind: "availability",
+      proposedAvailability: [
+        {
+          startsAt: new Date("2031-09-13T16:00:00.000Z"),
+          endsAt: new Date("2031-09-13T18:00:00.000Z"),
+        },
+      ],
+    });
+    seasons.transitionSeason(season.id, season.version, "archived");
+
+    expect(() => requests.apply(request.id, request.version)).toThrowError(
+      SeasonActionError,
+    );
+    expect(requests.find(request.id)?.status).toBe("pending");
+    expect(
+      database.sqlite
+        .prepare("select starts_at from act_availabilities where act_id = ?")
+        .get(performer.act.id),
+    ).toEqual({ starts_at: 1_947_074_400 });
+  });
+
   it("keeps address requests pending until the editor save completes review", () => {
     const { season, seasons, requests, host } = fixtures();
     const request = requests.record({
@@ -312,6 +340,13 @@ describe("participant change requests", () => {
     expect(() => requests.find(inserted.id)).toThrowError(
       ChangeRequestLifecycleError,
     );
+
+    requests.reject(inserted.id, 1, season.id);
+    expect(
+      database.sqlite
+        .prepare("select status from change_requests where id = ?")
+        .get(inserted.id),
+    ).toEqual({ status: "rejected" });
   });
 
   it("allows only one of two organizers to apply the same request", () => {

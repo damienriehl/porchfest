@@ -203,7 +203,7 @@ function readAvailabilities(
   const act = runtime.core.seasons
     .listActivityQueue(seasonId)
     .find(({ recordType }) => recordType === "act");
-  return act ? runtime.coreTesting.listActAvailabilities(act.record.id) : [];
+  return act ? runtime.coreTesting.listRawActAvailabilities(act.record.id) : [];
 }
 
 describe("availability is stored in the season's timezone", () => {
@@ -223,12 +223,10 @@ describe("availability is stored in the season's timezone", () => {
     const [window] = readAvailabilities(runtime, seasonId);
     // 14:00 in Chicago on 2031-06-01 is 19:00Z. Reading the wall clock as UTC
     // would store 14:00Z, which is 09:00 Chicago — five hours early.
-    expect(new Date(window?.startsAt ?? 0).toISOString()).toBe(
-      "2031-06-01T19:00:00.000Z",
-    );
-    expect(new Date(window?.endsAt ?? 0).toISOString()).toBe(
-      "2031-06-01T21:00:00.000Z",
-    );
+    // KTD2: this literal is the raw SQLite epoch in seconds. A timestamp_ms
+    // codec mutation must fail here instead of round-tripping through itself.
+    expect(window?.startsAt.valueOf()).toBe(1_938_106_800);
+    expect(window?.endsAt.valueOf()).toBe(1_938_114_000);
   });
 
   it("keeps a UTC season's wall clock identical, so existing seasons do not move", async () => {
@@ -238,9 +236,7 @@ describe("availability is stored in the season's timezone", () => {
     await submit(runtime, "/signup/performer", performerBody(seasonId, token));
 
     const [window] = readAvailabilities(runtime, seasonId);
-    expect(new Date(window?.startsAt ?? 0).toISOString()).toBe(
-      "2031-06-01T14:00:00.000Z",
-    );
+    expect(window?.startsAt.valueOf()).toBe(1_938_088_800);
   });
 
   it("resolves both daylight-saving edges to the right offset", async () => {
@@ -261,13 +257,10 @@ describe("availability is stored in the season's timezone", () => {
       201,
     );
 
-    const stored = readAvailabilities(runtime, seasonId).map((row) =>
-      row.startsAt.toISOString(),
+    const stored = readAvailabilities(runtime, seasonId).map(
+      (row) => row.startsAt,
     );
-    expect(stored).toEqual([
-      "2031-01-15T15:00:00.000Z",
-      "2031-07-15T14:00:00.000Z",
-    ]);
+    expect(stored).toEqual([1_926_255_600, 1_941_890_400]);
   });
 
   it("refuses an impossible calendar date instead of normalizing it", async () => {

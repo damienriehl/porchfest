@@ -307,6 +307,7 @@ export function renderRecordPage(options: {
   readonly saved?: boolean;
   readonly statusCsrfToken?: string;
   readonly conflicts?: readonly ConflictDetail[];
+  readonly refusal?: { readonly title: string; readonly message: string };
   readonly changeRequestReview?: {
     readonly id: number;
     readonly presentation?: "proposal";
@@ -324,6 +325,9 @@ export function renderRecordPage(options: {
   const conflicts = options.conflicts ?? [];
   const proposalPresentation =
     options.changeRequestReview?.presentation === "proposal";
+  const refusalBlock = options.refusal
+    ? `<section class="error-summary" role="alert"><h2>${escapeHtml(options.refusal.title)}</h2><p>${escapeHtml(options.refusal.message)}</p></section>`
+    : "";
 
   const control = (spec: RecordFieldSpec) => {
     const value = options.values[spec.name] ?? "";
@@ -402,6 +406,7 @@ export function renderRecordPage(options: {
       <p class="lede"><a href="/admin?season=${options.seasonId}">Back to the queue</a></p>
     </header>
     ${options.saved ? `<section class="confirmation" role="status"><p class="eyebrow success-mark">Saved</p></section>` : ""}
+    ${refusalBlock}
     ${
       options.status
         ? `<form class="signup-form status-form" method="post" action="/admin/records/${escapeHtml(options.recordType)}/${options.recordId}/status">
