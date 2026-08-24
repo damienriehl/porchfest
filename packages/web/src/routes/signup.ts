@@ -34,6 +34,8 @@ import {
 } from "../views/signup-view.js";
 import { HOST_SIGNUP_PATH, PERFORMER_SIGNUP_PATH } from "./signup-paths.js";
 
+export const CONTACT_EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 const signupStyles = readFileSync(
   new URL("../../assets/signup.css", import.meta.url),
   "utf8",
@@ -664,7 +666,7 @@ function validateContact(values: SignupValues, errors: SignupError[]) {
     "Add an email address so the organizers can reach you.",
     errors,
   );
-  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+  if (email && !CONTACT_EMAIL_PATTERN.test(email)) {
     errors.push({
       field: "contact_email",
       label: "Email",

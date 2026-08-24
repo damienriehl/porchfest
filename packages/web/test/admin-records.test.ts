@@ -4,7 +4,11 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createRuntime, type PorchfestRuntime } from "../src/composition.js";
+import {
+  createTestingRuntime,
+  type PorchfestRuntime,
+  type PorchfestTestingRuntime,
+} from "../src/composition.js";
 
 const PUBLIC_BASE_URL = "https://porchfest.example";
 const temporaryRoots: string[] = [];
@@ -23,7 +27,7 @@ async function boot() {
   const dataDirectory = await mkdtemp(join(tmpdir(), "porchfest-admin-"));
   temporaryRoots.push(dataDirectory);
   const announced: string[] = [];
-  const runtime = await createRuntime({
+  const runtime = await createTestingRuntime({
     dataDirectory,
     env: {
       PUBLIC_BASE_URL,
@@ -119,6 +123,50 @@ async function post(
   });
 }
 
+function createPerformer(
+  runtime: PorchfestRuntime,
+  seasonId: number,
+  name: string,
+  email: string,
+) {
+  return runtime.core.seasons.createPerformerSignup({
+    seasonId,
+    contact: { name: `${name} contact`, email, phone: null },
+    act: {
+      name,
+      durationMinutes: 45,
+      requiresAmplification: false,
+      genre: "Test genre",
+      description: `${name} description`,
+      links: "",
+      housePreference: null,
+      canLendGear: false,
+      notes: null,
+    },
+    availabilities: [],
+  });
+}
+
+function assignAct(
+  runtime: PorchfestTestingRuntime,
+  seasonId: number,
+  venueId: number,
+  actId: number,
+  hour: number,
+): void {
+  const slot = runtime.coreTesting.createSlot({
+    seasonId,
+    venueId,
+    startsAt: new Date(
+      `2031-09-13T${String(hour).padStart(2, "0")}:00:00.000Z`,
+    ),
+    endsAt: new Date(
+      `2031-09-13T${String(hour + 1).padStart(2, "0")}:00:00.000Z`,
+    ),
+  });
+  runtime.core.seasons.assignSlot(slot.id, slot.version, actId);
+}
+
 /** A page can carry several forms, each with its own path-bound token, so pick
  *  the one belonging to the form under test rather than the first on the page. */
 async function csrfFrom(response: Response, action?: string) {
@@ -140,6 +188,8 @@ describe("the activity queue", () => {
     expect(page.status).toBe(200);
     expect(html).toContain("The Test Porch");
     expect(html).toContain("need your review");
+    expect(html).toContain("/admin/placeholders/act/new");
+    expect(html).toContain("/admin/placeholders/venue/new");
   });
 
   it("clears an item for one organizer without hiding it from another", async () => {
@@ -208,6 +258,683 @@ describe("the activity queue", () => {
     );
 
     expect(page.status).toBe(401);
+  });
+});
+
+describe("placeholder and supersession actions", () => {
+  it("creates a host-reached act and promotes its real submission", async () => {
+    const { runtime, season, alice, signup } = await boot();
+    const createPage = await get(
+      runtime,
+      `/admin/placeholders/act/new?season=${season.id}`,
+      alice,
+    );
+    const createHtml = await createPage.clone().text();
+
+    expect(createPage.status).toBe(200);
+    expect(createPage.headers.get("cache-control")).toBe("no-store, private");
+    expect(createHtml).toContain('action="/admin/placeholders/act"');
+    expect(createHtml).toContain('name="manual_email"');
+    expect(createHtml).toContain(`value="${signup.contact.id}"`);
+
+    const created = await post(
+      runtime,
+      "/admin/placeholders/act",
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(createPage, "/admin/placeholders/act"),
+        season: String(season.id),
+        name: "The Host's Favorite Band",
+        genre: "Folk",
+        notes: "Reach them through the host.",
+        reach_via_contact_id: String(signup.contact.id),
+      }),
+    );
+    expect(created.status).toBe(303);
+
+    const placeholder = runtime.core.queue
+      .listForOrganizer(season.id, 1)
+      .find(
+        (item) =>
+          item.recordType === "act" &&
+          item.record.name === "The Host's Favorite Band",
+      );
+    expect(placeholder?.recordType).toBe("act");
+    if (!placeholder || placeholder.recordType !== "act") {
+      throw new Error("placeholder act was not created");
+    }
+    expect(placeholder.record).toMatchObject({
+      placeholder: true,
+      reachViaContactId: signup.contact.id,
+    });
+
+    const submission = createPerformer(
+      runtime,
+      season.id,
+      "The Filed Band Name",
+      "band@example.invalid",
+    );
+    const recordPage = await get(
+      runtime,
+      `/admin/records/act/${placeholder.record.id}?season=${season.id}`,
+      alice,
+    );
+    const recordHtml = await recordPage.clone().text();
+    expect(recordHtml).toContain(
+      `action="/admin/records/act/${placeholder.record.id}/promote"`,
+    );
+    expect(recordHtml).toContain("The Filed Band Name");
+
+    const promoted = await post(
+      runtime,
+      `/admin/records/act/${placeholder.record.id}/promote`,
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(
+          recordPage,
+          `/admin/records/act/${placeholder.record.id}/promote`,
+        ),
+        season: String(season.id),
+        version: String(placeholder.record.version),
+        submission: `${submission.act.id}:${submission.act.version}`,
+      }),
+    );
+
+    expect(promoted.status).toBe(303);
+    const acts = runtime.core.queue
+      .listForOrganizer(season.id, 1)
+      .filter((item) => item.recordType === "act");
+    expect(acts).toContainEqual(
+      expect.objectContaining({
+        record: expect.objectContaining({
+          id: placeholder.record.id,
+          name: "The Filed Band Name",
+          placeholder: false,
+          reachViaContactId: submission.contact.id,
+        }),
+      }),
+    );
+    expect(acts.some((item) => item.record.id === submission.act.id)).toBe(
+      false,
+    );
+  });
+
+  it("creates a venue with a manually entered email address", async () => {
+    const { runtime, season, alice, signup } = await boot();
+    const page = await get(
+      runtime,
+      `/admin/placeholders/venue/new?season=${season.id}`,
+      alice,
+    );
+    const created = await post(
+      runtime,
+      "/admin/placeholders/venue",
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(page, "/admin/placeholders/venue"),
+        season: String(season.id),
+        title: "The Future Porch",
+        address: "22 Future St",
+        manual_name: "Future host",
+        manual_email: "future@example.invalid",
+      }),
+    );
+
+    expect(created.status).toBe(303);
+    const venue = runtime.core.queue
+      .listForOrganizer(season.id, 1)
+      .find(
+        (item) =>
+          item.recordType === "venue" &&
+          item.record.title === "The Future Porch",
+      );
+    expect(venue?.recordType === "venue" && venue.record.placeholder).toBe(
+      true,
+    );
+    const reachContact = runtime.core.queue
+      .listForOrganizer(season.id, 1)
+      .find(
+        (item) =>
+          item.recordType === "contact" &&
+          item.record.email === "future@example.invalid",
+      );
+    expect(
+      venue?.recordType === "venue" &&
+        reachContact?.recordType === "contact" &&
+        venue.record.reachViaContactId === reachContact.record.id,
+    ).toBe(true);
+    if (!venue || venue.recordType !== "venue") {
+      throw new Error("placeholder venue was not created");
+    }
+
+    const recordPage = await get(
+      runtime,
+      `/admin/records/venue/${venue.record.id}?season=${season.id}`,
+      alice,
+    );
+    expect(await recordPage.clone().text()).toContain("The Test Porch");
+    const promoted = await post(
+      runtime,
+      `/admin/records/venue/${venue.record.id}/promote`,
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(
+          recordPage,
+          `/admin/records/venue/${venue.record.id}/promote`,
+        ),
+        season: String(season.id),
+        version: String(venue.record.version),
+        submission: `${signup.venue.id}:${signup.venue.version}`,
+      }),
+    );
+    expect(promoted.status).toBe(303);
+    const venues = runtime.core.queue
+      .listForOrganizer(season.id, 1)
+      .filter((item) => item.recordType === "venue");
+    expect(venues).toContainEqual(
+      expect.objectContaining({
+        record: expect.objectContaining({
+          id: venue.record.id,
+          title: "The Test Porch",
+          placeholder: false,
+        }),
+      }),
+    );
+    expect(venues.some((item) => item.record.id === signup.venue.id)).toBe(
+      false,
+    );
+  });
+
+  it("refuses a selected contact that became stale instead of creating a duplicate", async () => {
+    const { runtime, season, alice, signup } = await boot();
+    const page = await get(
+      runtime,
+      `/admin/placeholders/act/new?season=${season.id}`,
+      alice,
+    );
+    const canonical = runtime.core.seasons.createHostSignup({
+      seasonId: season.id,
+      contact: { name: "Current contact", email: "current@example.invalid" },
+      venue: {
+        title: "Current Porch",
+        address: "3 Current St",
+        spaceDescription: "Porch",
+        hasPower: true,
+        rainBackup: false,
+        notes: null,
+      },
+      gear: [],
+      drinks: [],
+      amenities: [],
+    });
+    runtime.core.seasons.supersedeContact(
+      signup.contact.id,
+      signup.contact.version,
+      canonical.contact.id,
+    );
+
+    const refused = await post(
+      runtime,
+      "/admin/placeholders/act",
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(page, "/admin/placeholders/act"),
+        season: String(season.id),
+        name: "Should Not Exist",
+        reach_via_contact_id: String(signup.contact.id),
+        manual_name: "Accidental duplicate",
+        manual_email: "duplicate@example.invalid",
+      }),
+    );
+    const body = await refused.text();
+
+    expect(refused.status).toBe(400);
+    expect(body).toContain("selected contact is no longer available");
+    expect(body).toContain('value="Should Not Exist"');
+    expect(
+      runtime.core.queue
+        .listForOrganizer(season.id, 1)
+        .some(
+          (item) =>
+            item.recordType === "contact" &&
+            item.record.email === "duplicate@example.invalid",
+        ),
+    ).toBe(false);
+  });
+
+  it("uses the signup email rule for manually reached placeholders", async () => {
+    const { runtime, season, alice } = await boot();
+    const page = await get(
+      runtime,
+      `/admin/placeholders/venue/new?season=${season.id}`,
+      alice,
+    );
+
+    const refused = await post(
+      runtime,
+      "/admin/placeholders/venue",
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(page, "/admin/placeholders/venue"),
+        season: String(season.id),
+        title: "Bad Email Porch",
+        manual_name: "Host",
+        manual_email: "host@gmail",
+      }),
+    );
+
+    expect(refused.status).toBe(400);
+    expect(await refused.text()).toContain("valid email address");
+  });
+
+  it("re-renders an archived-season placeholder with the typed values", async () => {
+    const { runtime, season, alice, signup } = await boot();
+    runtime.core.seasons.transitionSeason(
+      season.id,
+      season.version,
+      "archived",
+    );
+    const page = await get(
+      runtime,
+      `/admin/placeholders/act/new?season=${season.id}`,
+      alice,
+    );
+
+    const refused = await post(
+      runtime,
+      "/admin/placeholders/act",
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(page, "/admin/placeholders/act"),
+        season: String(season.id),
+        name: "Preserved Archived Act",
+        reach_via_contact_id: String(signup.contact.id),
+      }),
+    );
+    const body = await refused.text();
+
+    expect(refused.status).toBe(409);
+    expect(body).toContain("This season is archived");
+    expect(body).toContain('value="Preserved Archived Act"');
+  });
+
+  it("renders an assigned-act promotion collision as an actionable refusal", async () => {
+    const { runtime, season, alice, signup } = await boot();
+    const placeholder = runtime.core.seasons.createPlaceholderAct({
+      seasonId: season.id,
+      reach: { reachViaContactId: signup.contact.id },
+      act: { name: "Assigned Placeholder" },
+    });
+    const submission = createPerformer(
+      runtime,
+      season.id,
+      "Assigned Submission",
+      "assigned-submission@example.invalid",
+    );
+    assignAct(runtime, season.id, signup.venue.id, placeholder.id, 14);
+    assignAct(runtime, season.id, signup.venue.id, submission.act.id, 16);
+    const page = await get(
+      runtime,
+      `/admin/records/act/${placeholder.id}?season=${season.id}`,
+      alice,
+    );
+
+    const refused = await post(
+      runtime,
+      `/admin/records/act/${placeholder.id}/promote`,
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(
+          page,
+          `/admin/records/act/${placeholder.id}/promote`,
+        ),
+        season: String(season.id),
+        version: String(placeholder.version),
+        submission: `${submission.act.id}:${submission.act.version}`,
+      }),
+    );
+    const body = await refused.text();
+
+    expect(refused.status).toBe(409);
+    expect(body).toContain("promotion could not be completed");
+    expect(body).toContain("act promotion would merge assignments");
+    expect(body).toContain("Review the records&#39; schedule assignments");
+  });
+
+  it("renders an archived-season promotion as an actionable refusal", async () => {
+    const { runtime, season, alice, signup } = await boot();
+    const placeholder = runtime.core.seasons.createPlaceholderAct({
+      seasonId: season.id,
+      reach: { reachViaContactId: signup.contact.id },
+      act: { name: "Archived Placeholder" },
+    });
+    const submission = createPerformer(
+      runtime,
+      season.id,
+      "Archived Submission",
+      "archived-submission@example.invalid",
+    );
+    const page = await get(
+      runtime,
+      `/admin/records/act/${placeholder.id}?season=${season.id}`,
+      alice,
+    );
+    runtime.core.seasons.transitionSeason(
+      season.id,
+      season.version,
+      "archived",
+    );
+
+    const refused = await post(
+      runtime,
+      `/admin/records/act/${placeholder.id}/promote`,
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(
+          page,
+          `/admin/records/act/${placeholder.id}/promote`,
+        ),
+        season: String(season.id),
+        version: String(placeholder.version),
+        submission: `${submission.act.id}:${submission.act.version}`,
+      }),
+    );
+    const body = await refused.text();
+
+    expect(refused.status).toBe(409);
+    expect(body).toContain("promotion could not be completed");
+    expect(body).toContain("season is archived");
+    expect(body).toContain("records were left unchanged");
+  });
+
+  it("renders assigned canonical supersession as an actionable refusal", async () => {
+    const { runtime, season, alice, signup } = await boot();
+    const source = createPerformer(
+      runtime,
+      season.id,
+      "Assigned Source",
+      "assigned-source@example.invalid",
+    );
+    const canonical = createPerformer(
+      runtime,
+      season.id,
+      "Assigned Canonical",
+      "assigned-canonical@example.invalid",
+    );
+    assignAct(runtime, season.id, signup.venue.id, source.act.id, 14);
+    assignAct(runtime, season.id, signup.venue.id, canonical.act.id, 16);
+    const page = await get(
+      runtime,
+      `/admin/records/act/${source.act.id}?season=${season.id}`,
+      alice,
+    );
+
+    const refused = await post(
+      runtime,
+      `/admin/records/act/${source.act.id}/supersede`,
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(
+          page,
+          `/admin/records/act/${source.act.id}/supersede`,
+        ),
+        season: String(season.id),
+        version: String(source.act.version),
+        canonical_id: String(canonical.act.id),
+      }),
+    );
+    const body = await refused.text();
+
+    expect(refused.status).toBe(409);
+    expect(body).toContain("supersession could not be completed");
+    expect(body).toContain(
+      `canonical act ${canonical.act.id} is already assigned in season ${season.id}`,
+    );
+  });
+
+  it("renders archived-season supersession as an actionable refusal", async () => {
+    const { runtime, season, alice } = await boot();
+    const source = createPerformer(
+      runtime,
+      season.id,
+      "Archived Source",
+      "archived-source@example.invalid",
+    );
+    const canonical = createPerformer(
+      runtime,
+      season.id,
+      "Archived Canonical",
+      "archived-canonical@example.invalid",
+    );
+    const page = await get(
+      runtime,
+      `/admin/records/act/${source.act.id}?season=${season.id}`,
+      alice,
+    );
+    runtime.core.seasons.transitionSeason(
+      season.id,
+      season.version,
+      "archived",
+    );
+
+    const refused = await post(
+      runtime,
+      `/admin/records/act/${source.act.id}/supersede`,
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(
+          page,
+          `/admin/records/act/${source.act.id}/supersede`,
+        ),
+        season: String(season.id),
+        version: String(source.act.version),
+        canonical_id: String(canonical.act.id),
+      }),
+    );
+    const body = await refused.text();
+
+    expect(refused.status).toBe(409);
+    expect(body).toContain("supersession could not be completed");
+    expect(body).toContain("season is archived");
+  });
+
+  it.each([
+    ["older into newer", 0, 1],
+    ["newer into older", 1, 0],
+  ])(
+    "reconciles a resubmission %s",
+    async (_label, sourceIndex, targetIndex) => {
+      const { runtime, season, alice } = await boot();
+      const submissions = [
+        createPerformer(
+          runtime,
+          season.id,
+          "First Filing",
+          "first@example.invalid",
+        ),
+        createPerformer(
+          runtime,
+          season.id,
+          "Second Filing",
+          "second@example.invalid",
+        ),
+      ];
+      const source = submissions[sourceIndex]?.act;
+      const target = submissions[targetIndex]?.act;
+      if (!source || !target) throw new Error("missing resubmission fixture");
+      const page = await get(
+        runtime,
+        `/admin/records/act/${source.id}?season=${season.id}`,
+        alice,
+      );
+      const html = await page.clone().text();
+      expect(html).toContain(
+        `action="/admin/records/act/${source.id}/supersede"`,
+      );
+      expect(html).toContain(target.name);
+
+      const reconciled = await post(
+        runtime,
+        `/admin/records/act/${source.id}/supersede`,
+        alice,
+        new URLSearchParams({
+          _csrf: await csrfFrom(
+            page,
+            `/admin/records/act/${source.id}/supersede`,
+          ),
+          season: String(season.id),
+          version: String(source.version),
+          canonical_id: String(target.id),
+        }),
+      );
+
+      expect(reconciled.status).toBe(303);
+      const actIds = runtime.core.queue
+        .listForOrganizer(season.id, 1)
+        .filter((item) => item.recordType === "act")
+        .map((item) => item.record.id);
+      expect(actIds).toContain(target.id);
+      expect(actIds).not.toContain(source.id);
+    },
+  );
+
+  it("refuses stale promotion and supersession versions against SQLite", async () => {
+    const { runtime, season, alice, signup } = await boot();
+    const placeholder = runtime.core.seasons.createPlaceholderAct({
+      seasonId: season.id,
+      reach: { reachViaContactId: signup.contact.id },
+      act: { name: "Stale Placeholder" },
+    });
+    const promotionTarget = createPerformer(
+      runtime,
+      season.id,
+      "Promotion Target",
+      "promotion@example.invalid",
+    );
+    const promotionPage = await get(
+      runtime,
+      `/admin/records/act/${placeholder.id}?season=${season.id}`,
+      alice,
+    );
+    runtime.core.seasons.updateAct(placeholder.id, placeholder.version, {
+      genre: "Someone else's placeholder genre",
+    });
+    const refusedPromotion = await post(
+      runtime,
+      `/admin/records/act/${placeholder.id}/promote`,
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(
+          promotionPage,
+          `/admin/records/act/${placeholder.id}/promote`,
+        ),
+        season: String(season.id),
+        version: String(placeholder.version),
+        submission: `${promotionTarget.act.id}:${promotionTarget.act.version}`,
+      }),
+    );
+    expect(refusedPromotion.status).toBe(409);
+    expect(await refusedPromotion.text()).toContain(
+      "Someone else saved this first",
+    );
+
+    const supersedeSource = createPerformer(
+      runtime,
+      season.id,
+      "Stale Source",
+      "source@example.invalid",
+    );
+    const supersedeTarget = createPerformer(
+      runtime,
+      season.id,
+      "Canonical Target",
+      "target@example.invalid",
+    );
+    const supersedePage = await get(
+      runtime,
+      `/admin/records/act/${supersedeSource.act.id}?season=${season.id}`,
+      alice,
+    );
+    runtime.core.seasons.updateAct(
+      supersedeSource.act.id,
+      supersedeSource.act.version,
+      { genre: "Someone else's genre" },
+    );
+    const refusedSupersession = await post(
+      runtime,
+      `/admin/records/act/${supersedeSource.act.id}/supersede`,
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(
+          supersedePage,
+          `/admin/records/act/${supersedeSource.act.id}/supersede`,
+        ),
+        season: String(season.id),
+        version: String(supersedeSource.act.version),
+        canonical_id: String(supersedeTarget.act.id),
+      }),
+    );
+    expect(refusedSupersession.status).toBe(409);
+    expect(await refusedSupersession.text()).toContain(
+      "Someone else saved this first",
+    );
+    const acts = runtime.core.queue
+      .listForOrganizer(season.id, 1)
+      .filter((item) => item.recordType === "act");
+    expect(acts.some((item) => item.record.id === supersedeSource.act.id)).toBe(
+      true,
+    );
+  });
+
+  it("refuses every lifecycle route without organizer authentication", async () => {
+    const { runtime, season } = await boot();
+    const paths = [
+      `/admin/placeholders/act/new?season=${season.id}`,
+      `/admin/placeholders/venue/new?season=${season.id}`,
+    ];
+    for (const path of paths) {
+      expect((await runtime.request(`${PUBLIC_BASE_URL}${path}`)).status).toBe(
+        401,
+      );
+    }
+    for (const path of [
+      "/admin/placeholders/act",
+      "/admin/placeholders/venue",
+      "/admin/records/act/1/promote",
+      "/admin/records/venue/1/promote",
+      "/admin/records/act/1/supersede",
+      "/admin/records/venue/1/supersede",
+      "/admin/records/contact/1/supersede",
+    ]) {
+      const response = await runtime.request(`${PUBLIC_BASE_URL}${path}`, {
+        method: "POST",
+      });
+      expect(response.status).toBe(401);
+    }
+  });
+
+  it("refuses every lifecycle write from an unrelated origin", async () => {
+    const { runtime, alice } = await boot();
+    for (const path of [
+      "/admin/placeholders/act",
+      "/admin/placeholders/venue",
+      "/admin/records/act/1/promote",
+      "/admin/records/venue/1/promote",
+      "/admin/records/act/1/supersede",
+      "/admin/records/venue/1/supersede",
+      "/admin/records/contact/1/supersede",
+    ]) {
+      const response = await runtime.request(`${PUBLIC_BASE_URL}${path}`, {
+        method: "POST",
+        headers: {
+          origin: "https://unrelated.example",
+          cookie: alice,
+          "content-type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams(),
+      });
+      expect(response.status).toBe(403);
+    }
   });
 });
 
@@ -498,5 +1225,423 @@ describe("record status", () => {
     );
 
     expect(await page.text()).not.toContain("/status");
+  });
+});
+
+describe("participant change requests", () => {
+  it("shows an approve-or-reject queue item without changing the confirmed record", async () => {
+    const { runtime, season, alice, signup } = await boot();
+    runtime.core.seasons.setRecordStatus(
+      "venue",
+      signup.venue.id,
+      signup.venue.version,
+      "confirmed",
+    );
+    const request = runtime.core.changeRequests.record({
+      seasonId: season.id,
+      recordType: "venue",
+      recordId: signup.venue.id,
+      recordVersion: signup.venue.version + 1,
+      kind: "address",
+      proposedAddress: "22 Proposed Avenue",
+    });
+
+    const page = await get(runtime, `/admin?season=${season.id}`, alice);
+    const body = await page.text();
+
+    expect(page.status).toBe(200);
+    expect(body).toContain("Address correction");
+    expect(body).toContain("22 Proposed Avenue");
+    expect(body).toContain(`/admin/change-requests/${request.id}/apply`);
+    expect(body).toContain(`/admin/change-requests/${request.id}/reject`);
+    const stored = runtime.core.queue
+      .listForOrganizer(season.id, 1)
+      .find((item) => item.recordType === "venue");
+    expect(stored?.recordType === "venue" && stored.record.address).toBe(
+      "1 Test St",
+    );
+    expect(stored?.recordType === "venue" && stored.record.status).toBe(
+      "confirmed",
+    );
+  });
+
+  it("routes an accepted address correction into the editor with proposed and stored values", async () => {
+    const { runtime, season, alice, signup } = await boot();
+    const request = runtime.core.changeRequests.record({
+      seasonId: season.id,
+      recordType: "venue",
+      recordId: signup.venue.id,
+      recordVersion: signup.venue.version,
+      kind: "address",
+      proposedAddress: "22 Proposed Avenue",
+    });
+    const queue = await get(runtime, `/admin?season=${season.id}`, alice);
+    const accepted = await post(
+      runtime,
+      `/admin/change-requests/${request.id}/apply`,
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(
+          queue,
+          `/admin/change-requests/${request.id}/apply`,
+        ),
+        season: String(season.id),
+        version: String(request.version),
+      }),
+    );
+
+    expect(accepted.status).toBe(303);
+    expect(accepted.headers.get("location")).toBe(
+      `/admin/records/venue/${signup.venue.id}?season=${season.id}&change_request=${request.id}`,
+    );
+    expect(runtime.core.changeRequests.find(request.id)?.status).toBe(
+      "pending",
+    );
+    const editor = await get(
+      runtime,
+      accepted.headers.get("location") ?? "",
+      alice,
+    );
+    const body = await editor.clone().text();
+    expect(editor.status).toBe(200);
+    // Assert the view edit landed: the proposal is editable and is honestly
+    // distinguished from the still-stored value.
+    expect(body).toContain(
+      'name="address" type="text" value="22 Proposed Avenue"',
+    );
+    expect(body).toContain("Review the participant's proposed correction");
+    expect(body).toContain("saving this form accepts the proposal");
+    expect(body).toContain(
+      "<strong>Participant proposed:</strong> 22 Proposed Avenue",
+    );
+    expect(body).toContain("<strong>Stored:</strong> 1 Test St");
+    expect(body).toContain(`name="change_request" value="${request.id}"`);
+    const stored = runtime.core.queue
+      .listForOrganizer(season.id, 1)
+      .find((item) => item.recordType === "venue");
+    expect(stored?.recordType === "venue" && stored.record.address).toBe(
+      "1 Test St",
+    );
+
+    const saved = await post(
+      runtime,
+      `/admin/records/venue/${signup.venue.id}`,
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(
+          editor,
+          `/admin/records/venue/${signup.venue.id}`,
+        ),
+        season: String(season.id),
+        version: String(signup.venue.version),
+        change_request: String(request.id),
+        title: signup.venue.title,
+        address: "22 Proposed Avenue",
+        spaceDescription: signup.venue.spaceDescription ?? "",
+        hasPower: "yes",
+        rainBackup: "no",
+        notes: "",
+      }),
+    );
+
+    expect(saved.status).toBe(303);
+    const afterSave = runtime.core.queue
+      .listForOrganizer(season.id, 1)
+      .find((item) => item.recordType === "venue");
+    expect(afterSave?.recordType === "venue" && afterSave.record.address).toBe(
+      "22 Proposed Avenue",
+    );
+    expect(runtime.core.changeRequests.find(request.id)?.status).toBe(
+      "applied",
+    );
+  });
+
+  it("leaves an address correction pending when the saved address differs", async () => {
+    const { runtime, season, alice, signup } = await boot();
+    const request = runtime.core.changeRequests.record({
+      seasonId: season.id,
+      recordType: "venue",
+      recordId: signup.venue.id,
+      recordVersion: signup.venue.version,
+      kind: "address",
+      proposedAddress: "synthetic-proposed-address",
+    });
+    const queue = await get(runtime, `/admin?season=${season.id}`, alice);
+    const review = await post(
+      runtime,
+      `/admin/change-requests/${request.id}/apply`,
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(
+          queue,
+          `/admin/change-requests/${request.id}/apply`,
+        ),
+        season: String(season.id),
+        version: String(request.version),
+      }),
+    );
+    const editor = await get(
+      runtime,
+      review.headers.get("location") ?? "",
+      alice,
+    );
+
+    const saved = await post(
+      runtime,
+      `/admin/records/venue/${signup.venue.id}`,
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(
+          editor,
+          `/admin/records/venue/${signup.venue.id}`,
+        ),
+        season: String(season.id),
+        version: String(signup.venue.version),
+        change_request: String(request.id),
+        title: signup.venue.title,
+        address: "synthetic-organizer-address",
+        spaceDescription: signup.venue.spaceDescription ?? "",
+        hasPower: "yes",
+        rainBackup: "no",
+        notes: "Reviewed without accepting the address proposal",
+      }),
+    );
+
+    expect(saved.status).toBe(303);
+    expect(runtime.core.changeRequests.find(request.id)?.status).toBe(
+      "pending",
+    );
+    const afterSave = await (
+      await get(runtime, `/admin?season=${season.id}`, alice)
+    ).text();
+    expect(afterSave).toContain("synthetic-proposed-address");
+    expect(afterSave).toContain(`/admin/change-requests/${request.id}/reject`);
+  });
+
+  it("keeps an abandoned address review pending and listed", async () => {
+    const { runtime, season, alice, signup } = await boot();
+    const request = runtime.core.changeRequests.record({
+      seasonId: season.id,
+      recordType: "venue",
+      recordId: signup.venue.id,
+      recordVersion: signup.venue.version,
+      kind: "address",
+      proposedAddress: "44 Still Pending St",
+    });
+    const queue = await get(runtime, `/admin?season=${season.id}`, alice);
+    const review = await post(
+      runtime,
+      `/admin/change-requests/${request.id}/apply`,
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(
+          queue,
+          `/admin/change-requests/${request.id}/apply`,
+        ),
+        season: String(season.id),
+        version: String(request.version),
+      }),
+    );
+
+    expect(review.status).toBe(303);
+    expect(runtime.core.changeRequests.find(request.id)?.status).toBe(
+      "pending",
+    );
+    const reloaded = await (
+      await get(runtime, `/admin?season=${season.id}`, alice)
+    ).text();
+    expect(reloaded).toContain("44 Still Pending St");
+    expect(reloaded).toContain(`/admin/change-requests/${request.id}/apply`);
+  });
+
+  it("shows stale requests with only a reject action", async () => {
+    const { runtime, season, alice, signup } = await boot();
+    const request = runtime.core.changeRequests.record({
+      seasonId: season.id,
+      recordType: "venue",
+      recordId: signup.venue.id,
+      recordVersion: signup.venue.version,
+      kind: "withdrawal",
+    });
+    runtime.core.seasons.updateVenue(signup.venue.id, signup.venue.version, {
+      notes: "Changed after filing",
+    });
+
+    const body = await (
+      await get(runtime, `/admin?season=${season.id}`, alice)
+    ).text();
+
+    expect(body).toContain("This record changed after the request was filed");
+    expect(body).not.toContain(`/admin/change-requests/${request.id}/apply`);
+    expect(body).toContain(`/admin/change-requests/${request.id}/reject`);
+  });
+
+  it("renders the ending date for availability that crosses UTC midnight", async () => {
+    const { runtime, season, alice } = await boot();
+    const performer = createPerformer(
+      runtime,
+      season.id,
+      "Midnight Act",
+      "midnight@example.invalid",
+    );
+    runtime.core.changeRequests.record({
+      seasonId: season.id,
+      recordType: "act",
+      recordId: performer.act.id,
+      recordVersion: performer.act.version,
+      kind: "availability",
+      proposedAvailability: [
+        {
+          startsAt: new Date("2031-09-13T23:00:00.000Z"),
+          endsAt: new Date("2031-09-14T01:00:00.000Z"),
+        },
+      ],
+    });
+
+    const body = await (
+      await get(runtime, `/admin?season=${season.id}`, alice)
+    ).text();
+    expect(body).toContain("2031-09-13 23:00–2031-09-14 01:00 UTC");
+  });
+
+  it("rejects a request without touching its target", async () => {
+    const { runtime, season, alice, signup } = await boot();
+    const request = runtime.core.changeRequests.record({
+      seasonId: season.id,
+      recordType: "venue",
+      recordId: signup.venue.id,
+      recordVersion: signup.venue.version,
+      kind: "withdrawal",
+    });
+    const queue = await get(runtime, `/admin?season=${season.id}`, alice);
+
+    const rejected = await post(
+      runtime,
+      `/admin/change-requests/${request.id}/reject`,
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(
+          queue,
+          `/admin/change-requests/${request.id}/reject`,
+        ),
+        season: String(season.id),
+        version: String(request.version),
+      }),
+    );
+
+    expect(rejected.status).toBe(303);
+    expect(runtime.core.changeRequests.find(request.id)?.status).toBe(
+      "rejected",
+    );
+    const stored = runtime.core.queue
+      .listForOrganizer(season.id, 1)
+      .find((item) => item.recordType === "venue");
+    expect(stored?.recordType === "venue" && stored.record.status).toBe(
+      "tentative",
+    );
+  });
+
+  it("rejects a malformed request that the queue cannot render", async () => {
+    const { runtime, season, alice } = await boot();
+    const performer = createPerformer(
+      runtime,
+      season.id,
+      "Malformed Proposal Act",
+      "malformed-proposal@example.invalid",
+    );
+    const request = runtime.core.changeRequests.record({
+      seasonId: season.id,
+      recordType: "act",
+      recordId: performer.act.id,
+      recordVersion: performer.act.version,
+      kind: "availability",
+      proposedAvailability: [],
+    });
+    const queue = await get(runtime, `/admin?season=${season.id}`, alice);
+    const csrf = await csrfFrom(
+      queue,
+      `/admin/change-requests/${request.id}/reject`,
+    );
+    runtime.coreTesting.corruptChangeRequestProposal(
+      request.id,
+      "malformed-proposal",
+    );
+
+    const rejected = await post(
+      runtime,
+      `/admin/change-requests/${request.id}/reject`,
+      alice,
+      new URLSearchParams({
+        _csrf: csrf,
+        season: String(season.id),
+        version: String(request.version),
+      }),
+    );
+
+    expect(rejected.status).toBe(303);
+    expect(runtime.coreTesting.readChangeRequestStatus(request.id)).toEqual({
+      status: "rejected",
+    });
+  });
+
+  it("renders a stale apply as a conflict and leaves the request pending", async () => {
+    const { runtime, season, alice, signup } = await boot();
+    const request = runtime.core.changeRequests.record({
+      seasonId: season.id,
+      recordType: "venue",
+      recordId: signup.venue.id,
+      recordVersion: signup.venue.version,
+      kind: "withdrawal",
+    });
+    const queue = await get(runtime, `/admin?season=${season.id}`, alice);
+    runtime.core.seasons.updateVenue(signup.venue.id, signup.venue.version, {
+      notes: "Concurrent correction",
+    });
+
+    const refused = await post(
+      runtime,
+      `/admin/change-requests/${request.id}/apply`,
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(
+          queue,
+          `/admin/change-requests/${request.id}/apply`,
+        ),
+        season: String(season.id),
+        version: String(request.version),
+      }),
+    );
+
+    expect(refused.status).toBe(409);
+    expect(await refused.text()).toContain("could not be applied");
+    expect(runtime.core.changeRequests.find(request.id)?.status).toBe(
+      "pending",
+    );
+  });
+
+  it("refuses unauthenticated and unrelated-origin writes to both routes", async () => {
+    const { runtime, alice } = await boot();
+    for (const path of [
+      "/admin/change-requests/1/apply",
+      "/admin/change-requests/1/reject",
+    ]) {
+      expect(
+        (await runtime.request(`${PUBLIC_BASE_URL}${path}`, { method: "POST" }))
+          .status,
+      ).toBe(401);
+      expect(
+        (
+          await runtime.request(`${PUBLIC_BASE_URL}${path}`, {
+            method: "POST",
+            headers: {
+              origin: "https://unrelated.example",
+              cookie: alice,
+              "content-type": "application/x-www-form-urlencoded",
+            },
+            body: new URLSearchParams(),
+          })
+        ).status,
+      ).toBe(403);
+    }
   });
 });

@@ -27,6 +27,18 @@ export const slotStates = ["open", "held", "assigned"] as const;
  */
 export const recordStatuses = ["tentative", "confirmed", "withdrawn"] as const;
 
+export const changeRequestRecordTypes = ["act", "venue"] as const;
+export const changeRequestKinds = [
+  "withdrawal",
+  "availability",
+  "address",
+] as const;
+export const changeRequestStatuses = [
+  "pending",
+  "applied",
+  "rejected",
+] as const;
+
 export const venueGearValues = [
   "pa",
   "microphone",
@@ -349,6 +361,38 @@ export const acts = sqliteTable(
   (table) => [index("acts_season_id_idx").on(table.seasonId)],
 );
 
+/**
+ * R33 keeps schedule-breaking participant edits as proposals. The captured
+ * record version is the KTD7 token apply must consume; proposed_value is null
+ * for withdrawal, an ISO-window JSON array for availability, and text for an
+ * address. Kind/target/value compatibility is enforced by the core API so this
+ * additive table does not trigger SQLite's migration-rebuild trap.
+ */
+export const changeRequests = sqliteTable(
+  "change_requests",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    seasonId: integer("season_id")
+      .notNull()
+      .references(() => seasons.id),
+    recordType: text("record_type", {
+      enum: changeRequestRecordTypes,
+    }).notNull(),
+    recordId: integer("record_id").notNull(),
+    recordVersion: integer("record_version").notNull(),
+    kind: text("kind", { enum: changeRequestKinds }).notNull(),
+    proposedValue: text("proposed_value"),
+    status: text("status", { enum: changeRequestStatuses })
+      .notNull()
+      .default("pending"),
+    ...mutableColumns(),
+  },
+  (table) => [
+    index("change_requests_season_status_idx").on(table.seasonId, table.status),
+    index("change_requests_target_idx").on(table.recordType, table.recordId),
+  ],
+);
+
 export const venueGear = sqliteTable(
   "venue_gear",
   {
@@ -555,6 +599,7 @@ const schemaTables = [
   contacts,
   venues,
   acts,
+  changeRequests,
   venueGear,
   venueDrinks,
   venueAmenities,
@@ -593,6 +638,10 @@ export type SeasonTimeSlot = typeof seasonTimeSlots.$inferSelect;
 export type QueueDismissal = typeof queueDismissals.$inferSelect;
 export type QueueRecordType = (typeof queueRecordTypes)[number];
 export type RecordStatus = (typeof recordStatuses)[number];
+export type ChangeRequest = typeof changeRequests.$inferSelect;
+export type ChangeRequestKind = (typeof changeRequestKinds)[number];
+export type ChangeRequestRecordType = (typeof changeRequestRecordTypes)[number];
+export type ChangeRequestStatus = (typeof changeRequestStatuses)[number];
 
 export type Organizer = typeof organizers.$inferSelect;
 export type NewOrganizer = typeof organizers.$inferInsert;

@@ -10,6 +10,10 @@ import {
   type AdapterPorts,
   type CoreRuntime,
 } from "@porchfest/core";
+import {
+  createCoreTestingRepository,
+  type CoreTestingRepository,
+} from "@porchfest/core/testing";
 import { NullEmailAdapter } from "@porchfest/email";
 import { NullGeoAdapter } from "@porchfest/geo";
 import type { Hono } from "hono";
@@ -42,6 +46,10 @@ export interface PorchfestRuntime {
   readonly request: Hono["request"];
   readonly routes: RouteRegistry;
   readonly sessionSecret: string;
+}
+
+export interface PorchfestTestingRuntime extends PorchfestRuntime {
+  readonly coreTesting: CoreTestingRepository;
 }
 
 export function createAdapterSet(
@@ -84,6 +92,31 @@ function createAntibotAdapter(
 export async function createRuntime(
   options: RuntimeOptions = {},
 ): Promise<PorchfestRuntime> {
+  return createRuntimeWithTesting(options, false);
+}
+
+/**
+ * Boots the normal application plus KTD2's narrow, read-only core test seam.
+ * Production callers use createRuntime and cannot reach these storage readers.
+ */
+export async function createTestingRuntime(
+  options: RuntimeOptions = {},
+): Promise<PorchfestTestingRuntime> {
+  return createRuntimeWithTesting(options, true);
+}
+
+async function createRuntimeWithTesting(
+  options: RuntimeOptions,
+  includeTesting: false,
+): Promise<PorchfestRuntime>;
+async function createRuntimeWithTesting(
+  options: RuntimeOptions,
+  includeTesting: true,
+): Promise<PorchfestTestingRuntime>;
+async function createRuntimeWithTesting(
+  options: RuntimeOptions,
+  includeTesting: boolean,
+): Promise<PorchfestRuntime | PorchfestTestingRuntime> {
   const env = options.env ?? process.env;
   const dataDirectory =
     options.dataDirectory ?? env.PORCHFEST_DATA_DIR ?? "./data";
@@ -119,7 +152,7 @@ export async function createRuntime(
     // the first login. It must not depend on the email adapter being configured.
     announceBootstrapLink(core, publicBaseUrl, options.announce);
 
-    return {
+    const runtime = {
       adapters,
       close: databaseConnection.close,
       core,
@@ -128,6 +161,12 @@ export async function createRuntime(
       routes,
       sessionSecret,
     };
+    return includeTesting
+      ? {
+          ...runtime,
+          coreTesting: createCoreTestingRepository(databaseConnection.database),
+        }
+      : runtime;
   } catch (error) {
     try {
       databaseConnection.close();

@@ -4,18 +4,21 @@
 // is the whole reason docs/solutions/conventions/mutation-testing-for-silent-
 // guard-failures.md exists.
 import {
-  CORE_DATABASE_FILENAME,
   type AntibotPort,
   type AntibotRequest,
   type AntibotResult,
+  type SeasonState,
 } from "@porchfest/core";
 import { PerIpRateLimiter } from "@porchfest/antibot";
-import Database from "better-sqlite3";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createRuntime, type PorchfestRuntime } from "../src/composition.js";
+import {
+  createTestingRuntime,
+  type PorchfestRuntime,
+  type PorchfestTestingRuntime,
+} from "../src/composition.js";
 
 const PUBLIC_BASE_URL = "https://porchfest.example";
 const CHICAGO = "America/Chicago";
@@ -71,7 +74,7 @@ async function makeRuntime(
     antibot?: AntibotPort;
     rateLimit?: number;
     timezone?: string;
-    state?: string;
+    state?: SeasonState;
     socketPeer?: string | ((count: number) => string);
     trustedProxyHops?: string;
   } = {},
@@ -79,7 +82,7 @@ async function makeRuntime(
   const dataDirectory = await mkdtemp(join(tmpdir(), "porchfest-harden-"));
   temporaryRoots.push(dataDirectory);
   let calls = 0;
-  const runtime = await createRuntime({
+  const runtime = await createTestingRuntime({
     dataDirectory,
     env: {
       PUBLIC_BASE_URL,
@@ -103,22 +106,25 @@ async function makeRuntime(
   });
   runtimes.push(runtime);
 
-  // Core owns storage; this raw fixture is the season a first-run admin (U5)
-  // will later create through the domain, and is confined to test setup.
-  const sqlite = new Database(join(dataDirectory, CORE_DATABASE_FILENAME));
-  const season = sqlite
-    .prepare(
-      "insert into seasons (year, display_name, state, timezone) values (?, ?, ?, ?) returning id",
-    )
-    .get(
-      2031,
-      "Synthetic 2031 Porchfest",
-      options.state ?? "signups_open",
-      options.timezone ?? "UTC",
-    ) as { id: number };
-  sqlite.close();
+  const requestedState = options.state ?? "signups_open";
+  const { season: createdSeason } = runtime.core.setup.createSeason({
+    year: 2031,
+    displayName: "Synthetic 2031 Porchfest",
+    timezone: options.timezone ?? "UTC",
+    eventDate: "2031-06-01",
+    timeSlots: [],
+    openSignups: requestedState === "signups_open",
+  });
+  const season =
+    requestedState === createdSeason.state
+      ? createdSeason
+      : runtime.core.seasons.transitionSeason(
+          createdSeason.id,
+          createdSeason.version,
+          requestedState,
+        );
 
-  return { dataDirectory, runtime, seasonId: season.id };
+  return { runtime, seasonId: season.id };
 }
 
 async function csrfToken(
@@ -190,22 +196,19 @@ function performerBody(seasonId: number, csrf: string) {
   return values;
 }
 
-function readAvailabilities(dataDirectory: string) {
-  const sqlite = new Database(join(dataDirectory, CORE_DATABASE_FILENAME), {
-    readonly: true,
-  });
-  const rows = sqlite
-    .prepare(
-      "select starts_at as startsAt, ends_at as endsAt from act_availabilities order by id",
-    )
-    .all() as { startsAt: number; endsAt: number }[];
-  sqlite.close();
-  return rows;
+function readAvailabilities(
+  runtime: PorchfestTestingRuntime,
+  seasonId: number,
+) {
+  const act = runtime.core.seasons
+    .listActivityQueue(seasonId)
+    .find(({ recordType }) => recordType === "act");
+  return act ? runtime.coreTesting.listRawActAvailabilities(act.record.id) : [];
 }
 
 describe("availability is stored in the season's timezone", () => {
   it("stores the instant a Chicago performer meant, not the same clock read as UTC", async () => {
-    const { dataDirectory, runtime, seasonId } = await makeRuntime({
+    const { runtime, seasonId } = await makeRuntime({
       timezone: CHICAGO,
     });
     const { token } = await csrfToken(runtime, "/signup/performer", seasonId);
@@ -217,31 +220,27 @@ describe("availability is stored in the season's timezone", () => {
     );
 
     expect(response.status).toBe(201);
-    const [window] = readAvailabilities(dataDirectory);
+    const [window] = readAvailabilities(runtime, seasonId);
     // 14:00 in Chicago on 2031-06-01 is 19:00Z. Reading the wall clock as UTC
     // would store 14:00Z, which is 09:00 Chicago — five hours early.
-    expect(new Date((window?.startsAt ?? 0) * 1000).toISOString()).toBe(
-      "2031-06-01T19:00:00.000Z",
-    );
-    expect(new Date((window?.endsAt ?? 0) * 1000).toISOString()).toBe(
-      "2031-06-01T21:00:00.000Z",
-    );
+    // KTD2: this literal is the raw SQLite epoch in seconds. A timestamp_ms
+    // codec mutation must fail here instead of round-tripping through itself.
+    expect(window?.startsAt.valueOf()).toBe(1_938_106_800);
+    expect(window?.endsAt.valueOf()).toBe(1_938_114_000);
   });
 
   it("keeps a UTC season's wall clock identical, so existing seasons do not move", async () => {
-    const { dataDirectory, runtime, seasonId } = await makeRuntime();
+    const { runtime, seasonId } = await makeRuntime();
     const { token } = await csrfToken(runtime, "/signup/performer", seasonId);
 
     await submit(runtime, "/signup/performer", performerBody(seasonId, token));
 
-    const [window] = readAvailabilities(dataDirectory);
-    expect(new Date((window?.startsAt ?? 0) * 1000).toISOString()).toBe(
-      "2031-06-01T14:00:00.000Z",
-    );
+    const [window] = readAvailabilities(runtime, seasonId);
+    expect(window?.startsAt.valueOf()).toBe(1_938_088_800);
   });
 
   it("resolves both daylight-saving edges to the right offset", async () => {
-    const { dataDirectory, runtime, seasonId } = await makeRuntime({
+    const { runtime, seasonId } = await makeRuntime({
       timezone: CHICAGO,
     });
     const { token } = await csrfToken(runtime, "/signup/performer", seasonId);
@@ -258,17 +257,14 @@ describe("availability is stored in the season's timezone", () => {
       201,
     );
 
-    const stored = readAvailabilities(dataDirectory).map((row) =>
-      new Date(row.startsAt * 1000).toISOString(),
+    const stored = readAvailabilities(runtime, seasonId).map(
+      (row) => row.startsAt,
     );
-    expect(stored).toEqual([
-      "2031-01-15T15:00:00.000Z",
-      "2031-07-15T14:00:00.000Z",
-    ]);
+    expect(stored).toEqual([1_926_255_600, 1_941_890_400]);
   });
 
   it("refuses an impossible calendar date instead of normalizing it", async () => {
-    const { dataDirectory, runtime, seasonId } = await makeRuntime();
+    const { runtime, seasonId } = await makeRuntime();
     const { token } = await csrfToken(runtime, "/signup/performer", seasonId);
     const values = performerBody(seasonId, token);
     values.set("availability_start", "2031-02-29T14:00");
@@ -279,7 +275,7 @@ describe("availability is stored in the season's timezone", () => {
     // 2031 is not a leap year. `new Date` silently rolls this to March 1.
     expect(response.status).toBe(422);
     expect(await response.text()).toContain("real start and a later end time");
-    expect(readAvailabilities(dataDirectory)).toEqual([]);
+    expect(readAvailabilities(runtime, seasonId)).toEqual([]);
   });
 
   it("names duplicate windows as a field error rather than a retryable outage", async () => {
@@ -608,7 +604,7 @@ describe("the confirmation page is a receipt", () => {
   });
 
   it("persists the performer notes field and keeps it private", async () => {
-    const { dataDirectory, runtime, seasonId } = await makeRuntime();
+    const { runtime, seasonId } = await makeRuntime();
     const { token } = await csrfToken(runtime, "/signup/performer", seasonId);
     const values = performerBody(seasonId, token);
     values.set("performer_notes", "We need a shady spot");
@@ -617,14 +613,12 @@ describe("the confirmation page is a receipt", () => {
     const html = await response.text();
 
     expect(response.status).toBe(201);
-    const sqlite = new Database(join(dataDirectory, CORE_DATABASE_FILENAME), {
-      readonly: true,
-    });
-    const act = sqlite.prepare("select notes from acts").get() as {
-      notes: string;
-    };
-    sqlite.close();
-    expect(act.notes).toBe("We need a shady spot");
+    const act = runtime.core.seasons
+      .listActivityQueue(seasonId)
+      .find(({ recordType }) => recordType === "act");
+    expect(runtime.coreTesting.readAct(act?.record.id ?? 0)?.notes).toBe(
+      "We need a shady spot",
+    );
     expect(html.slice(html.indexOf("Kept private"))).toContain(
       "We need a shady spot",
     );

@@ -102,7 +102,16 @@ export function registerAdminRoutes(options: AdminRouteOptions): void {
           seasonName: season.displayName,
           seasonId: season.id,
           items: options.core.queue.listForOrganizer(season.id, organizer.id),
+          changeRequests: options.core.changeRequests.listPendingForSeason(
+            season.id,
+          ),
           csrfToken: options.csrfTokenFor("/admin/queue/dismiss"),
+          applyChangeCsrfToken: options.csrfTokenFor(
+            "/admin/change-requests/:id/apply",
+          ),
+          rejectChangeCsrfToken: options.csrfTokenFor(
+            "/admin/change-requests/:id/reject",
+          ),
           signOutCsrf: options.csrfTokenFor(ADMIN_SIGN_OUT_PATH),
         }),
         { status: 200, headers: adminHeaders() },
