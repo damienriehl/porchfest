@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  AssignmentConflictError,
   SeasonActionError,
   SeasonConflictError,
   SeasonLifecycleError,
@@ -111,6 +112,143 @@ describe("season domain", () => {
     };
   }
 
+  function insertSeasonTimeSlot(
+    seasonId: number,
+    position: number,
+    offsetHours: number,
+  ): void {
+    const startsAt =
+      Math.floor(pinnedNow.getTime() / 1000) + offsetHours * 3600;
+    sqlite
+      .prepare(
+        "insert into season_time_slots (season_id, position, starts_at, ends_at) values (?, ?, ?, ?)",
+      )
+      .run(seasonId, position, startsAt, startsAt + 3600);
+  }
+
+  it("materializes every season time slot for a venue idempotently", () => {
+    const season = insertSeason(2105, "locked");
+    const venueId = insertVenue(season.id, "Materialized Porch");
+    insertSeasonTimeSlot(season.id, 1, 0);
+    insertSeasonTimeSlot(season.id, 2, 1);
+    expect(seasonRepository.ensureVenueSlots(venueId)).toHaveLength(2);
+    expect(seasonRepository.ensureVenueSlots(venueId)).toHaveLength(2);
+    expect(
+      sqlite
+        .prepare("select count(*) as count from slots where venue_id = ?")
+        .get(venueId),
+    ).toEqual({ count: 2 });
+  });
+
+  it("names filled, held, duplicate-act, and shared-member assignment conflicts", () => {
+    const season = insertSeason(2105, "assigning");
+    const firstVenueId = insertVenue(season.id, "12 Maple St");
+    const secondVenueId = insertVenue(season.id, "22 Oak St");
+    const firstSlot = insertSlot(season.id, firstVenueId);
+    const secondSlot = insertSlot(season.id, secondVenueId);
+    const thirdSlot = insertSlot(season.id, secondVenueId, 2);
+    const cats = insertAct(season.id, "The Porch Cats");
+    const dogs = insertAct(season.id, "The Porch Dogs");
+    seasonRepository.assignSlot(firstSlot.id, firstSlot.version, cats);
+
+    expect(() =>
+      seasonRepository.assignSlot(secondSlot.id, secondSlot.version, cats),
+    ).toThrowError(/The Porch Cats.*12 Maple St.*12:00.*13:00/);
+    expect(() =>
+      seasonRepository.assignSlot(firstSlot.id, firstSlot.version + 1, dogs),
+    ).toThrowError(AssignmentConflictError);
+
+    const held = seasonRepository.holdSlot(thirdSlot.id, thirdSlot.version, {
+      heldForName: "Unknown Band",
+      decideBy: new Date("2105-07-01T00:00:00.000Z"),
+    });
+    expect(() =>
+      seasonRepository.assignSlot(held.id, held.version, dogs),
+    ).toThrowError(/Unknown Band.*2105-07-01/);
+
+    const link = seasonRepository.linkActs({
+      seasonId: season.id,
+      actId: dogs,
+      linkedActId: cats,
+      note: "shared drummer",
+    });
+    expect(link.actId).toBeLessThan(link.linkedActId);
+    expect(() =>
+      seasonRepository.assignSlot(secondSlot.id, secondSlot.version, dogs),
+    ).toThrowError(AssignmentConflictError);
+    const assignment = seasonRepository.assignSlot(
+      secondSlot.id,
+      secondSlot.version,
+      dogs,
+      { sharedMemberOverride: "Organizer confirmed separate player" },
+    );
+    expect(assignment.sharedMemberOverride).toBe(
+      "Organizer confirmed separate player",
+    );
+  });
+
+  it("normalizes and guards act links and unassigns with a version guard", () => {
+    const season = insertSeason(2105, "locked");
+    const otherSeason = insertSeason(2106, "locked");
+    const venueId = insertVenue(season.id, "Correction Porch");
+    const slot = insertSlot(season.id, venueId);
+    const first = insertAct(season.id, "First Act");
+    const second = insertAct(season.id, "Second Act");
+    const foreign = insertAct(otherSeason.id, "Foreign Act");
+    const firstAlias = insertVersionedAct(season.id, "First Act Alias");
+    seasonRepository.supersedeAct(firstAlias.id, firstAlias.version, first);
+    const link = seasonRepository.linkActs({
+      seasonId: season.id,
+      actId: second,
+      linkedActId: firstAlias.id,
+    });
+    expect(link).toMatchObject({ actId: first, linkedActId: second });
+    expect(() =>
+      seasonRepository.linkActs({
+        seasonId: season.id,
+        actId: first,
+        linkedActId: first,
+      }),
+    ).toThrowError(/itself/);
+    expect(() =>
+      seasonRepository.linkActs({
+        seasonId: season.id,
+        actId: first,
+        linkedActId: second,
+      }),
+    ).toThrowError(/already linked/);
+    expect(() =>
+      seasonRepository.linkActs({
+        seasonId: season.id,
+        actId: first,
+        linkedActId: foreign,
+      }),
+    ).toThrowError(/same season/);
+    expect(seasonRepository.listActLinksForAct(second)).toEqual([link]);
+    expect(seasonRepository.listActLinksForAct(firstAlias.id)).toEqual([link]);
+
+    const assigning = sqlite
+      .prepare("update seasons set state = 'assigning' where id = ?")
+      .run(season.id);
+    expect(assigning.changes).toBe(1);
+    const assignment = seasonRepository.assignSlot(
+      slot.id,
+      slot.version,
+      firstAlias.id,
+    );
+    expect(assignment.actId).toBe(first);
+    expect(() =>
+      seasonRepository.unassignSlot(assignment.id, assignment.version + 1),
+    ).toThrowError(SeasonConflictError);
+    const reopened = seasonRepository.unassignSlot(
+      assignment.id,
+      assignment.version,
+    );
+    expect(reopened.state).toBe("open");
+    seasonRepository.unlinkActs(link.id, link.version);
+    expect(seasonRepository.listActLinks(season.id)).toEqual([]);
+  });
+
   it("matches the documented legality policy for every season state and action", () => {
     const legalByAction: Readonly<
       Record<SeasonAction, readonly SeasonState[]>
@@ -146,6 +284,7 @@ describe("season domain", () => {
 
   it("creates a complete host signup and exposes it in the activity queue", () => {
     const season = insertSeason(2105, "signups_open");
+    insertSeasonTimeSlot(season.id, 1, 2);
 
     const signup = seasonRepository.createHostSignup({
       seasonId: season.id,
@@ -161,6 +300,8 @@ describe("season domain", () => {
         hasPower: true,
         rainBackup: false,
         notes: "Please use the side gate.",
+        requestedActNames: "The Porch Cats",
+        genrePreferences: "folk / jazz",
       },
       gear: ["pa", "microphone", "extension_cord"],
       drinks: ["water", "non_alcoholic"],
@@ -181,6 +322,8 @@ describe("season domain", () => {
       hasPower: true,
       rainBackup: false,
       notes: "Please use the side gate.",
+      requestedActNames: "The Porch Cats",
+      genrePreferences: "folk / jazz",
       hostContactId: signup.contact.id,
       placeholder: false,
     });
@@ -204,6 +347,11 @@ describe("season domain", () => {
         { recordType: "venue", record: signup.venue },
       ]),
     );
+    expect(
+      sqlite
+        .prepare("select count(*) as count from slots where venue_id = ?")
+        .get(signup.venue.id),
+    ).toEqual({ count: 1 });
   });
 
   it("creates a complete performer signup and exposes it in the activity queue", () => {
@@ -230,6 +378,7 @@ describe("season domain", () => {
         housePreference: "Near the park",
         canLendGear: true,
         notes: null,
+        sharedMemberNote: "A drummer also plays with The Other Act",
       },
       availabilities: [
         { startsAt: firstStartsAt, endsAt: firstEndsAt },
@@ -254,6 +403,7 @@ describe("season domain", () => {
       housePreference: "Near the park",
       canLendGear: true,
       notes: null,
+      sharedMemberNote: "A drummer also plays with The Other Act",
       reachViaContactId: signup.contact.id,
       placeholder: false,
     });
@@ -517,7 +667,7 @@ describe("season domain", () => {
     ]);
     expect(() =>
       seasonRepository.assignSlot(held.id, held.version, heldActId),
-    ).toThrowError(`slot ${held.id} is held; assignment requires an open slot`);
+    ).toThrowError(/Named Act That Never Signed Up.*2105-06-01/);
     expect(
       sqlite.prepare("select state from slots where id = ?").get(heldSlot.id),
     ).toEqual({ state: "held" });
@@ -656,6 +806,7 @@ describe("season domain", () => {
     const season = insertSeason(2105, "signups_open");
     const venueId = insertVenue(season.id, "Open-signups Venue");
     const actId = insertAct(season.id, "Open-signups Act");
+    const concurrentActId = insertAct(season.id, "Concurrent Act");
     const slot = insertSlot(season.id, venueId);
     const concurrentlyChangedSlot = insertSlot(season.id, venueId, 2);
 
@@ -677,7 +828,7 @@ describe("season domain", () => {
       seasonRepository.assignSlot(
         concurrentlyChangedSlot.id,
         concurrentlyChangedSlot.version,
-        actId,
+        concurrentActId,
       ),
     ).toThrowError(SeasonConflictError);
   });
@@ -1239,9 +1390,7 @@ describe("season domain", () => {
     expect(seasonRepository.listAssignmentSuggestions(season.id)).toEqual([]);
     expect(() =>
       seasonRepository.assignSlot(openSlot.id, openSlot.version, canonical.id),
-    ).toThrowError(
-      `canonical act ${canonical.id} is already assigned in season ${season.id}`,
-    );
+    ).toThrowError(/Canonical Band.*Supersession Venue.*12:00.*13:00/);
     expect(
       sqlite
         .prepare("select state, version from slots where id = ?")
@@ -1383,14 +1532,15 @@ describe("season domain", () => {
       expect.objectContaining({
         act: expect.objectContaining({
           id: firstCandidateId,
-          seasonId: first.id,
         }),
         slot: expect.objectContaining({
           id: firstOpenSlot.id,
-          seasonId: first.id,
         }),
       }),
     ]);
+    expect(
+      seasonRepository.suggestForVenue(firstVenueId).map(({ act }) => act.id),
+    ).toEqual([firstCandidateId]);
     expect(seasonRepository.listEmailWave(first.id, "invite")).toEqual([
       expect.objectContaining({
         seasonId: first.id,

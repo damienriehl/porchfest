@@ -1,0 +1,245 @@
+export interface MatchingSlot {
+  id: number;
+  venueId: number;
+  startsAt: Date;
+  endsAt: Date;
+  state: "open" | "held" | "assigned";
+}
+
+export interface MatchingVenue {
+  id: number;
+  title: string;
+  hostName: string | null;
+  hasPower: boolean | null;
+  requestedActNames: string | null;
+  genrePreferences: string | null;
+  slots: MatchingSlot[];
+}
+
+export interface MatchingAct {
+  id: number;
+  name: string;
+  genre: string | null;
+  requiresAmplification: boolean | null;
+  housePreference: string | null;
+  availabilities: { startsAt: Date; endsAt: Date }[];
+  linkedActIds: number[];
+}
+
+export interface MatchingAssignment {
+  actId: number;
+  slotId: number;
+}
+
+export interface MatchingInput {
+  venues: MatchingVenue[];
+  acts: MatchingAct[];
+  assignments: MatchingAssignment[];
+}
+
+export interface SuggestionReason {
+  code: string;
+  text: string;
+}
+
+export interface RankedPairing {
+  act: MatchingAct;
+  slot: MatchingSlot;
+  venue: MatchingVenue;
+  score: number;
+  reasons: SuggestionReason[];
+  warnings: SuggestionReason[];
+}
+
+function normalize(value: string): string {
+  return value.toLocaleLowerCase("en").trim().replace(/\s+/g, " ");
+}
+
+function names(haystack: string | null, candidate: string | null): boolean {
+  if (haystack === null || candidate === null) return false;
+  const normalizedHaystack = normalize(haystack);
+  const normalizedCandidate = normalize(candidate);
+  return (
+    Math.min(normalizedHaystack.length, normalizedCandidate.length) >= 3 &&
+    (normalizedHaystack.includes(normalizedCandidate) ||
+      normalizedCandidate.includes(normalizedHaystack))
+  );
+}
+
+function overlaps(
+  left: { startsAt: Date; endsAt: Date },
+  right: { startsAt: Date; endsAt: Date },
+): boolean {
+  return left.startsAt < right.endsAt && right.startsAt < left.endsAt;
+}
+
+function utcWindow(window: { startsAt: Date; endsAt: Date }): string {
+  const time = (date: Date) =>
+    `${String(date.getUTCHours()).padStart(2, "0")}:${String(date.getUTCMinutes()).padStart(2, "0")}`;
+  return `${time(window.startsAt)}–${time(window.endsAt)} UTC`;
+}
+
+function comparePairings(left: RankedPairing, right: RankedPairing): number {
+  return (
+    right.score - left.score ||
+    left.act.name.localeCompare(right.act.name, "en") ||
+    left.act.id - right.act.id ||
+    left.slot.startsAt.getTime() - right.slot.startsAt.getTime() ||
+    left.slot.id - right.slot.id
+  );
+}
+
+/**
+ * Pure R8 ranking. Explicit availability windows are hard constraints; an act
+ * that did not state any availability remains eligible everywhere and carries
+ * an explicit reason so an organizer can see that uncertainty.
+ */
+export function rankPairings(input: MatchingInput): RankedPairing[] {
+  const venuesBySlotId = new Map<number, MatchingVenue>();
+  const slotsById = new Map<number, MatchingSlot>();
+  for (const venue of input.venues) {
+    for (const slot of venue.slots) {
+      venuesBySlotId.set(slot.id, venue);
+      slotsById.set(slot.id, slot);
+    }
+  }
+  const actsById = new Map(input.acts.map((act) => [act.id, act]));
+  const assignedActIds = new Set(input.assignments.map(({ actId }) => actId));
+  const assignedSlotIds = new Set(
+    input.assignments.map(({ slotId }) => slotId),
+  );
+  const pairings: RankedPairing[] = [];
+
+  for (const venue of input.venues) {
+    for (const slot of venue.slots) {
+      if (slot.state !== "open" || assignedSlotIds.has(slot.id)) continue;
+      for (const act of input.acts) {
+        if (assignedActIds.has(act.id)) continue;
+        const availability = act.availabilities.find((window) =>
+          overlaps(window, slot),
+        );
+        if (act.availabilities.length > 0 && availability === undefined) {
+          continue;
+        }
+
+        const reasons: SuggestionReason[] = [];
+        const warnings: SuggestionReason[] = [];
+        let score = 0;
+        const hostAsked = names(venue.requestedActNames, act.name);
+        const actAsked =
+          names(act.housePreference, venue.title) ||
+          names(act.housePreference, venue.hostName);
+        if (hostAsked && actAsked) {
+          score += 10_000;
+          reasons.push({
+            code: "mutual_request",
+            text: "The host and act requested each other by name",
+          });
+        } else {
+          if (hostAsked) {
+            score += 3_000;
+            reasons.push({
+              code: "host_request",
+              text: "Host asked for this act by name",
+            });
+          }
+          if (actAsked) {
+            score += 3_000;
+            reasons.push({
+              code: "act_request",
+              text: "Act asked for this venue by name",
+            });
+          }
+        }
+
+        const preferences = normalize(venue.genrePreferences ?? "");
+        const genreToken = (act.genre ?? "")
+          .toLocaleLowerCase("en")
+          .split(/[,/\s]+/)
+          .find((token) => token.length >= 3 && preferences.includes(token));
+        if (genreToken !== undefined) {
+          score += 50;
+          reasons.push({
+            code: "genre_fit",
+            text: `Genre preference matches ${genreToken}`,
+          });
+        }
+
+        if (act.requiresAmplification === true && venue.hasPower === false) {
+          score -= 100;
+          warnings.push({
+            code: "no_power",
+            text: "Act needs amplification, but the venue has no power",
+          });
+        } else if (
+          act.requiresAmplification === true &&
+          venue.hasPower === true
+        ) {
+          score += 20;
+          reasons.push({
+            code: "power_available",
+            text: "Venue has power for this amplified act",
+          });
+        }
+
+        if (availability === undefined) {
+          reasons.push({
+            code: "availability_unstated",
+            text: "Availability was not stated",
+          });
+        } else {
+          score += 5;
+          reasons.push({
+            code: "available",
+            text: `Available ${utcWindow(slot)}`,
+          });
+        }
+
+        for (const linkedActId of [...act.linkedActIds].sort((a, b) => a - b)) {
+          const linkedAssignment = input.assignments.find(
+            (assignment) => assignment.actId === linkedActId,
+          );
+          if (linkedAssignment === undefined) continue;
+          const linkedSlot = slotsById.get(linkedAssignment.slotId);
+          const linkedVenue = venuesBySlotId.get(linkedAssignment.slotId);
+          const linkedAct = actsById.get(linkedActId);
+          if (
+            linkedSlot !== undefined &&
+            linkedVenue !== undefined &&
+            linkedAct !== undefined &&
+            overlaps(linkedSlot, slot)
+          ) {
+            score -= 200;
+            warnings.push({
+              code: "shared_member",
+              text: `${linkedAct.name} shares a member and plays at ${linkedVenue.title}, ${utcWindow(linkedSlot)}`,
+            });
+          }
+        }
+
+        if (reasons.length === 0) {
+          reasons.push({
+            code: "slot_open",
+            text: "Act and slot are both available",
+          });
+        }
+        pairings.push({ act, slot, venue, score, reasons, warnings });
+      }
+    }
+  }
+  return pairings.sort(comparePairings);
+}
+
+export function suggestionsForVenue(
+  input: MatchingInput,
+  venueId: number,
+): RankedPairing[] {
+  return rankPairings(input).filter(({ venue }) => venue.id === venueId);
+}
+
+export function suggestionsForAct(
+  input: MatchingInput,
+  actId: number,
+): RankedPairing[] {
+  return rankPairings(input).filter(({ act }) => act.id === actId);
+}

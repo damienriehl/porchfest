@@ -95,7 +95,7 @@ describe("core schema migration", () => {
       .get(season.id, "Signup Contact") as { id: number };
     const venue = sqlite
       .prepare(
-        "insert into venues (season_id, title, space_description, has_power, rain_backup, host_contact_id) values (?, ?, ?, ?, ?, ?) returning id",
+        "insert into venues (season_id, title, space_description, has_power, rain_backup, host_contact_id, requested_act_names, genre_preferences) values (?, ?, ?, ?, ?, ?, ?, ?) returning id",
       )
       .get(
         season.id,
@@ -104,12 +104,23 @@ describe("core schema migration", () => {
         1,
         1,
         contact.id,
+        "The Synthetic Notes",
+        "folk / jazz",
       ) as { id: number };
     const act = sqlite
       .prepare(
-        "insert into acts (season_id, name, duration_minutes, requires_amplification, house_preference, can_lend_gear, reach_via_contact_id) values (?, ?, ?, ?, ?, ?, ?) returning id",
+        "insert into acts (season_id, name, duration_minutes, requires_amplification, house_preference, can_lend_gear, reach_via_contact_id, shared_member_note) values (?, ?, ?, ?, ?, ?, ?, ?) returning id",
       )
-      .get(season.id, "Signup Act", 45, 1, "A shaded porch", 1, contact.id) as {
+      .get(
+        season.id,
+        "Signup Act",
+        45,
+        1,
+        "A shaded porch",
+        1,
+        contact.id,
+        "A member also plays in The Other Act",
+      ) as {
       id: number;
     };
 
@@ -139,18 +150,20 @@ describe("core schema migration", () => {
     expect(
       sqlite
         .prepare(
-          "select space_description, has_power, rain_backup from venues where id = ?",
+          "select space_description, has_power, rain_backup, requested_act_names, genre_preferences from venues where id = ?",
         )
         .get(venue.id),
     ).toEqual({
       space_description: "Front porch and yard",
       has_power: 1,
       rain_backup: 1,
+      requested_act_names: "The Synthetic Notes",
+      genre_preferences: "folk / jazz",
     });
     expect(
       sqlite
         .prepare(
-          "select duration_minutes, requires_amplification, house_preference, can_lend_gear from acts where id = ?",
+          "select duration_minutes, requires_amplification, house_preference, can_lend_gear, shared_member_note from acts where id = ?",
         )
         .get(act.id),
     ).toEqual({
@@ -158,6 +171,7 @@ describe("core schema migration", () => {
       requires_amplification: 1,
       house_preference: "A shaded porch",
       can_lend_gear: 1,
+      shared_member_note: "A member also plays in The Other Act",
     });
     expect([gear, drink, amenity, availability]).toEqual([
       { version: 1 },
@@ -165,6 +179,39 @@ describe("core schema migration", () => {
       { version: 1 },
       { version: 1 },
     ]);
+  });
+
+  it("stores only normalized unique shared-member act links", () => {
+    const season = sqlite
+      .prepare(
+        "insert into seasons (year, display_name) values (?, ?) returning id",
+      )
+      .get(2106, "Link Sample") as { id: number };
+    const first = sqlite
+      .prepare("insert into acts (season_id, name) values (?, ?) returning id")
+      .get(season.id, "First Linked Act") as { id: number };
+    const second = sqlite
+      .prepare("insert into acts (season_id, name) values (?, ?) returning id")
+      .get(season.id, "Second Linked Act") as { id: number };
+    sqlite
+      .prepare(
+        "insert into act_links (season_id, act_id, linked_act_id, note) values (?, ?, ?, ?)",
+      )
+      .run(season.id, first.id, second.id, "shared musician");
+    expect(() =>
+      sqlite
+        .prepare(
+          "insert into act_links (season_id, act_id, linked_act_id) values (?, ?, ?)",
+        )
+        .run(season.id, first.id, second.id),
+    ).toThrow();
+    expect(() =>
+      sqlite
+        .prepare(
+          "insert into act_links (season_id, act_id, linked_act_id) values (?, ?, ?)",
+        )
+        .run(season.id, second.id, first.id),
+    ).toThrow();
   });
 
   it("rejects unsupported signup set values and invalid availability windows", () => {
