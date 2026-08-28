@@ -21,6 +21,19 @@ export function escapeHtml(value: unknown): string {
     .replaceAll("'", "&#39;");
 }
 
+export function renderOrganizerPage(title: string, body: string): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${escapeHtml(title)} · Porchfest organizers</title>
+  <link rel="stylesheet" href="/signup/assets/signup.css">
+</head>
+<body><main class="signup-page">${body}</main></body>
+</html>`;
+}
+
 export function firstValue(values: SignupValues, name: string): string {
   return values[name]?.[0] ?? "";
 }

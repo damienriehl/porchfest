@@ -7,7 +7,7 @@ import {
   type Slot,
   type Venue,
 } from "@porchfest/core";
-import { escapeHtml } from "./signup-view.js";
+import { escapeHtml, renderOrganizerPage } from "./signup-view.js";
 
 export interface VenueAssignmentPageOptions {
   readonly season: Season;
@@ -36,18 +36,12 @@ export function renderAssignVenuePage(
     options.season.state,
     "assignment",
   );
-  const notice = !assignmentLegal
-    ? `<section class="error-summary" role="status"><h2>Assignments are closed</h2><p>The season state is ${escapeHtml(options.season.state)}; assigning acts to slots is not allowed.</p></section>`
-    : options.error
-      ? `<section class="error-summary" role="alert"><h2>Assignment was not changed</h2><p>${escapeHtml(options.error)}</p></section>`
-      : options.assignedActId
-        ? `<section class="confirmation" role="status"><p>${escapeHtml(options.acts.find((act) => act.id === options.assignedActId)?.name ?? "Act")} was assigned.</p></section>`
-        : "";
+  const notice = renderNotice(options, assignmentLegal);
   const released = options.releasedTargetVenue
     ? `<section class="confirmation" role="status"><p>Hold released. <a href="/admin/venues/${options.releasedTargetVenue.id}/assign">Assign at ${escapeHtml(options.releasedTargetVenue.title)}</a>.</p></section>`
     : "";
 
-  return page(
+  return renderOrganizerPage(
     `Assign acts at ${options.venue.title}`,
     `<header class="signup-header">
       <p class="eyebrow">${escapeHtml(options.season.displayName)} · Venue matching</p>
@@ -77,6 +71,25 @@ export function renderAssignVenuePage(
       }
     </section>`,
   );
+}
+
+function renderNotice(
+  options: VenueAssignmentPageOptions,
+  assignmentLegal: boolean,
+): string {
+  if (!assignmentLegal) {
+    return `<section class="error-summary" role="status"><h2>Assignments are closed</h2><p>The season state is ${escapeHtml(options.season.state)}; assigning acts to slots is not allowed.</p></section>`;
+  }
+  if (options.error) {
+    return `<section class="error-summary" role="alert"><h2>Assignment was not changed</h2><p>${escapeHtml(options.error)}</p></section>`;
+  }
+  if (options.assignedActId) {
+    const actName =
+      options.acts.find((act) => act.id === options.assignedActId)?.name ??
+      "Act";
+    return `<section class="confirmation" role="status"><p>${escapeHtml(actName)} was assigned.</p></section>`;
+  }
+  return "";
 }
 
 function slotSection(
@@ -196,18 +209,3 @@ export function formatSlot(
   });
   return `${formatter.format(slot.startsAt)}–${formatter.format(slot.endsAt)}`;
 }
-
-export function assignmentPage(title: string, body: string): string {
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${escapeHtml(title)} · Porchfest organizers</title>
-  <link rel="stylesheet" href="/signup/assets/signup.css">
-</head>
-<body><main class="signup-page">${body}</main></body>
-</html>`;
-}
-
-const page = assignmentPage;

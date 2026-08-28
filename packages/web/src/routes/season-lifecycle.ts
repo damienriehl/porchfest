@@ -2,6 +2,7 @@ import {
   SeasonActionError,
   SeasonConflictError,
   SeasonLifecycleError,
+  seasonStates,
   type CoreRuntime,
   type Season,
   type SeasonState,
@@ -9,10 +10,7 @@ import {
 import type { Context } from "hono";
 import { adminHeaders, currentOrganizer } from "../auth.js";
 import type { RouteRegistry } from "../router/registry.js";
-import {
-  renderSeasonLifecyclePage,
-  SEASON_STATES,
-} from "../views/season-lifecycle.js";
+import { renderSeasonLifecyclePage } from "../views/season-lifecycle.js";
 import { readFields, redirect, unauthorized } from "./admin-http.js";
 
 export const SEASON_LIFECYCLE_PATH = "/admin/seasons/:id";
@@ -69,9 +67,7 @@ export function registerSeasonLifecycleRoutes(options: {
           "A valid season version is required.",
         );
       }
-      if (
-        SEASON_STATES.indexOf(target) <= SEASON_STATES.indexOf(season.state)
-      ) {
+      if (seasonStates.indexOf(target) <= seasonStates.indexOf(season.state)) {
         return seasonPage(
           options,
           season,
@@ -121,7 +117,7 @@ export function registerSeasonLifecycleRoutes(options: {
 }
 
 function asSeasonState(value: string | undefined): SeasonState | null {
-  return SEASON_STATES.find((state) => state === value) ?? null;
+  return seasonStates.find((state) => state === value) ?? null;
 }
 
 function findSeason(

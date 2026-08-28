@@ -4,6 +4,7 @@ import {
   SeasonActionError,
   SeasonConflictError,
   SeasonLifecycleError,
+  suggestionsForAct,
   type Act,
   type ActLink,
   type CoreRuntime,
@@ -470,20 +471,21 @@ function actPage(
         );
   const input = options.core.seasons.buildMatchingInput(season.id);
   const matchingAct = input.acts.find((item) => item.id === act.id);
-  if (!matchingAct) return notFound("act");
+  if (!matchingAct && act.status !== "withdrawn") return notFound("act");
   return html(
     renderAssignActPage({
       season,
       act,
-      matchingAct,
+      matchingAct: matchingAct ?? null,
       acts,
       venues,
       slots,
       assignments: options.core.seasons.listAssignments(season.id),
       links: options.core.seasons.listActLinksForAct(act.id),
-      suggestions: isSeasonActionLegal(season.state, "assignment")
-        ? options.core.seasons.suggestForAct(act.id)
-        : [],
+      suggestions:
+        matchingAct && isSeasonActionLegal(season.state, "assignment")
+          ? suggestionsForAct(input, matchingAct.id)
+          : [],
       csrf: {
         assign: options.csrfTokenFor(ASSIGN_SLOT_PATH),
         unassign: options.csrfTokenFor(UNASSIGN_PATH),
@@ -575,20 +577,28 @@ function findSlot(
   slotId: number,
 ): { readonly season: Season; readonly venue: Venue } | null {
   for (const season of core.setup.listSeasons()) {
-    const input = core.seasons.buildMatchingInput(season.id);
-    const matchingVenue = input.venues.find((venue) =>
-      venue.slots.some((slot) => slot.id === slotId),
-    );
-    if (!matchingVenue) continue;
-    const venue = core.seasons
-      .listActivityQueue(season.id)
-      .find(
-        (item) =>
-          item.recordType === "venue" && item.record.id === matchingVenue.id,
-      );
-    if (venue?.recordType === "venue") return { season, venue: venue.record };
+    const located = findSlotInSeason(core, season, slotId);
+    if (located) return located;
   }
   return null;
+}
+
+function findSlotInSeason(
+  core: CoreRuntime,
+  season: Season,
+  slotId: number,
+): { readonly season: Season; readonly venue: Venue } | null {
+  const matchingVenue = core.seasons
+    .buildMatchingInput(season.id)
+    .venues.find((venue) => venue.slots.some((slot) => slot.id === slotId));
+  if (!matchingVenue) return null;
+  const venue = core.seasons
+    .listActivityQueue(season.id)
+    .find(
+      (item) =>
+        item.recordType === "venue" && item.record.id === matchingVenue.id,
+    );
+  return venue?.recordType === "venue" ? { season, venue: venue.record } : null;
 }
 
 function findAssignment(core: CoreRuntime, assignmentId: number) {
@@ -597,7 +607,7 @@ function findAssignment(core: CoreRuntime, assignmentId: number) {
       .listAssignments(season.id)
       .find((item) => item.id === assignmentId);
     if (!assignment) continue;
-    const located = findSlot(core, assignment.slotId);
+    const located = findSlotInSeason(core, season, assignment.slotId);
     if (located) return { ...located, assignment };
   }
   return null;

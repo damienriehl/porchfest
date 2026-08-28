@@ -1,5 +1,6 @@
 import { and, asc, desc, eq, isNull, lt, lte, ne, sql } from "drizzle-orm";
 import {
+  formatZonedWindow,
   rankPairings,
   suggestionsForAct,
   suggestionsForVenue,
@@ -1086,18 +1087,6 @@ export function createSeasonRepository(
           );
         }
 
-        const formatWindow = (value: Slot): string => {
-          const formatter = new Intl.DateTimeFormat("en-US", {
-            timeZone: season.timezone,
-            hour: "numeric",
-            minute: "2-digit",
-          });
-          const start = formatter.format(value.startsAt);
-          const end = formatter.format(value.endsAt);
-          const startPeriod = start.match(/\s([AP]M)$/)?.[1];
-          const endPeriod = end.match(/\s([AP]M)$/)?.[1];
-          return `${startPeriod === endPeriod ? start.replace(/\s[AP]M$/, "") : start}–${end}`;
-        };
         const slotVenue = getVenue(slot.venueId, tx);
         if (slot.state === "held") {
           throw new AssignmentConflictError(
@@ -1123,7 +1112,7 @@ export function createSeasonRepository(
             occupying === undefined ? null : getAct(occupying.actId, tx);
           throw new AssignmentConflictError(
             "slot_filled",
-            `Slot at ${slotVenue.title}, ${formatWindow(slot)} is already filled${occupyingAct === null ? "" : ` by ${occupyingAct.name}`}`,
+            `Slot at ${slotVenue.title}, ${formatZonedWindow(slot, season.timezone)} is already filled${occupyingAct === null ? "" : ` by ${occupyingAct.name}`}`,
             {
               slotId,
               actId,
@@ -1175,7 +1164,7 @@ export function createSeasonRepository(
           const canonicalRecord = getAct(canonicalAct.id, tx);
           throw new AssignmentConflictError(
             "act_already_assigned",
-            `${canonicalRecord.name} are already assigned to ${conflictingVenue.title}, ${formatWindow(conflictingSlot)}`,
+            `${canonicalRecord.name} are already assigned to ${conflictingVenue.title}, ${formatZonedWindow(conflictingSlot, season.timezone)}`,
             {
               slotId,
               actId: canonicalAct.id,
@@ -1247,7 +1236,7 @@ export function createSeasonRepository(
           const conflictingVenue = getVenue(conflictingSlot.venueId, tx);
           throw new AssignmentConflictError(
             "shared_member",
-            `${conflictingAct.name} shares a member and is already assigned to ${conflictingVenue.title}, ${formatWindow(conflictingSlot)}; record an organizer override to continue`,
+            `${conflictingAct.name} shares a member and is already assigned to ${conflictingVenue.title}, ${formatZonedWindow(conflictingSlot, season.timezone)}; record an organizer override to continue`,
             {
               slotId,
               actId: canonicalAct.id,

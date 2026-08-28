@@ -74,7 +74,7 @@ function overlaps(
   return left.startsAt < right.endsAt && right.startsAt < left.endsAt;
 }
 
-function zonedWindow(
+export function formatZonedWindow(
   window: { startsAt: Date; endsAt: Date },
   timezone: string,
 ): string {
@@ -119,6 +119,12 @@ export function rankPairings(input: MatchingInput): RankedPairing[] {
   const assignedSlotIds = new Set(
     input.assignments.map(({ slotId }) => slotId),
   );
+  const assignmentByActId = new Map<number, MatchingAssignment>();
+  for (const assignment of input.assignments) {
+    if (!assignmentByActId.has(assignment.actId)) {
+      assignmentByActId.set(assignment.actId, assignment);
+    }
+  }
   const pairings: RankedPairing[] = [];
 
   for (const venue of input.venues) {
@@ -202,14 +208,12 @@ export function rankPairings(input: MatchingInput): RankedPairing[] {
           score += 5;
           reasons.push({
             code: "available",
-            text: `Available ${zonedWindow(slot, input.timezone)}`,
+            text: `Available ${formatZonedWindow(slot, input.timezone)}`,
           });
         }
 
         for (const linkedActId of [...act.linkedActIds].sort((a, b) => a - b)) {
-          const linkedAssignment = input.assignments.find(
-            (assignment) => assignment.actId === linkedActId,
-          );
+          const linkedAssignment = assignmentByActId.get(linkedActId);
           if (linkedAssignment === undefined) continue;
           const linkedSlot = slotsById.get(linkedAssignment.slotId);
           const linkedVenue = venuesBySlotId.get(linkedAssignment.slotId);
@@ -223,7 +227,7 @@ export function rankPairings(input: MatchingInput): RankedPairing[] {
             score -= 200;
             warnings.push({
               code: "shared_member",
-              text: `${linkedAct.name} shares a member and plays at ${linkedVenue.title}, ${zonedWindow(linkedSlot, input.timezone)}`,
+              text: `${linkedAct.name} shares a member and plays at ${linkedVenue.title}, ${formatZonedWindow(linkedSlot, input.timezone)}`,
             });
           }
         }

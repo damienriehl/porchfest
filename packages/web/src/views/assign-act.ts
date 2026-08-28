@@ -9,13 +9,13 @@ import {
   type Slot,
   type Venue,
 } from "@porchfest/core";
-import { escapeHtml } from "./signup-view.js";
-import { assignmentPage as page, formatSlot } from "./assign-venue.js";
+import { formatSlot } from "./assign-venue.js";
+import { escapeHtml, renderOrganizerPage } from "./signup-view.js";
 
 export interface ActAssignmentPageOptions {
   readonly season: Season;
   readonly act: Act;
-  readonly matchingAct: MatchingAct;
+  readonly matchingAct: MatchingAct | null;
   readonly acts: readonly Act[];
   readonly venues: readonly Venue[];
   readonly slots: readonly Slot[];
@@ -46,15 +46,9 @@ export function renderAssignActPage(options: ActAssignmentPageOptions): string {
   const currentVenue = currentSlot
     ? options.venues.find((venue) => venue.id === currentSlot.venueId)
     : undefined;
-  const notice = !assignmentLegal
-    ? `<section class="error-summary" role="status"><h2>Assignments are closed</h2><p>The season state is ${escapeHtml(options.season.state)}; assigning acts to slots is not allowed.</p></section>`
-    : options.error
-      ? `<section class="error-summary" role="alert"><h2>Assignment was not changed</h2><p>${escapeHtml(options.error)}</p></section>`
-      : options.assigned
-        ? '<section class="confirmation" role="status"><p>Act was assigned.</p></section>'
-        : "";
+  const notice = renderNotice(options, assignmentLegal);
 
-  return page(
+  return renderOrganizerPage(
     `Find a porch for ${options.act.name}`,
     `<header class="signup-header">
       <p class="eyebrow">${escapeHtml(options.season.displayName)} · Act matching</p>
@@ -65,7 +59,7 @@ export function renderAssignActPage(options: ActAssignmentPageOptions): string {
     ${notice}
     <section aria-labelledby="act-details-title"><h2 id="act-details-title">Matching details</h2>
       <dl class="submission-list">
-        <div class="submission-row"><dt>Availability</dt><dd>${escapeHtml(availability(options.matchingAct, options.season.timezone))}</dd></div>
+        <div class="submission-row"><dt>Availability</dt><dd>${escapeHtml(options.matchingAct ? availability(options.matchingAct, options.season.timezone) : "Unavailable for matching")}</dd></div>
         <div class="submission-row"><dt>Porch preference</dt><dd>${escapeHtml(options.act.housePreference ?? "None stated")}</dd></div>
         <div class="submission-row"><dt>Shared-member note</dt><dd>${escapeHtml(options.act.sharedMemberNote ?? "None stated")}</dd></div>
       </dl>
@@ -74,10 +68,46 @@ export function renderAssignActPage(options: ActAssignmentPageOptions): string {
       ${current && currentSlot && currentVenue ? `<p><a href="/admin/venues/${currentVenue.id}/assign">${escapeHtml(currentVenue.title)}</a>, ${escapeHtml(formatSlot(currentSlot, options.season.timezone))}</p><form class="signup-form compact-form" method="post" action="/admin/assignments/${current.id}/unassign"><input type="hidden" name="_csrf" value="${escapeHtml(options.csrf.unassign)}"><input type="hidden" name="version" value="${current.version}"><input type="hidden" name="return_to" value="act"><button class="secondary-action" type="submit">Unassign</button></form>` : '<p class="help">Not assigned yet.</p>'}
     </section>
     <section aria-labelledby="candidate-slots-title"><h2 id="candidate-slots-title">Ranked porch slots</h2>
-      ${!assignmentLegal ? '<p class="help">Candidate assignments are unavailable in this season state.</p>' : current ? '<p class="help">Unassign this act before choosing another slot.</p>' : renderSuggestions(options)}
+      ${renderCandidateSummary(options, assignmentLegal, current !== undefined)}
     </section>
     ${renderLinks(options)}`,
   );
+}
+
+function renderNotice(
+  options: ActAssignmentPageOptions,
+  assignmentLegal: boolean,
+): string {
+  if (options.act.status === "withdrawn") {
+    return '<section class="error-summary" role="status"><h2>Act withdrawn</h2><p>This act is withdrawn and cannot be assigned.</p></section>';
+  }
+  if (!assignmentLegal) {
+    return `<section class="error-summary" role="status"><h2>Assignments are closed</h2><p>The season state is ${escapeHtml(options.season.state)}; assigning acts to slots is not allowed.</p></section>`;
+  }
+  if (options.error) {
+    return `<section class="error-summary" role="alert"><h2>Assignment was not changed</h2><p>${escapeHtml(options.error)}</p></section>`;
+  }
+  if (options.assigned) {
+    return '<section class="confirmation" role="status"><p>Act was assigned.</p></section>';
+  }
+  return "";
+}
+
+function renderCandidateSummary(
+  options: ActAssignmentPageOptions,
+  assignmentLegal: boolean,
+  assigned: boolean,
+): string {
+  if (options.act.status === "withdrawn") {
+    return '<p class="help">Withdrawn acts have no assignment candidates.</p>';
+  }
+  if (!assignmentLegal) {
+    return '<p class="help">Candidate assignments are unavailable in this season state.</p>';
+  }
+  if (assigned) {
+    return '<p class="help">Unassign this act before choosing another slot.</p>';
+  }
+  return renderSuggestions(options);
 }
 
 function renderSuggestions(options: ActAssignmentPageOptions): string {

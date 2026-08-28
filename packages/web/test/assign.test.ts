@@ -536,6 +536,28 @@ describe("organizer assignment screens", () => {
     expect(runtime.core.seasons.listActLinksForAct(cats.act.id)).toEqual([]);
   });
 
+  it("shows a withdrawn act without assignment candidates", async () => {
+    const { runtime, cookie, cats } = await boot();
+    runtime.core.seasons.setRecordStatus(
+      "act",
+      cats.act.id,
+      cats.act.version,
+      "withdrawn",
+    );
+
+    const response = await get(
+      runtime,
+      `/admin/acts/${cats.act.id}/assign`,
+      cookie,
+    );
+    const body = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(body).toContain(cats.act.name);
+    expect(body).toMatch(/withdrawn.*cannot be assigned/i);
+    expect(body).not.toMatch(/action="\/admin\/slots\/\d+\/assign"/);
+  });
+
   it("names locked-state and stale-slot refusals and keeps unknown ids at 404", async () => {
     const { runtime, cookie, season, maple, cats } = await boot();
     const slot = slotFor(runtime, maple.venue.id);

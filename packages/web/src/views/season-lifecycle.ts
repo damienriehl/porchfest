@@ -1,10 +1,11 @@
 import {
   isSeasonActionLegal,
+  seasonStates,
   type Season,
   type SeasonAction,
   type SeasonState,
 } from "@porchfest/core";
-import { escapeHtml } from "./signup-view.js";
+import { escapeHtml, renderOrganizerPage } from "./signup-view.js";
 
 export const SEASON_ACTION_LABELS: Readonly<Record<SeasonAction, string>> = {
   signup: "public signups",
@@ -15,14 +16,6 @@ export const SEASON_ACTION_LABELS: Readonly<Record<SeasonAction, string>> = {
 };
 
 const ACTIONS = Object.keys(SEASON_ACTION_LABELS) as SeasonAction[];
-export const SEASON_STATES: readonly SeasonState[] = [
-  "setup",
-  "signups_open",
-  "signups_closed",
-  "assigning",
-  "locked",
-  "archived",
-];
 
 export function stoppedActions(
   current: SeasonState,
@@ -41,15 +34,11 @@ export function renderSeasonLifecyclePage(options: {
   readonly error?: string;
   readonly transitioned?: boolean;
 }): string {
-  const currentIndex = SEASON_STATES.indexOf(options.season.state);
-  const transitions = SEASON_STATES.slice(currentIndex + 1);
-  const notice = options.error
-    ? `<section class="error-summary" role="alert" tabindex="-1"><h2>Season state was not changed</h2><p>${escapeHtml(options.error)}</p></section>`
-    : options.transitioned
-      ? `<section class="confirmation-card" role="status"><p>Season moved to ${escapeHtml(options.season.state)}.</p></section>`
-      : "";
+  const currentIndex = seasonStates.indexOf(options.season.state);
+  const transitions = seasonStates.slice(currentIndex + 1);
+  const notice = renderNotice(options);
 
-  return page(
+  return renderOrganizerPage(
     "Season settings & state",
     `    <header class="signup-header">
       <p class="eyebrow">${escapeHtml(options.season.displayName)}</p>
@@ -78,6 +67,20 @@ export function renderSeasonLifecyclePage(options: {
   );
 }
 
+function renderNotice(options: {
+  readonly season: Season;
+  readonly error?: string;
+  readonly transitioned?: boolean;
+}): string {
+  if (options.error) {
+    return `<section class="error-summary" role="alert" tabindex="-1"><h2>Season state was not changed</h2><p>${escapeHtml(options.error)}</p></section>`;
+  }
+  if (options.transitioned) {
+    return `<section class="confirmation-card" role="status"><p>Season moved to ${escapeHtml(options.season.state)}.</p></section>`;
+  }
+  return "";
+}
+
 function transitionForm(
   options: { readonly season: Season; readonly csrfToken: string },
   target: SeasonState,
@@ -99,17 +102,4 @@ function transitionForm(
       <button class="${irreversible ? "primary-action" : "secondary-action"}" type="submit">Move to ${escapeHtml(target)}</button>
     </form>
   </li>`;
-}
-
-function page(title: string, body: string): string {
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${escapeHtml(title)} · Porchfest organizers</title>
-  <link rel="stylesheet" href="/signup/assets/signup.css">
-</head>
-<body><main class="signup-page">${body}</main></body>
-</html>`;
 }
