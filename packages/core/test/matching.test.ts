@@ -71,6 +71,7 @@ describe("deterministic matching", () => {
     const input = fixture();
     const first = rankPairings(input);
     const shuffled = rankPairings({
+      timezone: input.timezone,
       venues: [...input.venues]
         .reverse()
         .map((venue) => ({ ...venue, slots: [...venue.slots].reverse() })),
@@ -116,6 +117,8 @@ describe("deterministic matching", () => {
     expect(linked?.warnings.map(({ code }) => code)).toContain("shared_member");
     expect(linked?.warnings[0]?.text).toContain("Booked Friends");
     expect(linked?.warnings[0]?.text).toContain("Oak Avenue Stage");
+    expect(linked?.warnings[0]?.text).toContain("1:00–2:00 PM");
+    expect(linked?.warnings[0]?.text).not.toContain("UTC");
     const withoutLink: MatchingInput = {
       ...input,
       acts: input.acts.map((act) =>
@@ -126,5 +129,15 @@ describe("deterministic matching", () => {
       ({ act, slot }) => act.id === 103 && slot.id === 11,
     );
     expect(linked!.score).toBeLessThan(unlinked!.score);
+  });
+
+  it("explains availability in the season timezone", () => {
+    const available = rankPairings(fixture()).find(
+      ({ act, slot }) => act.id === 101 && slot.id === 11,
+    );
+
+    expect(
+      available?.reasons.find(({ code }) => code === "available")?.text,
+    ).toBe("Available 1:00–2:00 PM");
   });
 });

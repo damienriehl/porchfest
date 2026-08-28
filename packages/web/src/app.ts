@@ -7,6 +7,7 @@ import { ADMIN_SIGN_IN_PATH, registerAdminRoutes } from "./routes/admin.js";
 import { registerAdminRecordRoutes } from "./routes/admin-records.js";
 import { registerAdminRetentionRoutes } from "./routes/admin-retention.js";
 import { registerSeasonLifecycleRoutes } from "./routes/season-lifecycle.js";
+import { registerAssignmentRoutes } from "./routes/assign.js";
 import {
   registerSignupRoutes,
   type SignupRouteOptions,
@@ -97,6 +98,8 @@ export function createApp(options: AppOptions): PorchfestApp {
   registerAdminRecordRoutes({ core: options.core, routes, csrfTokenFor });
 
   registerSeasonLifecycleRoutes({ core: options.core, routes, csrfTokenFor });
+
+  registerAssignmentRoutes({ core: options.core, routes, csrfTokenFor });
 
   return {
     fetch: app.fetch.bind(app),

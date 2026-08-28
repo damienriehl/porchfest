@@ -120,6 +120,22 @@ describe("application scaffold", () => {
         path: "/admin/seasons/:id/transition",
         tier: "organizer",
       },
+      { method: "GET", path: "/admin/venues/:id/assign", tier: "organizer" },
+      { method: "GET", path: "/admin/acts/:id/assign", tier: "organizer" },
+      { method: "POST", path: "/admin/slots/:id/assign", tier: "organizer" },
+      {
+        method: "POST",
+        path: "/admin/assignments/:id/unassign",
+        tier: "organizer",
+      },
+      { method: "POST", path: "/admin/slots/:id/hold", tier: "organizer" },
+      { method: "POST", path: "/admin/slots/:id/release", tier: "organizer" },
+      { method: "POST", path: "/admin/acts/:id/links", tier: "organizer" },
+      {
+        method: "POST",
+        path: "/admin/act-links/:id/unlink",
+        tier: "organizer",
+      },
     ]);
   });
 

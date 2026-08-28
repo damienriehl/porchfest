@@ -153,7 +153,7 @@ describe("season domain", () => {
 
     expect(() =>
       seasonRepository.assignSlot(secondSlot.id, secondSlot.version, cats),
-    ).toThrowError(/The Porch Cats.*12 Maple St.*12:00.*13:00/);
+    ).toThrowError(/The Porch Cats.*12 Maple St.*12:00–1:00 PM/);
     expect(() =>
       seasonRepository.assignSlot(firstSlot.id, firstSlot.version + 1, dogs),
     ).toThrowError(AssignmentConflictError);
@@ -1390,7 +1390,7 @@ describe("season domain", () => {
     expect(seasonRepository.listAssignmentSuggestions(season.id)).toEqual([]);
     expect(() =>
       seasonRepository.assignSlot(openSlot.id, openSlot.version, canonical.id),
-    ).toThrowError(/Canonical Band.*Supersession Venue.*12:00.*13:00/);
+    ).toThrowError(/Canonical Band.*Supersession Venue.*12:00–1:00 PM/);
     expect(
       sqlite
         .prepare("select state, version from slots where id = ?")

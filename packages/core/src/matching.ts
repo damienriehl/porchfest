@@ -32,6 +32,7 @@ export interface MatchingAssignment {
 }
 
 export interface MatchingInput {
+  timezone: string;
   venues: MatchingVenue[];
   acts: MatchingAct[];
   assignments: MatchingAssignment[];
@@ -73,10 +74,20 @@ function overlaps(
   return left.startsAt < right.endsAt && right.startsAt < left.endsAt;
 }
 
-function utcWindow(window: { startsAt: Date; endsAt: Date }): string {
-  const time = (date: Date) =>
-    `${String(date.getUTCHours()).padStart(2, "0")}:${String(date.getUTCMinutes()).padStart(2, "0")}`;
-  return `${time(window.startsAt)}–${time(window.endsAt)} UTC`;
+function zonedWindow(
+  window: { startsAt: Date; endsAt: Date },
+  timezone: string,
+): string {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  const start = formatter.format(window.startsAt);
+  const end = formatter.format(window.endsAt);
+  const startPeriod = start.match(/\s([AP]M)$/)?.[1];
+  const endPeriod = end.match(/\s([AP]M)$/)?.[1];
+  return `${startPeriod === endPeriod ? start.replace(/\s[AP]M$/, "") : start}–${end}`;
 }
 
 function comparePairings(left: RankedPairing, right: RankedPairing): number {
@@ -191,7 +202,7 @@ export function rankPairings(input: MatchingInput): RankedPairing[] {
           score += 5;
           reasons.push({
             code: "available",
-            text: `Available ${utcWindow(slot)}`,
+            text: `Available ${zonedWindow(slot, input.timezone)}`,
           });
         }
 
@@ -212,7 +223,7 @@ export function rankPairings(input: MatchingInput): RankedPairing[] {
             score -= 200;
             warnings.push({
               code: "shared_member",
-              text: `${linkedAct.name} shares a member and plays at ${linkedVenue.title}, ${utcWindow(linkedSlot)}`,
+              text: `${linkedAct.name} shares a member and plays at ${linkedVenue.title}, ${zonedWindow(linkedSlot, input.timezone)}`,
             });
           }
         }

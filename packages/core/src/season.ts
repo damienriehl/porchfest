@@ -1087,9 +1087,16 @@ export function createSeasonRepository(
         }
 
         const formatWindow = (value: Slot): string => {
-          const time = (date: Date) =>
-            `${String(date.getUTCHours()).padStart(2, "0")}:${String(date.getUTCMinutes()).padStart(2, "0")}`;
-          return `${time(value.startsAt)}–${time(value.endsAt)}`;
+          const formatter = new Intl.DateTimeFormat("en-US", {
+            timeZone: season.timezone,
+            hour: "numeric",
+            minute: "2-digit",
+          });
+          const start = formatter.format(value.startsAt);
+          const end = formatter.format(value.endsAt);
+          const startPeriod = start.match(/\s([AP]M)$/)?.[1];
+          const endPeriod = end.match(/\s([AP]M)$/)?.[1];
+          return `${startPeriod === endPeriod ? start.replace(/\s[AP]M$/, "") : start}–${end}`;
         };
         const slotVenue = getVenue(slot.venueId, tx);
         if (slot.state === "held") {
@@ -1445,7 +1452,7 @@ export function createSeasonRepository(
   }
 
   function buildMatchingInput(seasonId: number): MatchingInput {
-    getSeason(seasonId);
+    const season = getSeason(seasonId);
     const seasonActs = db
       .select()
       .from(acts)
@@ -1517,6 +1524,7 @@ export function createSeasonRepository(
     );
 
     return {
+      timezone: season.timezone,
       venues: seasonVenues.map((venue) => ({
         id: venue.id,
         title: venue.title,
