@@ -78,6 +78,7 @@ export function renderPerformerForm(options: {
         ${availabilityRows}
       </div>
       ${renderTextarea({ id: "house_preference", label: "Porch or neighborhood preference", value: firstValue(values, "house_preference"), errors, help: "Name a host, area, accessibility need, or say that you have no preference." })}
+      ${renderTextarea({ id: "shared_member_note", label: "Is anyone in your act also in another Porchfest act this year?", value: firstValue(values, "shared_member_note"), errors, help: "Name the other act(s) so we never book you into two porches at once." })}
       ${renderBooleanChoices({ id: "can_lend_gear", label: "Can your act lend gear?", value: firstValue(values, "can_lend_gear"), errors })}
     </fieldset>
     <fieldset>

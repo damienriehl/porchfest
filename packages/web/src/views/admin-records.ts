@@ -24,6 +24,16 @@ export const RECORD_FIELDS: Readonly<
     { name: "spaceDescription", label: "Performance space", kind: "textarea" },
     { name: "hasPower", label: "Electrical power", kind: "boolean" },
     { name: "rainBackup", label: "Rain backup", kind: "boolean" },
+    {
+      name: "requestedActNames",
+      label: "Requested acts",
+      kind: "textarea",
+    },
+    {
+      name: "genrePreferences",
+      label: "Genre preferences",
+      kind: "textarea",
+    },
     { name: "notes", label: "Notes for the organizers", kind: "textarea" },
   ],
   act: [
@@ -39,6 +49,11 @@ export const RECORD_FIELDS: Readonly<
     { name: "requiresAmplification", label: "Amplification", kind: "boolean" },
     { name: "canLendGear", label: "Can lend gear", kind: "boolean" },
     { name: "housePreference", label: "Porch preference", kind: "textarea" },
+    {
+      name: "sharedMemberNote",
+      label: "Members in other acts",
+      kind: "textarea",
+    },
     { name: "notes", label: "Notes for the organizers", kind: "textarea" },
   ],
   contact: [
@@ -159,6 +174,7 @@ export function renderQueuePage(options: {
       <p class="lede">${needsReview === 0 ? "Nothing new for you right now." : `${needsReview} ${needsReview === 1 ? "item needs" : "items need"} your review.`}</p>
       ${options.correctionsClosed ? "" : `<p class="lede"><a href="/admin/placeholders/act/new?season=${options.seasonId}">Add an act without a submission</a> · <a href="/admin/placeholders/venue/new?season=${options.seasonId}">Add a venue without a submission</a></p>`}
       <p class="lede"><a href="/admin/retention">Review participant retention</a></p>
+      <p class="lede"><a href="/admin/seasons/${options.seasonId}">Season settings &amp; state</a></p>
     </header>
     <section aria-labelledby="change-requests-title">
       <h2 id="change-requests-title">Change requests needing a decision</h2>

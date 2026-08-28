@@ -114,6 +114,12 @@ describe("application scaffold", () => {
         path: "/admin/records/contact/:id/supersede",
         tier: "organizer",
       },
+      { method: "GET", path: "/admin/seasons/:id", tier: "organizer" },
+      {
+        method: "POST",
+        path: "/admin/seasons/:id/transition",
+        tier: "organizer",
+      },
     ]);
   });
 

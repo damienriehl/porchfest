@@ -295,6 +295,7 @@ export function registerAdminRecordRoutes(
                     fields.requiresAmplification,
                   ),
                   housePreference: nullableText(fields.housePreference),
+                  sharedMemberNote: nullableText(fields.sharedMemberNote),
                   canLendGear: nullableBoolean(fields.canLendGear),
                   notes: nullableText(fields.notes),
                 },
@@ -308,6 +309,8 @@ export function registerAdminRecordRoutes(
                   spaceDescription: nullableText(fields.spaceDescription),
                   hasPower: nullableBoolean(fields.hasPower),
                   rainBackup: nullableBoolean(fields.rainBackup),
+                  requestedActNames: nullableText(fields.requestedActNames),
+                  genrePreferences: nullableText(fields.genrePreferences),
                   notes: nullableText(fields.notes),
                 },
               });

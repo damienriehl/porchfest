@@ -1348,6 +1348,8 @@ describe("the record editor", () => {
         spaceDescription: "Porch",
         hasPower: "yes",
         rainBackup: "no",
+        requestedActNames: "The Requested Fixtures",
+        genrePreferences: "Folk",
         notes: "",
       }),
     );
@@ -1359,6 +1361,12 @@ describe("the record editor", () => {
     expect(contact?.recordType === "contact" && contact.record.email).toBe(
       "host@example.invalid",
     );
+    const venue = runtime.core.queue
+      .listForOrganizer(season.id, 1)
+      .find((item) => item.recordType === "venue");
+    expect(
+      venue?.recordType === "venue" && venue.record.requestedActNames,
+    ).toBe("The Requested Fixtures");
   });
 
   it("refuses a record from a season the organizer did not ask for", async () => {
