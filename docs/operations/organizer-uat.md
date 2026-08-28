@@ -26,20 +26,18 @@ else.
 
 ## Before you can run this at all
 
-**The loop is not complete yet.** The DoD names three things in sequence: a
+**The loop is one unit short.** The DoD names three things in sequence: a
 record gets corrected, **gets assigned**, and **produces a reviewable message**.
-Assignment is U6 and messages are U7, and neither is built — no route in the
-application performs either. Tasks 4 and 5 below cannot be attempted until they
-land.
+Assignment landed with U6, so task 4 is runnable. Messages are U7 and are not
+built — no route in the application produces one — so task 5 cannot be attempted
+until U7 lands.
 
-A second gap blocks task 6: **no interface can change a season's state.** No
-route calls `transitionSeason`, so an organizer cannot close signups, lock a
-season, or archive one. F4 "Season turnover" is a named flow in the plan
-covering R2 and R21, and no unit implements it.
+Season state changes also landed with U6: an organizer can close signups, lock
+a season, and archive it from the admin, so task 6 is runnable. That was the
+gap the 2026-08-24 UAT found (no route called `transitionSeason`); it is closed.
 
-Tasks 1–3 are runnable today and are worth running today: they cover first-run
-setup, the public signup forms, and the correction half of the loop. Running
-them early finds interface problems while they are still cheap to fix.
+Tasks 1–4 and 6 are runnable today and are worth running today. Running them
+early finds interface problems while they are still cheap to fix.
 
 ## Setting up for the tester
 
@@ -76,10 +74,11 @@ festival starts from, and the application is designed to work without them.
 >    act up to play.
 > 3. Find both of those in the organizer view. The porch's name is wrong — fix
 >    it. Then mark the porch confirmed.
-> 4. _(needs U6)_ Put the act on the porch, in a slot.
+> 4. Put the act on the porch, in a slot. The software should tell you why it
+>    suggests what it suggests — say out loud whether that helped.
 > 5. _(needs U7)_ Produce the message that tells them both, and read it over
 >    before anything is sent.
-> 6. _(needs season transitions)_ Close the season for the year.
+> 6. Close the season for the year.
 
 ## The observer's sheet — this is the actual result
 
@@ -109,8 +108,8 @@ soften this: "I only had to tell them where the button was" is the finding.
 
 ## What is already known to work, so the observer can tell defects from noise
 
-Verified by walking a real instance in a browser on 2026-08-24, plus 452
-automated tests:
+Verified by walking a real instance in a browser on 2026-08-24, plus the
+automated suite (500+ tests after U6):
 
 - First-run setup opens a season that accepts signups.
 - Both public signup forms accept a submission and show a receipt that separates
@@ -123,6 +122,16 @@ automated tests:
 - Unauthenticated requests to organizer routes are refused.
 - Every form control has a label, focus is visible, and touch targets are at
   least 44×44 at phone width.
+
+Covered by automated tests only (U6, 2026-08-28 — no browser walkthrough yet,
+so an interface finding here is expected, not a regression):
+
+- A venue's assignment page lists its slots with ranked candidate acts and the
+  reasons beside each; an act's page lists its ranked slots the same way.
+- A double-booking is refused with the conflict named; two acts that share a
+  member need a recorded override to play the same hour.
+- The season page offers only forward transitions and says what each stops
+  allowing before it is taken; lock and archive ask for confirmation.
 
 If the tester hits something in that list, it is a regression and worth
 escalating immediately rather than filing as a usability finding.
