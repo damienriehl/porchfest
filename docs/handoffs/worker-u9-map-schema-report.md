@@ -184,3 +184,96 @@ despite three ownership roles.
 
 The implementation is committed locally as `2c6a1c1`. This report is the only
 file intended for a second focused handoff commit. Nothing was pushed or merged.
+
+## Review fixes (2026-08-29)
+
+All ten verified PR #31 review findings were addressed on top of `bc2f0a3`.
+The schema JSON was not edited, its digest remains
+`ead84ab74207bbe615e2297fdc8f793e451294161cdd8edf889e1163e7f8f5e4`, no
+dependency was added, and `package-lock.json` was not touched.
+
+### Numbered fixes
+
+1. **One type hierarchy.** Moved the shared `VenueMapActSlot`, link, act, and
+   venue types into `contract.ts`; made link labels and act notes optional;
+   removed the three private document-side copies; changed
+   `VenuesMapDocument.venues` to `VenueMapVenue[]`; and derived `VenuesMapV1`
+   with `Pick<VenuesMapDocument, "venues">`. `index.ts` now has the only module
+   edge and re-exports the contract. The document comment records the pending
+   owner decision about the wider season, event, and schedule fields.
+2. **Digest exact bytes.** `readVenuesMapSchemaSource` now reads a `Buffer` and
+   decodes it separately. The exported `computeVenuesMapSchemaDigest` hashes a
+   `Buffer | string`, and both the assertion and tests reuse it.
+3. **Verified-once loader.** Added `loadVerifiedVenuesMapSchema`, which reads the
+   schema bytes once, verifies those bytes against the pin, decodes and parses
+   them, caches the `{ source, digest, schema }` result, and returns the same
+   object on later calls. Schema URLs and cache state remain module-private.
+4. **Pin parser hardening.** The parser now accepts upper- or lowercase hex,
+   requires the first line to name exactly `venues-map.v1.schema.json` after an
+   optional `*`, and reports the expected `sha256sum` format plus the quoted
+   offending first line on failure.
+5. **Checkout-invariant bytes.** Added root `.gitattributes` with
+   `packages/map/schemas/* -text`, preventing checkout line-ending conversion
+   from changing the pinned bytes.
+6. **Narrow Prettier exemption.** Replaced the directory-wide ignore with
+   `packages/map/schemas/*.json` and `packages/map/schemas/*.sha256`, then ran
+   Prettier on the schema README; it was already formatted.
+7. **Contract tests.** The test module reads schema bytes, source, and parsed JSON
+   once; uses exact generated-from keys; replaces the runtime optionality
+   tautology with a `satisfies VenuesMapDocument` compile-time fixture; covers a
+   wrong pin filename, uppercase digest, and loader memoization; and passes the
+   already-read source explicitly to the assertion. The focused suite is 7/7.
+8. **Propagation README.** Removed the generated and gitignored `public/data/`
+   site path, replaced the temporary-transition section with a four-step
+   change-agnostic procedure, folded re-pinning into step 3, and retained one
+   dated current-status sentence.
+9. **Container workspace.** Added only the missing
+   `COPY packages/map/package.json ./packages/map/package.json` line beside the
+   other workspace manifests. `scripts/container-smoke.sh` completed and proved
+   the image builds, migrates an empty volume, contains the workspaces, serves
+   TLS health, and passes image/tree clean-room scans.
+10. **Plan amendments.** Added the exact dated bracketed amendment after both
+    stale U1 and U9 sentences without rewriting their original text.
+
+The required standalone Node command exposed a pre-existing mismatch in
+`packages/map/test/porchfest-map.test.js`: despite being described as a
+`node:test` file, it had imported `test` from Vitest since before this branch.
+The test cases and browser asset remain unchanged; the test now selects Vitest
+under Vitest and `node:test` under the direct Node command. Both runner paths
+pass (Vitest reports 84 tests for the file; direct `node --test` exits 0).
+
+### Commits
+
+- `c7d5976` — `fix(map): unify and verify the venues map contract`
+- `4e0cab2` — `fix(map): preserve and document contract bytes`
+- `5a05f4a` — `fix(container): install the map workspace manifest`
+- `96831b4` — `docs(plan): amend the map contract cutover`
+- `45ad6b2` — `test(map): support the node test runner`
+
+### Verification
+
+Every final required command used Node v24.13.0 and exited 0.
+
+| Gate                                                           | Result                                                                                                            |
+| -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `npm run typecheck`                                            | `tsc --noEmit -p tsconfig.json`; exit 0                                                                           |
+| `npm run lint`                                                 | exit 0; 0 errors and the same 2 warnings in unchanged `packages/core/src/access.ts` for unused `stamp` parameters |
+| `npm run format:check`                                         | `All matched files use Prettier code style!`                                                                      |
+| `npm test`                                                     | `Test Files 39 passed (39)`; `Tests 612 passed (612)`; all six required `OK:` lines printed                       |
+| `cd packages/map/schemas && sha256sum -c venues-map.v1.sha256` | `venues-map.v1.schema.json: OK`                                                                                   |
+| `node --test packages/map/test/porchfest-map.test.js`          | exit 0                                                                                                            |
+| `bash scripts/container-smoke.sh`                              | exit 0; final line `OK: container migrates an empty data volume, contains all workspaces, and serves TLS health`  |
+
+The first sandboxed full-suite attempt could not open the existing SMTP tests'
+local listener and was stopped; the complete chain was rerun with local-listener
+permission and passed with stderr visible. The existing SMTP TLS ServerName
+deprecation warning also printed. The container build printed existing npm audit
+and install-script warnings plus host IPv4-forwarding warnings, but every smoke
+assertion passed.
+
+The simplification pass found no reuse, quality, or efficiency change worth
+making. Structured review run `20260829-105723-d96ad339` returned `Ready to
+merge` with no actionable findings. Its attempted external adversarial launch
+was denied before egress by the environment safety reviewer, so the adversarial
+lens ran locally. No required work was left undone. Nothing was pushed, rebased,
+amended, or merged.
