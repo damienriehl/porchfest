@@ -270,6 +270,89 @@ describe("season domain", () => {
     expect(seasonRepository.listActLinks(season.id)).toEqual([]);
   });
 
+  it("keeps links usable after an endpoint is superseded", () => {
+    const season = insertSeason(2105, "locked");
+    const first = insertVersionedAct(season.id, "First Act");
+    const replacement = insertVersionedAct(season.id, "Replacement Act");
+    const second = insertVersionedAct(season.id, "Second Act");
+    const link = seasonRepository.linkActs({
+      seasonId: season.id,
+      actId: first.id,
+      linkedActId: second.id,
+    });
+
+    seasonRepository.supersedeAct(first.id, first.version, replacement.id);
+
+    expect(seasonRepository.listActLinksForAct(replacement.id)).toEqual([link]);
+    expect(() =>
+      seasonRepository.linkActs({
+        seasonId: season.id,
+        actId: replacement.id,
+        linkedActId: second.id,
+      }),
+    ).toThrowError(/already linked/);
+
+    seasonRepository.unlinkActs(link.id, link.version);
+    expect(seasonRepository.listActLinksForAct(replacement.id)).toEqual([]);
+  });
+
+  it("refuses venue supersession until assignments and holds are cleared", () => {
+    const season = insertSeason(2105, "assigning");
+    const source = insertVersionedVenue(season.id, "Booked Porch");
+    const target = insertVersionedVenue(season.id, "Canonical Porch");
+    const firstSlot = insertSlot(season.id, source.id);
+    const secondSlot = insertSlot(season.id, source.id, 1);
+    const heldSlot = insertSlot(season.id, source.id, 2);
+    seasonRepository.assignSlot(
+      firstSlot.id,
+      firstSlot.version,
+      insertAct(season.id, "First Booked Act"),
+    );
+    seasonRepository.assignSlot(
+      secondSlot.id,
+      secondSlot.version,
+      insertAct(season.id, "Second Booked Act"),
+    );
+    seasonRepository.holdSlot(heldSlot.id, heldSlot.version, {
+      heldForName: "Held Act",
+      decideBy: new Date("2105-07-01T00:00:00.000Z"),
+    });
+
+    expect(() =>
+      seasonRepository.supersedeVenue(source.id, source.version, target.id),
+    ).toThrowError(
+      "Unassign 2 acts and release 1 hold before superseding this venue",
+    );
+    expect(seasonRepository.getVenue(source.id)).toMatchObject({
+      canonicalVenueId: null,
+      version: source.version,
+    });
+
+    const heldOnly = insertVersionedVenue(season.id, "Held Porch");
+    const heldOnlySlot = insertSlot(season.id, heldOnly.id, 3);
+    seasonRepository.holdSlot(heldOnlySlot.id, heldOnlySlot.version, {
+      heldForName: "Another Held Act",
+      decideBy: new Date("2105-07-02T00:00:00.000Z"),
+    });
+    expect(() =>
+      seasonRepository.supersedeVenue(heldOnly.id, heldOnly.version, target.id),
+    ).toThrowError(
+      "Unassign 0 acts and release 1 hold before superseding this venue",
+    );
+    expect(seasonRepository.getVenue(heldOnly.id)).toMatchObject({
+      canonicalVenueId: null,
+      version: heldOnly.version,
+    });
+
+    const empty = insertVersionedVenue(season.id, "Empty Porch");
+    expect(
+      seasonRepository.supersedeVenue(empty.id, empty.version, target.id),
+    ).toMatchObject({
+      canonicalVenueId: target.id,
+      version: empty.version + 1,
+    });
+  });
+
   it("matches the documented legality policy for every season state and action", () => {
     const legalByAction: Readonly<
       Record<SeasonAction, readonly SeasonState[]>

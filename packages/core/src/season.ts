@@ -759,7 +759,35 @@ export function createSeasonRepository(
   ): Venue {
     return db.transaction(
       (tx) => {
-        assertCorrectionLegal(getVenue(id, tx).seasonId, tx);
+        const source = getVenue(id, tx);
+        assertCorrectionLegal(source.seasonId, tx);
+        const assignmentCount = tx
+          .select({ id: assignments.id })
+          .from(assignments)
+          .innerJoin(slots, eq(slots.id, assignments.slotId))
+          .where(
+            and(
+              eq(slots.seasonId, source.seasonId),
+              eq(slots.venueId, source.id),
+            ),
+          )
+          .all().length;
+        const holdCount = tx
+          .select({ id: slots.id })
+          .from(slots)
+          .where(
+            and(
+              eq(slots.seasonId, source.seasonId),
+              eq(slots.venueId, source.id),
+              eq(slots.state, "held"),
+            ),
+          )
+          .all().length;
+        if (assignmentCount > 0 || holdCount > 0) {
+          throw new SeasonLifecycleError(
+            `Unassign ${assignmentCount} ${assignmentCount === 1 ? "act" : "acts"} and release ${holdCount} ${holdCount === 1 ? "hold" : "holds"} before superseding this venue`,
+          );
+        }
         return createRecordRepository(tx, options).supersedeVenue(
           id,
           expectedVersion,
@@ -910,13 +938,24 @@ export function createSeasonRepository(
         const duplicate = tx
           .select()
           .from(actLinks)
-          .where(
-            and(
-              eq(actLinks.actId, actId),
-              eq(actLinks.linkedActId, linkedActId),
-            ),
-          )
-          .get();
+          .where(eq(actLinks.seasonId, input.seasonId))
+          .all()
+          .find((link) => {
+            const firstEndpoint = resolveCanonicalSeasonAct(
+              link.actId,
+              seasonActsById,
+              tx,
+            ).id;
+            const secondEndpoint = resolveCanonicalSeasonAct(
+              link.linkedActId,
+              seasonActsById,
+              tx,
+            ).id;
+            return (
+              Math.min(firstEndpoint, secondEndpoint) === actId &&
+              Math.max(firstEndpoint, secondEndpoint) === linkedActId
+            );
+          });
         if (duplicate) {
           throw new SeasonLifecycleError(
             `acts ${actId} and ${linkedActId} are already linked`,
@@ -979,15 +1018,29 @@ export function createSeasonRepository(
       .from(acts)
       .where(eq(acts.seasonId, act.seasonId))
       .all();
+    const seasonActsById = new Map(
+      seasonActs.map((seasonAct) => [seasonAct.id, seasonAct]),
+    );
     const canonicalActId = resolveCanonicalSeasonAct(
       act.id,
-      new Map(seasonActs.map((seasonAct) => [seasonAct.id, seasonAct])),
+      seasonActsById,
       db,
     ).id;
-    return listActLinks(act.seasonId).filter(
-      (link) =>
-        link.actId === canonicalActId || link.linkedActId === canonicalActId,
-    );
+    return listActLinks(act.seasonId).filter((link) => {
+      const firstEndpoint = resolveCanonicalSeasonAct(
+        link.actId,
+        seasonActsById,
+        db,
+      ).id;
+      const secondEndpoint = resolveCanonicalSeasonAct(
+        link.linkedActId,
+        seasonActsById,
+        db,
+      ).id;
+      return (
+        firstEndpoint === canonicalActId || secondEndpoint === canonicalActId
+      );
+    });
   }
 
   function holdSlot(
@@ -1630,6 +1683,7 @@ export function createSeasonRepository(
 
   return Object.freeze({
     getSeason,
+    getAct,
     getVenue,
     getSlot,
     getAssignment,

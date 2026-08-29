@@ -296,6 +296,59 @@ describe("the activity queue", () => {
 });
 
 describe("placeholder and supersession actions", () => {
+  it("refuses venue supersession while the venue has a booking", async () => {
+    const { runtime, season, alice, signup } = await boot();
+    const canonical = runtime.core.seasons.createHostSignup({
+      seasonId: season.id,
+      contact: {
+        name: "Canonical Host",
+        email: "canonical-host@example.invalid",
+        phone: null,
+      },
+      venue: {
+        title: "Canonical Porch",
+        address: "2 Test St",
+        spaceDescription: "Porch",
+        hasPower: true,
+        rainBackup: false,
+        notes: null,
+      },
+      gear: [],
+      drinks: [],
+      amenities: [],
+    });
+    const performer = createPerformer(
+      runtime,
+      season.id,
+      "Booked Act",
+      "booked-act@example.invalid",
+    );
+    assignAct(runtime, season.id, signup.venue.id, performer.act.id, 18);
+    const recordPath = `/admin/records/venue/${signup.venue.id}`;
+    const page = await get(runtime, `${recordPath}?season=${season.id}`, alice);
+
+    const response = await post(
+      runtime,
+      `${recordPath}/supersede`,
+      alice,
+      new URLSearchParams({
+        _csrf: await csrfFrom(page, `${recordPath}/supersede`),
+        season: String(season.id),
+        version: String(signup.venue.version),
+        canonical_id: String(canonical.venue.id),
+      }),
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.text()).toContain(
+      "Unassign 1 act and release 0 holds before superseding this venue",
+    );
+    expect(runtime.core.seasons.getVenue(signup.venue.id)).toMatchObject({
+      canonicalVenueId: null,
+      version: signup.venue.version,
+    });
+  });
+
   it("renders lifecycle forms while live and static values after archival", async () => {
     const { runtime, season, alice, signup } = await boot();
     const placeholder = runtime.core.seasons.createPlaceholderAct({

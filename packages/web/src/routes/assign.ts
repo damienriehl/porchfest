@@ -443,6 +443,27 @@ function actPage(
   const input = options.core.seasons.buildMatchingInput(season.id);
   const matchingAct = input.acts.find((item) => item.id === act.id);
   if (!matchingAct && act.status !== "withdrawn") return notFound("act");
+  const assignments = options.core.seasons.listAssignments(season.id);
+  const assignment = assignments.find((item) => item.actId === act.id);
+  const currentAssignment = assignment
+    ? (() => {
+        const slot = options.core.seasons.getSlot(assignment.slotId);
+        return {
+          assignment,
+          slot,
+          venue: options.core.seasons.getVenue(slot.venueId),
+        };
+      })()
+    : null;
+  const links = options.core.seasons.listActLinksForAct(act.id).map((link) => ({
+    ...link,
+    actId: resolveCurrentAct(options.core, link.actId).id,
+    linkedActId: resolveCurrentAct(options.core, link.linkedActId).id,
+  }));
+  const linkedActs = links.flatMap((link) => [
+    options.core.seasons.getAct(link.actId),
+    options.core.seasons.getAct(link.linkedActId),
+  ]);
   return html(
     renderAssignActPage({
       season,
@@ -451,8 +472,9 @@ function actPage(
       acts,
       venues,
       slots,
-      assignments: options.core.seasons.listAssignments(season.id),
-      links: options.core.seasons.listActLinksForAct(act.id),
+      currentAssignment,
+      links,
+      linkedActs,
       suggestions:
         matchingAct && isSeasonActionLegal(season.state, "assignment")
           ? suggestionsForAct(input, matchingAct.id)
@@ -468,6 +490,19 @@ function actPage(
     }),
     state.status ?? 200,
   );
+}
+
+function resolveCurrentAct(core: CoreRuntime, actId: number): Act {
+  let act = core.seasons.getAct(actId);
+  const seen = new Set<number>();
+  while (act.canonicalActId !== null) {
+    if (seen.has(act.id)) {
+      throw new SeasonLifecycleError(`act ${actId} has a supersession cycle`);
+    }
+    seen.add(act.id);
+    act = core.seasons.getAct(act.canonicalActId);
+  }
+  return act;
 }
 
 function originPage(

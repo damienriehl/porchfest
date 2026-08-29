@@ -19,8 +19,13 @@ export interface ActAssignmentPageOptions {
   readonly acts: readonly Act[];
   readonly venues: readonly Venue[];
   readonly slots: readonly Slot[];
-  readonly assignments: readonly Assignment[];
+  readonly currentAssignment: {
+    readonly assignment: Assignment;
+    readonly slot: Slot;
+    readonly venue: Venue;
+  } | null;
   readonly links: readonly ActLink[];
+  readonly linkedActs: readonly Act[];
   readonly suggestions: readonly RankedPairing[];
   readonly csrf: {
     readonly assign: string;
@@ -37,15 +42,9 @@ export function renderAssignActPage(options: ActAssignmentPageOptions): string {
     options.season.state,
     "assignment",
   );
-  const current = options.assignments.find(
-    (assignment) => assignment.actId === options.act.id,
-  );
-  const currentSlot = current
-    ? options.slots.find((slot) => slot.id === current.slotId)
-    : undefined;
-  const currentVenue = currentSlot
-    ? options.venues.find((venue) => venue.id === currentSlot.venueId)
-    : undefined;
+  const current = options.currentAssignment?.assignment;
+  const currentSlot = options.currentAssignment?.slot;
+  const currentVenue = options.currentAssignment?.venue;
   const notice = renderNotice(options, assignmentLegal);
 
   return renderOrganizerPage(
@@ -172,7 +171,7 @@ function renderLinks(options: ActAssignmentPageOptions): string {
             .map((link) => {
               const linkedId =
                 link.actId === options.act.id ? link.linkedActId : link.actId;
-              return `<li class="queue-item"><div class="queue-item-body"><h3><a href="/admin/acts/${linkedId}/assign">${escapeHtml(options.acts.find((act) => act.id === linkedId)?.name ?? "Linked act")}</a></h3>${link.note ? `<p>${escapeHtml(link.note)}</p>` : ""}</div><form method="post" action="/admin/act-links/${link.id}/unlink"><input type="hidden" name="_csrf" value="${escapeHtml(options.csrf.unlink)}"><input type="hidden" name="version" value="${link.version}"><input type="hidden" name="act" value="${options.act.id}"><button class="secondary-action" type="submit">Unlink</button></form></li>`;
+              return `<li class="queue-item"><div class="queue-item-body"><h3><a href="/admin/acts/${linkedId}/assign">${escapeHtml(options.linkedActs.find((act) => act.id === linkedId)?.name ?? "Linked act")}</a></h3>${link.note ? `<p>${escapeHtml(link.note)}</p>` : ""}</div><form method="post" action="/admin/act-links/${link.id}/unlink"><input type="hidden" name="_csrf" value="${escapeHtml(options.csrf.unlink)}"><input type="hidden" name="version" value="${link.version}"><input type="hidden" name="act" value="${options.act.id}"><button class="secondary-action" type="submit">Unlink</button></form></li>`;
             })
             .join("")}</ul>`
     }

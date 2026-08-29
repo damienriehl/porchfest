@@ -536,6 +536,47 @@ describe("organizer assignment screens", () => {
     expect(runtime.core.seasons.listActLinksForAct(cats.act.id)).toEqual([]);
   });
 
+  it("lists and unlinks canonicalized act links after endpoint supersession", async () => {
+    const { runtime, cookie, season, cats, acoustic, amplified } = await boot();
+    const link = runtime.core.seasons.linkActs({
+      seasonId: season.id,
+      actId: cats.act.id,
+      linkedActId: acoustic.act.id,
+      note: "Shared percussionist",
+    });
+    runtime.core.seasons.supersedeAct(
+      cats.act.id,
+      cats.act.version,
+      amplified.act.id,
+    );
+
+    const page = await get(
+      runtime,
+      `/admin/acts/${amplified.act.id}/assign`,
+      cookie,
+    );
+    const html = await page.text();
+    expect(page.status).toBe(200);
+    expect(html).toContain(`>${acoustic.act.name}</a>`);
+    expect(html).toContain("Shared percussionist");
+    const unlinkToken = csrf(html, `/admin/act-links/${link.id}/unlink`);
+
+    const response = await post(
+      runtime,
+      `/admin/act-links/${link.id}/unlink`,
+      cookie,
+      new URLSearchParams({
+        _csrf: unlinkToken,
+        version: String(link.version),
+        act: String(amplified.act.id),
+      }),
+    );
+    expect(response.status).toBe(303);
+    expect(runtime.core.seasons.listActLinksForAct(amplified.act.id)).toEqual(
+      [],
+    );
+  });
+
   it("shows a withdrawn act without assignment candidates", async () => {
     const { runtime, cookie, cats } = await boot();
     runtime.core.seasons.setRecordStatus(
@@ -706,36 +747,44 @@ describe("organizer assignment screens", () => {
     expect(await response.text()).toContain("season state is locked");
   });
 
-  it("unassigns an act from a superseded venue through direct lookup", async () => {
-    const { runtime, cookie, season, maple, oak, cats } = await boot();
+  it("shows and unassigns an act when its assigned venue is withdrawn", async () => {
+    const { runtime, cookie, season, maple, cats } = await boot();
     const slot = slotFor(runtime, maple.venue.id);
-    const assignment = runtime.core.seasons.assignSlot(
-      slot.id,
-      slot.version,
-      cats.act.id,
-    );
-    const page = await get(
-      runtime,
-      `/admin/venues/${maple.venue.id}/assign`,
-      cookie,
-    );
-    const token = csrf(
-      await page.text(),
-      `/admin/assignments/${assignment.id}/unassign`,
-    );
-    runtime.core.seasons.supersedeVenue(
+    runtime.core.seasons.assignSlot(slot.id, slot.version, cats.act.id);
+    runtime.core.seasons.setRecordStatus(
+      "venue",
       maple.venue.id,
       maple.venue.version,
-      oak.venue.id,
+      "withdrawn",
+    );
+    const reopenedSlot = slotFor(runtime, maple.venue.id);
+    const hiddenAssignment = runtime.core.seasons.assignSlot(
+      reopenedSlot.id,
+      reopenedSlot.version,
+      cats.act.id,
+    );
+
+    const page = await get(
+      runtime,
+      `/admin/acts/${cats.act.id}/assign`,
+      cookie,
+    );
+    const pageHtml = await page.text();
+    expect(pageHtml).toContain(
+      `<a href="/admin/venues/${maple.venue.id}/assign">${maple.venue.title}</a>`,
+    );
+    const token = csrf(
+      pageHtml,
+      `/admin/assignments/${hiddenAssignment.id}/unassign`,
     );
 
     const response = await post(
       runtime,
-      `/admin/assignments/${assignment.id}/unassign`,
+      `/admin/assignments/${hiddenAssignment.id}/unassign`,
       cookie,
       new URLSearchParams({
         _csrf: token,
-        version: String(assignment.version),
+        version: String(hiddenAssignment.version),
         return_to: "act",
       }),
     );
