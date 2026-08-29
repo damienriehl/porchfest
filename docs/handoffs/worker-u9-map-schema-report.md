@@ -427,3 +427,77 @@ commit contains 40 test files. This pass adds `validate.test.ts`, so the final
 All implementation changes are committed locally on `u9d-schema-v1-3-0`.
 This appended report is intended for one final focused documentation commit.
 Nothing was pushed, merged, rebased, or amended.
+
+### Review fixes (2026-08-29)
+
+All ten requested review fixes are complete:
+
+1. Acts now accept optional `slot_start` and `slot_end` values in JSON Schema
+   `time` format. Hour filtering keeps exact-label matching and additionally
+   matches overlapping act and chip intervals; interval-free data retains the
+   exact-label fallback. Regression coverage restores the full-evening fan-out
+   expectation `[true, false, true, true]` for the early chip. The final review
+   also aligned the browser parser with schema-valid `+HH`, `+HHMM`, and
+   `+HH:MM` offsets.
+2. `schedule`, `slot`, and `slot_label` now use
+   `^\\S(.*\\S)?$`. Parameterized validation tests reject both `" "` and
+   `" afternoon-1 "` for every field.
+3. The root manifest pins Ajv 8 as the `$ajv` override target and applies
+   `"overrides": { "ajv-formats": { "ajv": "$ajv" } }`. The prescribed
+   Node v24.13.0 workspace install removed both nested Ajv 8 copies and hoisted
+   one shared Ajv 8 instance. The lockfile records the new root dependency,
+   hoisted Ajv 8 and `json-schema-traverse` 1, nested ESLint Ajv 6 trees, and
+   removal of the former map and `ajv-formats` Ajv 8 entries. A `formatMinimum`
+   date test now compiles and validates through `addFormats(ajv)` without
+   throwing. No `npm rebuild` was run.
+4. Both hour and genre facets now share one object sentinel that cannot equal a
+   payload string. A payload genre named `all` receives its own functional chip.
+5. Hour chips sort directly by `slot_start` when available, including when
+   `slot_end` is absent and when the first venue has only the later slot. Labels
+   without start metadata use numeric `localeCompare`.
+6. `packages/map/README.md` now describes deployment-neutral slot strings,
+   optional intervals, the Ajv runtime dependencies, and validator usage.
+7. `venuesMapVersionPattern` is exported, and the contract test asserts the
+   schema pattern equals its `.source`.
+8. `isSupportedVenuesMapVersion` now uses `Number` components and an explicit
+   three-part comparison without BigInt or unreachable fallbacks.
+9. `VenueMapActSlot` remains the public `string` alias and now documents that it
+   has been deployment-defined and unconstrained since v1.3.0.
+10. `packages/map/test/fixtures.ts` provides the shared
+    `makeVenuesMapDocument(overrides)` fixture used by both `contract.test.ts`
+    and `validate.test.ts`; the removed hand-built documents contained only
+    synthetic data, and the replacement remains clean-room safe.
+
+The schema was re-pinned after its final content edit:
+
+```text
+9e6a796eb652bbbe43ff15b728b67bde6103e28eb987e63d9a54154e42ed8834  venues-map.v1.schema.json
+```
+
+The final `npm ls ajv` output is:
+
+```text
+porchfest@0.1.0 /home/damienriehl/worktrees/porchfest-map-schema
+├─┬ @porchfest/map@0.1.0 -> ./packages/map
+│ ├─┬ ajv-formats@3.0.1
+│ │ └── ajv@8.20.0 deduped
+│ └── ajv@8.20.0 deduped
+├── ajv@8.20.0
+└─┬ eslint@9.39.5
+  ├─┬ @eslint/eslintrc@3.3.6
+  │ └── ajv@6.15.0
+  └── ajv@6.15.0
+```
+
+The authoritative Node v24.13.0 verification passed against the final tree with
+41 test files and 703 tests, all six required `OK:` lines, and
+`venues-map.v1.schema.json: OK`.
+Lint retained only the two pre-existing unused-`stamp` warnings in
+`packages/core/src/access.ts`. The sandboxed test attempt could not bind the
+SMTP fixtures to `127.0.0.1`; the approved local-listener rerun passed. The
+initial registry-restricted install retry also required approved network access.
+The final review follow-up added one browser test, bringing that focused file to
+90 passing tests. Cross-model review was unavailable because the required private
+source egress was not authorized, so the local reviewer roster supplied the
+review receipt. Nothing requested was left undone, and nothing was pushed,
+rebased, amended, or merged.

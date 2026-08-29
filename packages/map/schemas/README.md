@@ -27,7 +27,11 @@ The v1.3.0 contract makes deployment-specific event, coordinate, schedule, and
 slot values typed fields instead of Goal-1 constants. It also accepts any
 syntactically valid v1 schema version while the platform validator enforces a
 minimum supported version of v1.1.0 in code. The two-value `generated_from`
-enum is unchanged.
+enum is unchanged. Review fixes add optional RFC 3339 `time` values
+`slot_start` and `slot_end` to each act so consumers can determine interval
+overlap without interpreting deployment-specific labels. `schedule`, `slot`,
+and `slot_label` remain deployment-defined non-empty strings but now reject
+surrounding whitespace.
 
 1. Update the Goal-1 producer at `porchfest/tools/render.py` to emit
    `schema_version: "1.3.0"`. It may keep emitting its season, date, time, city,
