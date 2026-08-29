@@ -5,15 +5,6 @@ import type {
   LocateCandidate,
 } from "./ports/geo.js";
 
-/**
- * How tightly a geocoder placed a result on the ground.
- *
- * `parcel` is an address point published for the parcel itself and is what the
- * gate prefers. `house` is a rooftop-or-building estimate and is accepted only
- * as a corroborated fallback. `street` is a point on a road centerline: it can
- * be off by a whole block, so KTD11 rejects it outright rather than publishing
- * a pin an attendee would walk to.
- */
 /** The precision classes a published coordinate may carry. */
 export type AcceptedCoordinatePrecision = Exclude<
   CoordinatePrecision,
@@ -24,18 +15,6 @@ export type AcceptedCoordinatePrecision = Exclude<
  *  geocoder's guess; see {@link resolveCoordinatePrecedence}. */
 export type CoordinateSource = "geocoded" | "organizer-verified";
 
-/**
- * The neighborhood sanity box (R17). Named for core's season bounds, which is
- * where a deployment's box comes from -- `bounds.north` in `createSeasonSetup`,
- * persisted as `bounds_north` and friends. A second vocabulary for the same
- * four numbers would put a north-to-maxLatitude translation at the wiring seam,
- * and a slip there displaces every pin, which is the failure this gate exists
- * to catch.
- *
- * Edges are inclusive. The box may not wrap the antimeridian: a porchfest
- * neighborhood never does, and allowing the wrap would silently turn an
- * inverted (misconfigured) box into a valid one.
- */
 /** A geocoder result offered to the gate, before anything is stored. */
 export type GeocodeCandidate = LocateCandidate;
 

@@ -498,11 +498,14 @@ export function createRecordRepository(
     expectedVersion: number,
     changes: VenueChanges,
   ): Venue {
-    const before = db
-      .select({ address: venues.address })
-      .from(venues)
-      .where(eq(venues.id, id))
-      .get();
+    const beforeAddress =
+      changes.address === undefined
+        ? undefined
+        : db
+            .select({ address: venues.address })
+            .from(venues)
+            .where(eq(venues.id, id))
+            .get()?.address;
     const fields = Object.keys(changes);
     const result = db
       .update(venues)
@@ -516,8 +519,8 @@ export function createRecordRepository(
     if (result.changes !== 1) conflict("venue", id, fields);
     if (
       changes.address !== undefined &&
-      before !== undefined &&
-      changes.address !== before.address
+      beforeAddress !== undefined &&
+      changes.address !== beforeAddress
     ) {
       // R29/AE10: even a hand-placed pin may be wrong after the address moves.
       // Preserve its stronger source so a provider can never replace it, but

@@ -158,16 +158,15 @@ export function createGeocodingRepository(
       };
     }
 
-    const stored = storeOutcome(
-      db,
+    const stored = storeOutcome(db, {
       venueId,
       address,
-      ports.geo.name,
+      provider: ports.geo.name,
       actor,
       outcome,
       boundingBox,
-      now(),
-    );
+      updatedAt: now(),
+    });
     return { kind: "stored", coordinate: stored, reason: outcome.reason };
   }
 
@@ -342,16 +341,22 @@ function coordinateForVenue(
     .get();
 }
 
+interface StoreOutcomeInput {
+  readonly venueId: number;
+  readonly address: string;
+  readonly provider: string;
+  readonly actor: GeocodingActor;
+  readonly outcome: Exclude<LocateOutcome, { kind: "unavailable" }>;
+  readonly boundingBox: NonNullable<ReturnType<typeof boundsFor>>;
+  readonly updatedAt: Date;
+}
+
 function storeOutcome(
   db: CoreExecutor,
-  venueId: number,
-  address: string,
-  provider: string,
-  actor: GeocodingActor,
-  outcome: Exclude<LocateOutcome, { kind: "unavailable" }>,
-  boundingBox: NonNullable<ReturnType<typeof boundsFor>>,
-  updatedAt: Date,
+  input: StoreOutcomeInput,
 ): VenueCoordinate {
+  const { venueId, address, provider, actor, outcome, boundingBox, updatedAt } =
+    input;
   if (outcome.kind === "not-found" || outcome.kind === "refused") {
     return upsertCoordinate(db, {
       venueId,
@@ -422,7 +427,8 @@ function upsertCoordinate(
   db: CoreExecutor,
   values: CoordinateWrite,
 ): VenueCoordinate {
-  db.insert(venueCoordinates)
+  return db
+    .insert(venueCoordinates)
     .values(values)
     .onConflictDoUpdate({
       target: venueCoordinates.venueId,
@@ -442,12 +448,6 @@ function upsertCoordinate(
         version: sql`${venueCoordinates.version} + 1`,
       },
     })
-    .run();
-  const stored = coordinateForVenue(db, values.venueId);
-  if (stored === undefined) {
-    throw new GeocodingLifecycleError(
-      `Coordinate for venue ${values.venueId} was not stored.`,
-    );
-  }
-  return stored;
+    .returning()
+    .get();
 }

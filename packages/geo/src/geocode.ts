@@ -861,7 +861,7 @@ function cacheNamespace(box: BoundingBox, countryCodes: string): string {
     .split(",")
     .map((code) => caseFold(code.trim()))
     .join(",");
-  return `openstreetmap-v1|countrycodes=${canonicalCountryCodes}|bbox=${box.west},${box.south},${box.east},${box.north}`;
+  return `openstreetmap-v1|countrycodes=${canonicalCountryCodes}|bbox=${boundingBoxNamespace(box)}`;
 }
 
 function boundingBoxNamespace(box: BoundingBox): string {

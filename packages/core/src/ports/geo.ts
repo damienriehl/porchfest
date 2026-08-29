@@ -3,6 +3,10 @@ export interface Coordinates {
   readonly longitude: number;
 }
 
+/**
+ * The R17 neighborhood sanity box stored on a season. Edges are inclusive;
+ * antimeridian wrapping and zero-area boxes are invalid for this platform.
+ */
 export interface BoundingBox {
   readonly north: number;
   readonly south: number;
@@ -10,6 +14,10 @@ export interface BoundingBox {
   readonly west: number;
 }
 
+/**
+ * Parcel address points are preferred, house results require corroboration,
+ * and street-centerline results are never publishable under KTD11.
+ */
 export type CoordinatePrecision = "parcel" | "house" | "street";
 
 export interface LocateCandidate extends Coordinates {
