@@ -135,13 +135,18 @@ function publishedMapDocument(
   core: CoreRuntime,
   season: Season,
 ): VenuesMapDocument {
-  const templates = core.setup.listTimeSlots(season.id);
+  const templates = core.setup
+    .listTimeSlots(season.id)
+    .sort(
+      (left, right) =>
+        left.startsAt.getTime() - right.startsAt.getTime() ||
+        left.id - right.id,
+    );
   const slots = core.seasons.listSeasonSlots(season.id);
   const slotIds = new Set(slots.map((slot) => slot.id));
   const assignments = core.seasons.listAssignments(season.id);
   const seasonActs = core.seasons.listSeasonActs(season.id);
-  const coordinates =
-    core.geocoding.publishableCoordinatesForSeason(season.id);
+  const coordinates = core.geocoding.publishableCoordinatesForSeason(season.id);
   const actsById: Record<number, (typeof seasonActs)[number] | undefined> =
     Object.create(null) as Record<
       number,
@@ -163,6 +168,13 @@ function publishedMapDocument(
   ) as Record<number, Slot[] | undefined>;
   for (const slot of slots) {
     (slotsByVenue[slot.venueId] ??= []).push(slot);
+  }
+  for (const venueSlots of Object.values(slotsByVenue)) {
+    venueSlots?.sort(
+      (left, right) =>
+        left.startsAt.getTime() - right.startsAt.getTime() ||
+        left.id - right.id,
+    );
   }
 
   const venues = core.seasons
@@ -225,7 +237,11 @@ function publishedMapDocument(
           : formatZonedWindow(
               {
                 startsAt: templates[0]!.startsAt,
-                endsAt: templates.at(-1)!.endsAt,
+                endsAt: templates.reduce(
+                  (latest, template) =>
+                    template.endsAt > latest ? template.endsAt : latest,
+                  templates[0]!.endsAt,
+                ),
               },
               season.timezone,
             ),
@@ -267,8 +283,8 @@ function publishedAct(
   return {
     slot: String(template.position),
     slot_label: label,
-    slot_start: rfc3339Time(template.startsAt),
-    slot_end: rfc3339Time(template.endsAt),
+    slot_start: rfc3339Time(template.startsAt, season.timezone),
+    slot_end: rfc3339Time(template.endsAt, season.timezone),
     name: act.name,
     genre: act.genre ?? "",
     description: act.description ?? "",
@@ -276,8 +292,24 @@ function publishedAct(
   };
 }
 
-function rfc3339Time(value: Date): string {
-  return `${value.toISOString().slice(11, 19)}Z`;
+function rfc3339Time(value: Date, timezone: string): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+    timeZoneName: "longOffset",
+  }).formatToParts(value);
+  const part = (type: Intl.DateTimeFormatPartTypes): string =>
+    parts.find((candidate) => candidate.type === type)?.value ?? "";
+  const timeZoneName = part("timeZoneName");
+  const offset =
+    timeZoneName === "GMT" ? "Z" : timeZoneName.replace(/^GMT/, "");
+  if (!/^(?:Z|[+-]\d{2}:\d{2})$/.test(offset)) {
+    throw new Error(`cannot format RFC 3339 offset for ${timezone}`);
+  }
+  return `${part("hour")}:${part("minute")}:${part("second")}${offset}`;
 }
 
 function publicLinks(value: string | null): VenueMapLink[] {

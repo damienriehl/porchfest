@@ -154,6 +154,65 @@ function assignedPublishedFixture(
   return { seasonId: season.id, signup, performer, slot };
 }
 
+function assignedScheduleFixture(
+  runtime: PorchfestTestingRuntime,
+  options: {
+    readonly timezone: string;
+    readonly timeSlots: readonly {
+      readonly startsAt: string;
+      readonly endsAt: string;
+    }[];
+  },
+) {
+  const season = runtime.core.setup.createSeason({
+    year: CURRENT_YEAR,
+    displayName: "Synthetic Schedule Season",
+    timezone: options.timezone,
+    eventDate: `${CURRENT_YEAR}-07-18`,
+    eventCity: "Exampleton",
+    eventState: "WI",
+    timeSlots: [...options.timeSlots],
+    localityName: "Example Borough",
+    bounds: { north: 11, south: 10, east: 21, west: 20 },
+    openSignups: true,
+  }).season;
+  const signup = createVenue(
+    runtime,
+    season.id,
+    "Chronology Porch",
+    "103 Aurora Way",
+    "chronology",
+  );
+  const performers = options.timeSlots.map((_, index) =>
+    createAct(
+      runtime,
+      season.id,
+      `Chronological Act ${index + 1}`,
+      `chronology-${index + 1}`,
+    ),
+  );
+  const slots = runtime.core.seasons.ensureVenueSlots(signup.venue.id);
+  for (const [index, slot] of slots.entries()) {
+    runtime.core.seasons.assignSlot(
+      slot.id,
+      slot.version,
+      performers[index]!.act.id,
+    );
+  }
+  runtime.core.geocoding.verifyVenueCoordinate(
+    signup.venue.id,
+    { latitude: 10.5, longitude: 20.5 },
+    null,
+    signup.venue.version,
+  );
+  const locked = runtime.core.seasons.transitionSeason(
+    season.id,
+    runtime.core.seasons.getSeason(season.id).version,
+    "locked",
+  );
+  runtime.core.seasons.publishSeasonMap(locked.id, null, locked.version);
+}
+
 async function mapDocument(runtime: PorchfestRuntime) {
   const response = await runtime.request(`${PUBLIC_BASE_URL}/map/data.json`);
   const text = await response.text();
@@ -300,6 +359,53 @@ describe("public map page and data (U9)", () => {
         },
       ],
     });
+  });
+
+  it("orders entered time-slot rows by clock while preserving stable slot ids", async () => {
+    const runtime = await boot();
+    assignedScheduleFixture(runtime, {
+      timezone: "America/Chicago",
+      timeSlots: [
+        { startsAt: "14:00", endsAt: "15:00" },
+        { startsAt: "12:00", endsAt: "13:00" },
+      ],
+    });
+
+    const { document } = await mapDocument(runtime);
+
+    expect(document.event.time).toBe("12:00–3:00 PM");
+    expect(document.venues[0]?.acts.map((act) => act.slot)).toEqual(["2", "1"]);
+    expect(document.venues[0]?.acts.map((act) => act.slot_start)).toEqual([
+      "12:00:00-05:00",
+      "14:00:00-05:00",
+    ]);
+  });
+
+  it("emits sortable local intervals when a Chicago evening crosses UTC midnight", async () => {
+    const runtime = await boot();
+    assignedScheduleFixture(runtime, {
+      timezone: "America/Chicago",
+      timeSlots: [
+        { startsAt: "17:00", endsAt: "18:00" },
+        { startsAt: "18:00", endsAt: "19:00" },
+      ],
+    });
+
+    const { document } = await mapDocument(runtime);
+    const acts = document.venues[0]?.acts ?? [];
+
+    expect(acts.map((act) => [act.slot_start, act.slot_end])).toEqual([
+      ["17:00:00-05:00", "18:00:00-05:00"],
+      ["18:00:00-05:00", "19:00:00-05:00"],
+    ]);
+    expect(
+      acts.every(
+        (act) =>
+          act.slot_start !== undefined &&
+          act.slot_end !== undefined &&
+          act.slot_start < act.slot_end,
+      ),
+    ).toBe(true);
   });
 
   it("R22 serializes from the public allowlist and never emits participant PII", async () => {
