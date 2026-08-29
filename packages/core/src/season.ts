@@ -6,6 +6,7 @@ import {
   type MatchingInput,
   type RankedPairing,
 } from "./matching.js";
+import { applyContactAddressChange } from "./outbox.js";
 import {
   createRecordRepository,
   RecordConflictError,
@@ -654,12 +655,32 @@ export function createSeasonRepository(
   ): Contact {
     return db.transaction(
       (tx) => {
-        assertCorrectionLegal(getContact(id, tx).seasonId, tx);
-        return createRecordRepository(tx, options).updateContact(
+        const before = getContact(id, tx);
+        assertCorrectionLegal(before.seasonId, tx);
+        const contact = createRecordRepository(tx, options).updateContact(
           id,
           expectedVersion,
           changes,
         );
+        // KTD6/AE9: a corrected address is the one contact edit that reaches
+        // into the outbox. The person at the new address has not been written
+        // to, so their send state is cleared here, inside the same transaction
+        // as the correction, rather than by a sweep that could miss it.
+        if (
+          changes.email !== undefined &&
+          (before.email ?? "") !== (contact.email ?? "")
+        ) {
+          applyContactAddressChange(
+            tx,
+            {
+              contactId: id,
+              previousAddress: before.email,
+              newAddress: contact.email,
+            },
+            now,
+          );
+        }
+        return contact;
       },
       { behavior: "immediate" },
     );

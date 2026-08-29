@@ -1,0 +1,150 @@
+{
+  "season": {
+    "year": 2105,
+    "displayName": "Maple Ward Porchfest",
+    "timezone": "America/Chicago",
+    "eventDate": "2105-09-12",
+    "timeSlots": [
+      { "startsAt": "18:00", "endsAt": "19:00" },
+      { "startsAt": "19:00", "endsAt": "20:00" }
+    ],
+    "publicMapUrl": "https://porchfest.example.invalid/map",
+    "senderName": "The Maple Ward Porchfest crew",
+    "senderEmail": "organizers@example.invalid",
+    "openSignups": true
+  },
+  "hosts": [
+    {
+      "key": "maple",
+      "contact": {
+        "name": "Wren Hostwood",
+        "email": "wren@example.invalid",
+        "phone": "synthetic-maple-phone"
+      },
+      "venue": {
+        "title": "Maple Street Porch",
+        "address": "100 Maple Street",
+        "spaceDescription": "Front porch with a wide step",
+        "hasPower": true,
+        "rainBackup": true,
+        "notes": "Park on the north side of the street.",
+        "requestedActNames": "The Synthetic Notes",
+        "genrePreferences": "folk / jazz"
+      },
+      "gear": ["pa", "microphone"],
+      "drinks": ["water"],
+      "amenities": ["seating", "shade"]
+    },
+    {
+      "key": "oak",
+      "contact": {
+        "name": "Juniper Oakfield",
+        "email": "juniper@example.invalid",
+        "phone": null
+      },
+      "venue": {
+        "title": "Oak Avenue Stoop",
+        "address": "22 Oak Avenue",
+        "spaceDescription": "Concrete stoop beside the driveway",
+        "hasPower": false,
+        "rainBackup": false,
+        "notes": null,
+        "requestedActNames": null,
+        "genrePreferences": null
+      },
+      "gear": [],
+      "drinks": [],
+      "amenities": ["parking"]
+    },
+    {
+      "key": "birch",
+      "contact": {
+        "name": "Linden Birchwell",
+        "email": "linden@example.invalid",
+        "phone": null
+      },
+      "venue": {
+        "title": "Birch Lane Landing",
+        "address": "7 Birch Lane",
+        "spaceDescription": "Shaded side yard",
+        "hasPower": true,
+        "rainBackup": false,
+        "notes": "Happy to take a loud act.",
+        "requestedActNames": null,
+        "genrePreferences": null
+      },
+      "gear": ["extension_cord"],
+      "drinks": ["non_alcoholic"],
+      "amenities": ["restroom"]
+    }
+  ],
+  "performers": [
+    {
+      "key": "notes",
+      "contact": {
+        "name": "Ash Reedy",
+        "email": "ash@example.invalid",
+        "phone": "synthetic-notes-phone"
+      },
+      "act": {
+        "name": "The Synthetic Notes",
+        "durationMinutes": 45,
+        "requiresAmplification": true,
+        "genre": "folk",
+        "description": "Three voices and a guitar.",
+        "links": "https://bands.example.invalid/synthetic-notes",
+        "housePreference": "A porch with a roof",
+        "canLendGear": true,
+        "notes": null,
+        "sharedMemberNote": null
+      },
+      "availabilities": []
+    },
+    {
+      "key": "quartet",
+      "contact": {
+        "name": "Alder Quill",
+        "email": "alder@example.invalid",
+        "phone": null
+      },
+      "act": {
+        "name": "Alder Street Quartet",
+        "durationMinutes": 30,
+        "requiresAmplification": false,
+        "genre": "chamber",
+        "description": "Strings, unamplified.",
+        "links": "",
+        "housePreference": null,
+        "canLendGear": false,
+        "notes": null,
+        "sharedMemberNote": null
+      },
+      "availabilities": []
+    },
+    {
+      "key": "floating",
+      "contact": {
+        "name": "Sorrel Vane",
+        "email": "sorrel@example.invalid",
+        "phone": null
+      },
+      "act": {
+        "name": "Sorrel and the Vanes",
+        "durationMinutes": 40,
+        "requiresAmplification": true,
+        "genre": "rock",
+        "description": "Loud and cheerful.",
+        "links": "",
+        "housePreference": "Somewhere with power",
+        "canLendGear": false,
+        "notes": "Can only play after 7pm.",
+        "sharedMemberNote": null
+      },
+      "availabilities": []
+    }
+  ],
+  "assignments": [
+    { "host": "maple", "act": "notes", "slot": 0 },
+    { "host": "maple", "act": "quartet", "slot": 1 }
+  ]
+}
