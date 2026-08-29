@@ -4,3 +4,5 @@ packages/core/drizzle/
 # Imported canonical artifacts, kept verbatim so they stay diffable against
 # their source of record.
 docs/plans/
+packages/map/schemas/*.json
+packages/map/schemas/*.sha256
