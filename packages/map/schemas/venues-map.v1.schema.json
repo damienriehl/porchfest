@@ -14,10 +14,12 @@
   ],
   "properties": {
     "schema_version": {
-      "const": "1.2.0"
+      "type": "string",
+      "pattern": "^1\\.\\d+\\.\\d+$"
     },
     "season": {
-      "const": 2026
+      "type": "integer",
+      "minimum": 2000
     },
     "generated_from": {
       "enum": ["porchfest/tools/render.py", "packages/web/src/routes/map.ts"]
@@ -33,16 +35,20 @@
       ],
       "properties": {
         "date": {
-          "const": "2026-09-16"
+          "type": "string",
+          "format": "date"
         },
         "time": {
-          "const": "6-8 PM"
+          "type": "string",
+          "minLength": 1
         },
         "city": {
-          "const": "Saint Paul"
+          "type": "string",
+          "minLength": 1
         },
         "state": {
-          "const": "MN"
+          "type": "string",
+          "minLength": 1
         }
       }
     },
@@ -77,21 +83,17 @@
         },
         "lat": {
           "type": "number",
-          "minimum": 44.945,
-          "maximum": 45.005
+          "minimum": -90,
+          "maximum": 90
         },
         "lng": {
           "type": "number",
-          "minimum": -93.235,
-          "maximum": -93.15
+          "minimum": -180,
+          "maximum": 180
         },
         "schedule": {
           "type": "string",
-          "enum": [
-            "6–7 pm",
-            "7–8 pm",
-            "6–8 pm"
-          ]
+          "minLength": 1
         },
         "acts": {
           "type": "array",
@@ -116,19 +118,11 @@
       "properties": {
         "slot": {
           "type": "string",
-          "enum": [
-            "6-7",
-            "7-8",
-            "6-8"
-          ]
+          "minLength": 1
         },
         "slot_label": {
           "type": "string",
-          "enum": [
-            "6–7 pm",
-            "7–8 pm",
-            "6–8 pm"
-          ]
+          "minLength": 1
         },
         "name": {
           "type": "string",

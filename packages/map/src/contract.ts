@@ -1,7 +1,26 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 
-export const VENUES_MAP_SCHEMA_VERSION = "1.2.0";
+export const VENUES_MAP_SCHEMA_VERSION = "1.3.0";
+export const VENUES_MAP_MINIMUM_SCHEMA_VERSION = "1.1.0";
+
+const venuesMapVersionPattern = /^1\.\d+\.\d+$/;
+
+export function isSupportedVenuesMapVersion(version: string): boolean {
+  if (!venuesMapVersionPattern.test(version)) return false;
+
+  const versionParts = version.split(".").map(BigInt);
+  const minimumParts = VENUES_MAP_MINIMUM_SCHEMA_VERSION.split(".").map(BigInt);
+
+  for (let index = 0; index < minimumParts.length; index += 1) {
+    const versionPart = versionParts[index] ?? 0n;
+    const minimumPart = minimumParts[index] ?? 0n;
+    if (versionPart > minimumPart) return true;
+    if (versionPart < minimumPart) return false;
+  }
+
+  return true;
+}
 
 export const VENUES_MAP_GENERATED_FROM = [
   "porchfest/tools/render.py",
@@ -10,7 +29,7 @@ export const VENUES_MAP_GENERATED_FROM = [
 
 export type VenuesMapGeneratedFrom = (typeof VENUES_MAP_GENERATED_FROM)[number];
 
-export type VenueMapActSlot = "6-7" | "7-8" | "6-8";
+export type VenueMapActSlot = string;
 
 export interface VenueMapLink {
   label?: string;
@@ -37,13 +56,12 @@ export interface VenueMapVenue {
 }
 
 /**
- * The complete venues-map document shape. Only `schema_version` and
- * `generated_from` are literal-typed on purpose; widening the season, event,
- * and schedule fields beyond the schema's Goal-1 consts remains a pending owner
- * decision.
+ * The complete deployment-neutral venues-map document shape. Deployment values
+ * such as the season, event details, coordinates, schedules, and slots are
+ * checked against the same general constraints in the JSON Schema.
  */
 export interface VenuesMapDocument {
-  schema_version: typeof VENUES_MAP_SCHEMA_VERSION;
+  schema_version: string;
   season: number;
   generated_from: VenuesMapGeneratedFrom;
   event: {
