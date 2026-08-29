@@ -6,6 +6,7 @@
   var DATA_URL = "/data/venues-2026.json";
   var DATA_TIMEOUT_MS = 10000;
   var TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+  var ALL_HOURS = "";
   var TILE_ATTRIBUTION =
     '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
   var map = null;
@@ -14,7 +15,7 @@
   var venueLayoutAnimationFrameId = null;
   var venueLayoutResizeTimeoutId = null;
   var viewState = {
-    hour: "all",
+    hour: ALL_HOURS,
     genre: "all",
     sortDirection: "asc",
   };
@@ -156,7 +157,7 @@
   }
 
   function actMatchesHour(act, hour) {
-    if (hour === "all") return true;
+    if (hour === ALL_HOURS) return true;
 
     return cleanText(act && act.slot_label) === hour;
   }
@@ -201,7 +202,7 @@
   function applyView(status, listSection, venues, markerLookup) {
     var hour = viewState.hour;
     var genre = viewState.genre;
-    var hasActiveFilter = hour !== "all" || genre !== "all";
+    var hasActiveFilter = hour !== ALL_HOURS || genre !== "all";
     var matchedVenueCount = 0;
     var cardsByVenueKey = Object.create(null);
     var matchesByVenueKey = Object.create(null);
@@ -268,7 +269,7 @@
 
   function createHourControl(status, listSection, venues, markerLookup) {
     var hourControl = document.createElement("div");
-    var labels = [];
+    var labels = new Set();
     hourControl.className = "porchfest-hour-control";
     hourControl.setAttribute("role", "group");
     hourControl.setAttribute("aria-label", "Filter venues by performance hour");
@@ -276,13 +277,13 @@
     venues.forEach(function (venue) {
       venueActs(venue).forEach(function (act) {
         var label = cleanText(act && act.slot_label);
-        if (label && labels.indexOf(label) === -1) labels.push(label);
+        if (label) labels.add(label);
       });
     });
 
-    [{ label: "All", name: "Show all performance hours", value: "all" }]
+    [{ label: "All", name: "Show all performance hours", value: ALL_HOURS }]
       .concat(
-        labels.map(function (label) {
+        Array.from(labels).map(function (label) {
           return {
             label: label,
             name: "Show performances for " + label,

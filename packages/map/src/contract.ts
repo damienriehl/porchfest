@@ -5,16 +5,17 @@ export const VENUES_MAP_SCHEMA_VERSION = "1.3.0";
 export const VENUES_MAP_MINIMUM_SCHEMA_VERSION = "1.1.0";
 
 const venuesMapVersionPattern = /^1\.\d+\.\d+$/;
+const venuesMapMinimumVersionParts =
+  VENUES_MAP_MINIMUM_SCHEMA_VERSION.split(".").map(BigInt);
 
 export function isSupportedVenuesMapVersion(version: string): boolean {
   if (!venuesMapVersionPattern.test(version)) return false;
 
   const versionParts = version.split(".").map(BigInt);
-  const minimumParts = VENUES_MAP_MINIMUM_SCHEMA_VERSION.split(".").map(BigInt);
 
-  for (let index = 0; index < minimumParts.length; index += 1) {
+  for (let index = 0; index < venuesMapMinimumVersionParts.length; index += 1) {
     const versionPart = versionParts[index] ?? 0n;
-    const minimumPart = minimumParts[index] ?? 0n;
+    const minimumPart = venuesMapMinimumVersionParts[index] ?? 0n;
     if (versionPart > minimumPart) return true;
     if (versionPart < minimumPart) return false;
   }

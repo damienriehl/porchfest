@@ -49,6 +49,12 @@ const FALLBACK =
   "The interactive map could not be loaded. Please refresh the page and try again.";
 const EMPTY_STATE =
   "The 2026 lineup is not on the interactive map yet. Please check back soon.";
+const ALL_HOURS = "";
+const DEFAULT_SLOT_LABELS_BY_ID = {
+  "6-7": "6–7 pm",
+  "7-8": "7–8 pm",
+  "6-8": "6–8 pm",
+};
 
 class TestStyle {
   constructor() {
@@ -483,13 +489,8 @@ function venue(overrides = {}) {
     },
     overrides,
   );
-  const goalOneSlotLabels = {
-    "6-7": "6–7 pm",
-    "7-8": "7–8 pm",
-    "6-8": "6–8 pm",
-  };
   result.acts = result.acts.map((act) => ({
-    slot_label: goalOneSlotLabels[act.slot] || act.slot,
+    slot_label: DEFAULT_SLOT_LABELS_BY_ID[act.slot] || act.slot,
     ...act,
   }));
   return result;
@@ -1519,6 +1520,38 @@ test("derives hour filters from first-seen non-Goal-1 slot labels", async () => 
   assertViewClasses(run.nodes.list.children[1], "match");
 });
 
+test('keeps a payload slot label named "all" distinct from the All option', async () => {
+  const venues = [
+    venue({
+      title: "Literal All Stage",
+      acts: [{ slot: "slot-all", slot_label: "all", name: "Literal All Act" }],
+    }),
+    venue({
+      title: "Evening Stage",
+      lat: 44.99,
+      acts: [
+        { slot: "slot-evening", slot_label: "evening", name: "Evening Act" },
+      ],
+    }),
+  ];
+  const run = await runScript({
+    fetch: () => Promise.resolve(response({ venues })),
+  });
+  const buttons = run.nodes.mount
+    .querySelector(".porchfest-hour-control")
+    .querySelectorAll("button");
+
+  assert.deepEqual(
+    buttons.map((button) => button.textContent),
+    ["All", "all", "evening"],
+  );
+
+  buttons[1].dispatchEvent({ type: "click" });
+  assert.equal(run.testApi.getViewState().hour, "all");
+  assertViewClasses(run.nodes.list.children[0], "match");
+  assertViewClasses(run.nodes.list.children[1], "collapsed");
+});
+
 test("hour buttons are accessible native buttons that update state and reapply the view", async () => {
   const venues = [
     venue({ title: "Early", acts: [{ slot: "6-7", name: "Early Act" }] }),
@@ -1554,7 +1587,7 @@ test("hour buttons are accessible native buttons that update state and reapply t
 
   assert.equal(buttons[0].textContent, "All");
   buttons[0].dispatchEvent({ type: "click" });
-  assert.equal(run.testApi.getViewState().hour, "all");
+  assert.equal(run.testApi.getViewState().hour, ALL_HOURS);
   assert.equal(buttons[0].getAttribute("aria-pressed"), "true");
   run.nodes.list.children.forEach((card) => assertViewClasses(card, "neutral"));
 });
@@ -1974,7 +2007,7 @@ test("a genre-less act is collapsed under an active genre filter", async () => {
   const card = run.nodes.list.children[0];
   const markerElement = run.leaflet.records.markers[0].element;
 
-  applyFilters(run, venues, "all", "Folk");
+  applyFilters(run, venues, ALL_HOURS, "Folk");
 
   assertViewClasses(card, "collapsed");
   assertViewClasses(markerElement, "dimmed");
@@ -2084,7 +2117,7 @@ test("returning both facets to All removes every view class", async () => {
   });
 
   applyFilters(run, venues, "6–7 pm", "Folk");
-  applyFilters(run, venues, "all", "all");
+  applyFilters(run, venues, ALL_HOURS, "all");
 
   run.nodes.list.children.forEach((card) => assertViewClasses(card, "neutral"));
   run.leaflet.records.markers.forEach((marker) =>
