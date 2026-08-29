@@ -16,6 +16,7 @@ import {
   type OutboxWave,
   type OutboxWaveKind,
   type Season,
+  type SendReport,
 } from "@porchfest/core";
 import type { Context } from "hono";
 import { readFileSync } from "node:fs";
@@ -24,12 +25,12 @@ import type { RouteRegistry } from "../router/registry.js";
 import {
   ADMIN_SCRIPT_PATH,
   renderOutboxMessagePage,
-  renderOutboxSendResultPage,
   renderOutboxWavePage,
   renderSeasonOutboxPage,
   STANDARD_WAVE_KINDS,
   type OutboxContact,
   type ProviderStatus,
+  type SendSummary,
   type WaveSummary,
 } from "../views/outbox.js";
 import { redirect, unauthorized } from "./admin-http.js";
@@ -38,8 +39,14 @@ export const SEASON_OUTBOX_PATH = "/admin/seasons/:id/outbox";
 export const OUTBOX_GENERATE_PATH = "/admin/seasons/:id/outbox/generate";
 export const OUTBOX_AD_HOC_PATH = "/admin/seasons/:id/outbox/ad-hoc";
 export const OUTBOX_WAVE_PATH = "/admin/outbox/waves/:id";
+/**
+ * One path for the whole selection. Send and both exports post here and branch
+ * on `intent`, because a CSRF token is minted per route pattern and one form
+ * cannot carry two of them - the old `formmethod="get"` export buttons put the
+ * send route's token into the URL (and the query string had a length ceiling).
+ * R11 still holds: nothing transmits without the explicit `intent=send`.
+ */
 export const OUTBOX_SEND_PATH = "/admin/outbox/waves/:id/send";
-export const OUTBOX_EXPORT_PATH = "/admin/outbox/waves/:id/export";
 export const OUTBOX_MESSAGE_PATH = "/admin/outbox/messages/:id";
 /**
  * A bare `:id.eml` would swallow `/admin/outbox/messages/7` as well, so the
@@ -49,6 +56,9 @@ export const OUTBOX_MESSAGE_EML_PATH =
   "/admin/outbox/messages/:id{[0-9]+\\.eml}";
 
 const MESSAGE_SEPARATOR = "----- next message -----";
+
+/** Any date works as an mbox `From ` stamp; a fixed one keeps exports stable. */
+const MBOX_STAMP = "Thu Jan  1 00:00:00 1970";
 
 const adminScript = readFileSync(
   new URL("../../assets/admin.js", import.meta.url),
@@ -210,8 +220,10 @@ export function registerOutboxRoutes(options: OutboxRouteOptions): void {
       const found = findWave(options.core, context.req.param("id"));
       if (!found) return notFound("outbox wave");
       const generated = messageCount(context.req.query("generated"));
+      const summary = sendSummaryFromQuery(context);
       return wavePage(options, found.season, found.wave, 200, undefined, {
         ...(generated === null ? {} : { generatedCount: generated }),
+        ...(summary === null ? {} : { sendSummary: summary }),
       });
     },
   });
@@ -225,6 +237,7 @@ export function registerOutboxRoutes(options: OutboxRouteOptions): void {
       const found = findWave(options.core, context.req.param("id"));
       if (!found) return notFound("outbox wave");
       const fields = await readFields(context);
+      const format = exportFormat(first(fields, "intent"));
       const selection = selectedMessages(fields);
       if (selection.messageIds.length === 0) {
         return wavePage(
@@ -232,8 +245,37 @@ export function registerOutboxRoutes(options: OutboxRouteOptions): void {
           found.season,
           found.wave,
           400,
-          "Select at least one message before sending.",
+          format === null
+            ? "Select at least one message before sending."
+            : "Select at least one message before exporting.",
+          {
+            errorHeading:
+              format === null ? "Nothing was sent" : "Nothing was exported",
+          },
         );
+      }
+
+      if (format !== null) {
+        let exported;
+        try {
+          exported = options.core.outbox.exportSelection({
+            waveId: found.wave.id,
+            messageIds: selection.messageIds,
+          });
+        } catch (error) {
+          const refusal = mutationRefusal(error);
+          if (refusal)
+            return wavePage(
+              options,
+              found.season,
+              found.wave,
+              refusal.status,
+              refusal.message,
+              { errorHeading: "Nothing was exported" },
+            );
+          throw error;
+        }
+        return exportResponse(found.wave.id, format, exported);
       }
 
       let report;
@@ -252,61 +294,20 @@ export function registerOutboxRoutes(options: OutboxRouteOptions): void {
             found.wave,
             refusal.status,
             refusal.message,
+            {
+              errorHeading: "This send did not finish",
+              errorNote:
+                "Some messages may already have gone out. Reload this wave and read each recipient's state before trying again.",
+            },
           );
         throw error;
       }
-      return new Response(
-        renderOutboxSendResultPage({
-          season: found.season,
-          wave: found.wave,
-          report,
-        }),
-        { status: 200, headers: adminHeaders() },
+      // 303 rather than a rendered 200: reloading a rendered send result
+      // re-posts the identical body, and a partially sent wave would accept it
+      // and transmit again with nobody pressing send (R11).
+      return redirect(
+        `/admin/outbox/waves/${found.wave.id}?${sendSummaryQuery(report)}`,
       );
-    },
-  });
-
-  options.routes.register({
-    method: "GET",
-    path: OUTBOX_EXPORT_PATH,
-    tier: "organizer",
-    handler: (context: Context) => {
-      if (!currentOrganizer(options.core, context))
-        return options.routes.organizerGetRefusal(context);
-      const found = findWave(options.core, context.req.param("id"));
-      if (!found) return notFound("outbox wave");
-      const messageIds = context.req
-        .queries("message")
-        ?.map((value) => positiveId(value))
-        .filter((value): value is number => value !== null);
-      if (!messageIds || messageIds.length === 0) {
-        return exportRefusal("Select at least one message before exporting.");
-      }
-      const asEml = context.req.query("format") === "eml";
-      let exported;
-      try {
-        exported = options.core.outbox.exportSelection({
-          waveId: found.wave.id,
-          messageIds,
-        });
-      } catch (error) {
-        if (error instanceof OutboxLifecycleError)
-          return exportRefusal(error.message);
-        throw error;
-      }
-      const body = exported
-        .map((message) =>
-          asEml
-            ? message.eml
-            : `Subject: ${message.subject}\n\n${message.text}\n`,
-        )
-        .join(`\n${MESSAGE_SEPARATOR}\n`);
-      return new Response(body, {
-        status: 200,
-        headers: {
-          ...adminHeaders({ "content-type": "text/plain; charset=UTF-8" }),
-        },
-      });
     },
   });
 
@@ -493,7 +494,12 @@ function wavePage(
   wave: OutboxWave,
   status: number,
   error?: string,
-  extra: { readonly generatedCount?: number } = {},
+  extra: {
+    readonly generatedCount?: number;
+    readonly sendSummary?: SendSummary;
+    readonly errorHeading?: string;
+    readonly errorNote?: string;
+  } = {},
 ): Response {
   return new Response(
     renderOutboxWavePage({
@@ -613,6 +619,89 @@ function positiveId(value: string): number | null {
 function versionOf(value: string): number | null {
   const version = Number(value);
   return Number.isSafeInteger(version) && version >= 1 ? version : null;
+}
+
+/** Only these two intents export; everything else is a send (R11). */
+function exportFormat(intent: string): "text" | "eml" | null {
+  if (intent === "export-text") return "text";
+  if (intent === "export-eml") return "eml";
+  return null;
+}
+
+/**
+ * A text export is a readable bundle; an .eml export is an mbox, which mail
+ * clients import directly. Both are attachments - the browser painted raw MIME
+ * into the window when the .eml bundle was served inline as text/plain.
+ */
+function exportResponse(
+  waveId: number,
+  format: "text" | "eml",
+  exported: readonly {
+    readonly subject: string;
+    readonly text: string;
+    readonly eml: string;
+  }[],
+): Response {
+  const body =
+    format === "eml"
+      ? exported.map((message) => mboxEntry(message.eml)).join("")
+      : exported
+          .map((message) => `Subject: ${message.subject}\n\n${message.text}\n`)
+          .join(`\n${MESSAGE_SEPARATOR}\n`);
+  const contentType =
+    format === "eml" ? "application/mbox" : "text/plain; charset=UTF-8";
+  const filename =
+    format === "eml"
+      ? `outbox-wave-${waveId}.mbox`
+      : `outbox-wave-${waveId}.txt`;
+  return new Response(body, {
+    status: 200,
+    headers: {
+      ...adminHeaders({ "content-type": contentType }),
+      "content-disposition": `attachment; filename="${filename}"`,
+    },
+  });
+}
+
+/** mboxo: a `From ` separator, and any body line that looks like one is quoted. */
+function mboxEntry(eml: string): string {
+  const quoted = eml
+    .split("\n")
+    .map((line) => (line.startsWith("From ") ? `>${line}` : line))
+    .join("\n");
+  return `From porchfest@localhost ${MBOX_STAMP}\n${quoted}\n\n`;
+}
+
+/**
+ * `recorded: false` means the outcome happened but nothing wrote it down, so it
+ * is counted on its own rather than folded into sent/failed/skipped - the wave
+ * page will show that recipient as "not sent yet" and the two must agree.
+ */
+function sendSummaryQuery(report: SendReport): string {
+  const counts = { sent: 0, failed: 0, skipped: 0, unrecorded: 0 };
+  for (const outcome of report.recipients) {
+    if (!outcome.recorded) counts.unrecorded += 1;
+    else counts[outcome.status] += 1;
+  }
+  return new URLSearchParams({
+    sent: String(counts.sent),
+    failed: String(counts.failed),
+    skipped: String(counts.skipped),
+    unrecorded: String(counts.unrecorded),
+    attempted: String(report.attempted),
+  }).toString();
+}
+
+function sendSummaryFromQuery(context: Context): SendSummary | null {
+  const sent = messageCount(context.req.query("sent"));
+  if (sent === null) return null;
+  return {
+    sent,
+    failed: messageCount(context.req.query("failed")) ?? 0,
+    skipped: messageCount(context.req.query("skipped")) ?? 0,
+    unrecorded: messageCount(context.req.query("unrecorded")) ?? 0,
+    attempted: messageCount(context.req.query("attempted")) ?? 0,
+  };
 }
 
 function findSeason(

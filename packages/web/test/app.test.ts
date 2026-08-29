@@ -156,11 +156,6 @@ describe("application scaffold", () => {
       },
       {
         method: "GET",
-        path: "/admin/outbox/waves/:id/export",
-        tier: "organizer",
-      },
-      {
-        method: "GET",
         path: "/admin/outbox/messages/:id{[0-9]+\\.eml}",
         tier: "organizer",
       },

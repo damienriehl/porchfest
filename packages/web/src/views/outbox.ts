@@ -5,14 +5,14 @@
 // all reachable without a provider; the send control only exists when one is
 // configured (AE1), and a sent message renders as history rather than as a form.
 //
-// One selection, two destinations. The list lives in a single form so an
-// organizer ticks messages once; "Send selected" posts it, and the export
-// buttons re-aim the same selection at the export route with
-// `formmethod="get"`. Export is a read - it writes nothing and transmits
-// nothing - so GET is the honest method, and it sidesteps the fact that a CSRF
-// token is minted per route pattern: one form cannot carry two of them. The
-// format rides on the submit button's own name/value, because a GET submission
-// discards the query string written into `formaction`.
+// One selection, three destinations, one path. The list lives in a single form
+// so an organizer ticks messages once, and all three buttons POST to the send
+// route carrying `intent=send | export-text | export-eml`. The earlier shape
+// aimed the export buttons at a GET route with `formmethod="get"`, which
+// published the send route's CSRF token in the URL (and in history, proxy logs
+// and screenshots) and put every message's version into the query string.
+// Posting both intents to one path needs one token, writes nothing to the URL,
+// and keeps R11: transmission requires the explicit `intent=send`.
 
 import {
   outboxWaveKinds,
@@ -23,7 +23,6 @@ import {
   type OutboxWaveKind,
   type QueueItem,
   type Season,
-  type SendReport,
 } from "@porchfest/core";
 import { escapeHtml, renderOrganizerPage } from "./signup-view.js";
 
@@ -91,6 +90,19 @@ export interface ProviderStatus {
   readonly name: string;
 }
 
+/**
+ * What a finished send is reported as. `unrecorded` is broken out because those
+ * outcomes were never persisted: the wave list below still reads "not sent yet"
+ * for those recipients, and the banner has to say so rather than count them.
+ */
+export interface SendSummary {
+  readonly sent: number;
+  readonly failed: number;
+  readonly skipped: number;
+  readonly unrecorded: number;
+  readonly attempted: number;
+}
+
 export interface WaveSummary {
   readonly wave: OutboxWave;
   readonly counts: Readonly<Record<OutboxMessageState, number>>;
@@ -103,9 +115,13 @@ function providerLine(provider: ProviderStatus): string {
     : `<p class="help">No email provider configured — messages can be copied or exported.</p>`;
 }
 
-function errorSummary(heading: string, message: string | undefined): string {
+function errorSummary(
+  heading: string,
+  message: string | undefined,
+  note?: string,
+): string {
   if (!message) return "";
-  return `<section class="error-summary" role="alert" tabindex="-1"><h2>${escapeHtml(heading)}</h2><p>${escapeHtml(message)}</p></section>`;
+  return `<section class="error-summary" role="alert" tabindex="-1"><h2>${escapeHtml(heading)}</h2><p>${escapeHtml(message)}</p>${note ? `<p>${escapeHtml(note)}</p>` : ""}</section>`;
 }
 
 function confirmation(message: string | undefined): string {
@@ -249,7 +265,10 @@ export function renderOutboxWavePage(options: {
   readonly provider: ProviderStatus;
   readonly csrf: { readonly send: string; readonly generate: string };
   readonly generatedCount?: number;
+  readonly sendSummary?: SendSummary;
   readonly error?: string;
+  readonly errorHeading?: string;
+  readonly errorNote?: string;
 }): string {
   const unsent = options.messages.filter(
     (message) => message.sentAt === null && message.state !== "sent",
@@ -288,8 +307,9 @@ export function renderOutboxWavePage(options: {
       <p class="lede"><a href="/admin/seasons/${options.season.id}/outbox">Back to the outbox</a></p>
       ${providerLine(options.provider)}
     </header>
-    ${errorSummary("Nothing was sent", options.error)}
+    ${errorSummary(options.errorHeading ?? "Nothing was sent", options.error, options.errorNote)}
     ${confirmation(options.generatedCount === undefined ? undefined : `${options.generatedCount} ${options.generatedCount === 1 ? "message is" : "messages are"} ready for review.`)}
+    ${sendBanner(options.sendSummary)}
     <section aria-labelledby="outbox-regenerate-title">
       <h2 id="outbox-regenerate-title">Regenerate</h2>
       ${regenerate}
@@ -306,16 +326,26 @@ export function renderOutboxWavePage(options: {
         <p class="help">Exporting never transmits anything; it hands you the text and the .eml files to send yourself.</p>
         ${
           options.provider.configured
-            ? `<button class="primary-action" type="submit">Send selected</button>`
+            ? `<button class="primary-action" type="submit" name="intent" value="send">Send selected</button>`
             : `<p class="help">Sending is unavailable until an email provider is configured.</p>`
         }
-        <button class="secondary-action" type="submit" name="format" value="text" formmethod="get" formaction="/admin/outbox/waves/${options.wave.id}/export">Export selected</button>
-        <button class="secondary-action" type="submit" name="format" value="eml" formmethod="get" formaction="/admin/outbox/waves/${options.wave.id}/export">Export selected as .eml</button>
+        <button class="secondary-action" type="submit" name="intent" value="export-text">Export selected</button>
+        <button class="secondary-action" type="submit" name="intent" value="export-eml">Export selected as .eml</button>
       </form>`
       }
     </section>
     <script src="${ADMIN_SCRIPT_PATH}" defer></script>`,
   );
+}
+
+function sendBanner(summary: SendSummary | undefined): string {
+  if (!summary) return "";
+  const counts = `${summary.sent} sent, ${summary.failed} failed, ${summary.skipped} skipped of ${summary.attempted} attempted.`;
+  const unrecorded =
+    summary.unrecorded === 0
+      ? ""
+      : `<p>${summary.unrecorded} ${summary.unrecorded === 1 ? "outcome was" : "outcomes were"} not recorded — ${summary.unrecorded === 1 ? "that recipient still needs" : "those recipients still need"} attention and read “not sent yet” below.</p>`;
+  return `<section class="confirmation-card" role="status"><p>${escapeHtml(counts)}</p>${unrecorded}<p>Every recipient's own outcome is listed with its message below.</p></section>`;
 }
 
 function renderMessageCard(season: Season, message: OutboxMessageView): string {
@@ -447,40 +477,6 @@ export function renderOutboxMessagePage(options: {
       <h2 id="outbox-history-title">Recipients and send history</h2>
       <dl class="submission-list">${history || '<div class="submission-row"><dt>No recipients</dt><dd>Nobody on this message has an address on file.</dd></div>'}</dl>
       <p class="help"><a href="/admin/outbox/messages/${message.id}.eml">Download this message as .eml</a></p>
-    </section>`,
-  );
-}
-
-export function renderOutboxSendResultPage(options: {
-  readonly season: Season;
-  readonly wave: OutboxWave;
-  readonly report: SendReport;
-}): string {
-  const rows = options.report.recipients
-    .map(
-      (outcome) => `<div class="submission-row">
-        <dt>${escapeHtml(outcome.address)}</dt>
-        <dd>${escapeHtml(OUTCOME_LABELS[outcome.status] ?? outcome.status)}${outcome.reason ? ` — ${escapeHtml(outcome.reason)}` : ""}</dd>
-      </div>`,
-    )
-    .join("");
-
-  return renderOrganizerPage(
-    "Send results",
-    `    <header class="signup-header">
-      <p class="eyebrow">${escapeHtml(options.season.displayName)} · ${escapeHtml(options.wave.label)}</p>
-      <h1>Send results</h1>
-      <p class="lede">${options.report.sent} sent, ${options.report.skipped} skipped, ${options.report.failed} failed of ${options.report.attempted} attempted.</p>
-      <p class="lede"><a href="/admin/outbox/waves/${options.wave.id}">Back to the wave</a></p>
-    </header>
-    <section aria-labelledby="outbox-results-title">
-      <h2 id="outbox-results-title">Every recipient</h2>
-      ${
-        options.report.recipients.length === 0
-          ? `<p class="help">Nothing was attempted: every selected message had already been sent.</p>`
-          : `<dl class="submission-list">${rows}</dl>`
-      }
-      <p class="help">A failed or skipped recipient keeps no send stamp, so the next send tries them again.</p>
     </section>`,
   );
 }

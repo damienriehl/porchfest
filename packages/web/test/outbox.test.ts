@@ -163,6 +163,21 @@ async function boot(options: { email?: EmailPort } = {}) {
   return { runtime, cookie, season, venues, acts };
 }
 
+/** Just enough of a checkbox for `admin.js` to run against. */
+function makeBox() {
+  const listeners: Record<string, (() => void)[]> = {};
+  return {
+    checked: false,
+    indeterminate: false,
+    addEventListener(name: string, handler: () => void) {
+      (listeners[name] ??= []).push(handler);
+    },
+    fire(name: string) {
+      for (const handler of listeners[name] ?? []) handler();
+    },
+  };
+}
+
 function slug(value: string): string {
   return value.toLowerCase().replaceAll(" ", "-");
 }
@@ -528,29 +543,68 @@ describe("organizer outbox screens", () => {
     );
     expect(html).toContain("Export selected");
 
-    const selection = messages
-      .map((message) => `message=${message.id}`)
-      .join("&");
-    const exported = await get(
+    const sendCsrf = csrf(html, `/admin/outbox/waves/${waveId}/send`);
+    // One form, one token, one path: the export buttons post their intent
+    // rather than re-aiming the selection at a GET route, so no CSRF token and
+    // no per-message version ever reaches the URL.
+    expect(html).toContain('name="intent" value="export-text"');
+    expect(html).not.toContain("formmethod=");
+    expect(html).not.toContain("/export");
+
+    const exportBody = (intent: string) => {
+      const body = new URLSearchParams({ _csrf: sendCsrf, intent });
+      // The same id twice must export once (a selection is a set).
+      body.append("message", String(messages[0]!.id));
+      for (const message of messages)
+        body.append("message", String(message.id));
+      return body;
+    };
+
+    const exported = await post(
       runtime,
-      `/admin/outbox/waves/${waveId}/export?format=text&${selection}`,
+      `/admin/outbox/waves/${waveId}/send`,
       cookie,
+      exportBody("export-text"),
     );
     expect(exported.status).toBe(200);
     expect(exported.headers.get("content-type")).toContain("text/plain");
     expect(exported.headers.get("cache-control")).toBe("no-store, private");
+    expect(exported.headers.get("content-disposition")).toContain("attachment");
     const text = await exported.text();
     for (const message of messages) expect(text).toContain(message.textBody!);
     expect(text.split("----- next message -----")).toHaveLength(4);
 
-    const emlBundle = await (
-      await get(
-        runtime,
-        `/admin/outbox/waves/${waveId}/export?format=eml&${selection}`,
-        cookie,
-      )
-    ).text();
+    const emlResponse = await post(
+      runtime,
+      `/admin/outbox/waves/${waveId}/send`,
+      cookie,
+      exportBody("export-eml"),
+    );
+    expect(emlResponse.status).toBe(200);
+    expect(emlResponse.headers.get("content-type")).toContain(
+      "application/mbox",
+    );
+    expect(emlResponse.headers.get("content-disposition")).toContain(
+      'filename="outbox-wave-',
+    );
+    const emlBundle = await emlResponse.text();
     expect(emlBundle).toContain("MIME-Version: 1.0");
+    expect(emlBundle.split(/^From porchfest@localhost /m)).toHaveLength(5);
+
+    // No provider is configured, and nothing about an export may reach one.
+    const refused = await post(
+      runtime,
+      `/admin/outbox/waves/${waveId}/send`,
+      cookie,
+      new URLSearchParams({ _csrf: sendCsrf, intent: "export-text" }),
+    );
+    expect(refused.status).toBe(400);
+    const refusedHtml = await refused.text();
+    expect(refusedHtml).toContain("Nothing was exported");
+    expect(refusedHtml).toContain(
+      "Select at least one message before exporting.",
+    );
+    expect(refusedHtml).toContain("Review and send");
 
     const single = await get(
       runtime,
@@ -633,9 +687,18 @@ describe("organizer outbox screens", () => {
       cookie,
       body,
     );
-    expect(result.status).toBe(200);
-    const resultHtml = await result.text();
-    expect(resultHtml).toContain("6 sent");
+    // 303, not a rendered 200: a reload of a rendered result re-posts the same
+    // body, and a partially sent wave would transmit again unprompted (R11).
+    expect(result.status).toBe(303);
+    const location = result.headers.get("location") ?? "";
+    expect(location).toContain(`/admin/outbox/waves/${waveId}?`);
+    const summary = new URLSearchParams(location.split("?")[1] ?? "");
+    expect(summary.get("sent")).toBe("6");
+    expect(summary.get("failed")).toBe("0");
+    expect(summary.get("unrecorded")).toBe("0");
+
+    const resultHtml = await (await get(runtime, location, cookie)).text();
+    expect(resultHtml).toContain("6 sent, 0 failed, 0 skipped of 6 attempted.");
     expect(resultHtml).toContain("maple-street-porch@example.invalid");
 
     expect(port.deliveries).toHaveLength(6);
@@ -680,8 +743,13 @@ describe("organizer outbox screens", () => {
       }),
     );
 
-    expect(result.status).toBe(200);
-    const html = await result.text();
+    expect(result.status).toBe(303);
+    const location = result.headers.get("location") ?? "";
+    expect(
+      new URLSearchParams(location.split("?")[1] ?? "").get("failed"),
+    ).toBe("2");
+    const html = await (await get(runtime, location, cookie)).text();
+    expect(html).toContain("0 sent, 2 failed, 0 skipped of 2 attempted.");
     expect(html).toContain("Failed");
     expect(html).toContain("mailbox unavailable");
 
@@ -764,6 +832,89 @@ describe("organizer outbox screens", () => {
     expect(lifecycle).toContain(`/admin/seasons/${season.id}/outbox`);
   });
 
+  it("escapes markup that reaches a rendered body, preview and .eml", async () => {
+    const { runtime, cookie, season } = await boot();
+    // A host can type anything into a porch title, and it flows through the
+    // match template into every rendered body.
+    const hostile = '<script>alert("x")</script> "Porch"';
+    const venue = runtime.core.seasons.createHostSignup({
+      seasonId: season.id,
+      contact: {
+        name: "Hostile Title Host",
+        email: "hostile-title@example.invalid",
+      },
+      venue: {
+        title: hostile,
+        address: "99 Script Street",
+        spaceDescription: hostile,
+        hasPower: true,
+        rainBackup: false,
+        requestedActNames: null,
+        genrePreferences: "Folk",
+        notes: null,
+      },
+      gear: [],
+      drinks: [],
+      amenities: [],
+    });
+    const act = runtime.core.seasons.createPerformerSignup({
+      seasonId: season.id,
+      contact: {
+        name: "Hostile Title Act Contact",
+        email: "hostile-title-act@example.invalid",
+      },
+      act: {
+        name: "The Escapers",
+        durationMinutes: 45,
+        requiresAmplification: false,
+        genre: "Folk",
+        description: "The Escapers description",
+        links: "",
+        housePreference: null,
+        sharedMemberNote: null,
+        canLendGear: false,
+        notes: null,
+      },
+      availabilities: [],
+    });
+    const slot = runtime.core.seasons.ensureVenueSlots(venue.venue.id)[0]!;
+    runtime.core.seasons.assignSlot(slot.id, slot.version, act.act.id);
+
+    const { waveId, messages } = await generateMatchWave(
+      runtime,
+      cookie,
+      season.id,
+    );
+    const target = messages.find((message) =>
+      (message.textBody ?? "").includes(hostile),
+    );
+    expect(target).toBeDefined();
+    expect(target!.htmlBody).toContain("&lt;script&gt;");
+    expect(target!.htmlBody).not.toContain("<script>");
+
+    const wave = await (
+      await get(runtime, `/admin/outbox/waves/${waveId}`, cookie)
+    ).text();
+    expect(wave).toContain("&lt;script&gt;");
+    expect(wave).not.toContain("<script>alert");
+
+    // The HTML preview is the one raw interpolation on this surface. It is safe
+    // only because every writer of `htmlBody` escapes first; this is the test
+    // that fails if that ever stops being true.
+    const messagePage = await (
+      await get(runtime, `/admin/outbox/messages/${target!.id}`, cookie)
+    ).text();
+    expect(messagePage).toContain("&lt;script&gt;");
+    expect(messagePage).not.toContain("<script>alert");
+
+    // The .eml carries both parts, so the plain-text part holds the raw
+    // characters by design; the HTML part must not.
+    const eml = await (
+      await get(runtime, `/admin/outbox/messages/${target!.id}.eml`, cookie)
+    ).text();
+    expect(eml).toContain("&lt;script&gt;");
+  });
+
   it("serves the select-all helper script that no-ops without its container", async () => {
     const { runtime, cookie, season } = await boot();
     const { waveId } = await generateMatchWave(runtime, cookie, season.id);
@@ -777,6 +928,38 @@ describe("organizer outbox screens", () => {
     const script = await get(runtime, "/admin/assets/admin.js");
     expect(script.status).toBe(200);
     expect(script.headers.get("content-type")).toContain("text/javascript");
-    expect(await script.text()).toContain("outbox-selection");
+    const source = await script.text();
+    expect(source).toContain("outbox-selection");
+
+    // KTD3 is in the test's name, so the test executes the script rather than
+    // reading it: without its container it must touch nothing and throw
+    // nothing, and deleting the guard has to turn this red.
+    const run = new Function("document", source) as (document: unknown) => void;
+    expect(() => {
+      run({
+        getElementById: () => null,
+      });
+    }).not.toThrow();
+
+    const boxes = [makeBox(), makeBox()];
+    const toggle = makeBox();
+    run({
+      getElementById: (id: string) =>
+        id === "outbox-selection"
+          ? {
+              querySelector: () => toggle,
+              querySelectorAll: () => boxes,
+            }
+          : null,
+    });
+    toggle.checked = true;
+    toggle.fire("change");
+    expect(boxes.map((box) => box.checked)).toEqual([true, true]);
+
+    // Unticking one message must stop the master box claiming "every unsent".
+    boxes[0]!.checked = false;
+    boxes[0]!.fire("change");
+    expect(toggle.checked).toBe(false);
+    expect(toggle.indeterminate).toBe(true);
   });
 });
