@@ -277,3 +277,153 @@ merge` with no actionable findings. Its attempted external adversarial launch
 was denied before egress by the environment safety reviewer, so the adversarial
 lens ran locally. No required work was left undone. Nothing was pushed, rebased,
 amended, or merged.
+
+## v1.3.0 (2026-08-29)
+
+### Outcome and changes
+
+This pass implements all three answers from
+`porchfest-2026-08-29-1558-u9-map-contract-decisions`:
+
+- **q1:** `packages/map` now depends on Ajv 8 and `ajv-formats`. The new
+  `validateVenuesMapDocument` uses draft 2020-12, loads only the digest-verified
+  schema, compiles it once on first use, caches the validator, returns typed
+  success documents or stable path/message errors, and applies the code-level
+  minimum-version check after JSON-Schema validation.
+- **q2:** `venues-map.v1.schema.json` is deployment-neutral at v1.3.0. Season,
+  event, coordinate, schedule, slot, and slot-label consts/enums are now the
+  requested types and general bounds. Provenance remains the unchanged
+  two-value enum, and the existing required lists, definitions, and
+  `additionalProperties` rules remain strict.
+- **q3:** `schema_version` now accepts the v1 semantic-version pattern. The
+  exported minimum is `1.1.0`, enforced by the dependency-free
+  `isSupportedVenuesMapVersion` comparison.
+
+The browser hour control now derives first-seen, distinct `slot_label` values
+from the document and adds its own All option. Filtering compares the exact raw
+label string. The exact-string rule also keeps a schema-valid label named
+`all`, labels that differ only in surrounding whitespace, and a whitespace-only
+label distinct from the internal All sentinel.
+
+Tests cover v1.1.0 producer compatibility, deployment-neutral v1.3.0 values,
+every requested rejection and failing path, one-time compilation, dynamic
+two-slot labels, exact de-duplication, raw-label identity, and malformed date
+format enforcement. All fixture addresses and coordinates are synthetic.
+
+The schema README documents the v1.3.0 changes and propagation: the Goal-1
+producer emits `schema_version: "1.3.0"` while retaining its deployment values;
+the site copies the schema bytes to `static/data/` and re-pins; and the site's
+`tools/verify-map-data.py` needs no change when it validates against that copied
+schema.
+
+### Schema digest
+
+The schema was re-pinned from its exact bytes after the schema content edit:
+
+```text
+fe161c1a397f4174741a9dbc5a77948888a59f3d0b3ce218dca597cbe80de6a9  venues-map.v1.schema.json
+```
+
+### Dependency and lockfile delta
+
+The approved install was run under Node v24.13.0. The final direct dependencies
+in `packages/map/package.json` are `ajv@^8.20.0` and
+`ajv-formats@^3.0.1`. The lockfile added entries for:
+
+- `ajv` 8.20.0 for the map workspace and the optional `ajv-formats` peer
+  resolution;
+- `ajv-formats` 3.0.1;
+- `json-schema-traverse` 1.0.0 under both Ajv resolutions;
+- `fast-uri` 3.1.6; and
+- `require-from-string` 2.0.2.
+
+The first unversioned install resolved the repository's existing Ajv 6, which
+does not provide `ajv/dist/2020`; the install was corrected with the approved
+Ajv 8 major. The final dependency tree keeps ESLint's pre-existing Ajv 6 and
+gives `packages/map` Ajv 8.
+
+As anticipated in the task, npm also rewrote unrelated lockfile metadata. It
+normalized `peer`, `dev`, and `optional` flags on existing entries, made the
+shared `fast-deep-equal` entry non-dev, and removed an extraneous nested
+`node_modules/vitest/node_modules/esbuild` block. Those npm-generated changes
+were reported rather than hand-edited.
+
+### Simplification and review
+
+The required reuse, quality, and efficiency simplification pass made three
+small improvements: first-seen labels use a `Set`, the test fixture's default
+slot-label mapping is shared, and the minimum version components are computed
+once. It also found and fixed a collision between the All sentinel and a valid
+payload label named `all`.
+
+Structured review run `20260829-122934-903b0111` covered correctness, testing,
+maintainability, API contract, security, and local adversarial lenses. It found
+one behavioral defect: display normalization was also changing filter identity,
+so contract-valid labels that differed only by whitespace collapsed together.
+Independent validation confirmed the finding. The implementation now keeps raw
+identity for de-duplication and comparison and sanitizes only display text. The
+review also prompted the malformed-date negative test. Focused verification was
+2 files and 97 tests passing, plus lint with no errors.
+
+The external cross-model launch was denied before egress, so no repository code
+left the machine; the required adversarial pass and independent validation ran
+locally. Security review noted informational deployment concerns for a future
+route: callers remain responsible for request-size/rate limits, and published
+asset size determines browser work. Route integration is intentionally a later
+unit and was not widened into this task.
+
+### Commits before this report
+
+- `612d2a4` — `feat(map): validate deployment-neutral map contracts`
+- `b204d7b` — `feat(map): derive hour filters from map payload`
+- `17362b5` — `fix(map): keep payload label all filterable`
+- `412cbc2` — `fix(map): preserve raw slot label identity`
+
+### Verification
+
+The exact required chain used Node v24.13.0 and exited 0:
+
+```text
+npm run typecheck && npm run lint && npm run format:check && npm test
+(cd packages/map/schemas && sha256sum -c venues-map.v1.sha256)
+```
+
+Its exact result summary was:
+
+```text
+> tsc --noEmit -p tsconfig.json
+
+> eslint .
+0 errors, 2 warnings
+packages/core/src/access.ts:244:47  'stamp' is defined but never used
+packages/core/src/access.ts:275:5   'stamp' is defined but never used
+
+> prettier --check .
+All matched files use Prettier code style!
+
+Test Files  41 passed (41)
+Tests  692 passed (692)
+
+OK: core boundary self-test refuses adapter imports
+OK: route boundary self-test refuses direct registration
+OK: core imports no adapter package
+OK: web routes are registered only through the central registry
+OK: clean-room self-test refuses participant-data artifacts and content
+OK: clean-room scan found no participant-data artifacts in working tree (including ignored paths) and Git history
+venues-map.v1.schema.json: OK
+```
+
+The suite printed the existing Node TLS ServerName deprecation warning from the
+SMTP tests. An earlier sandboxed run could not open those tests' local listener;
+the authoritative chain above ran with local-listener permission and passed
+without suppressing any test or stderr.
+
+The task's stated baseline of 39 files was stale for commit `68e5b4b`: that
+commit contains 40 test files. This pass adds `validate.test.ts`, so the final
+41-file result is expected. No required implementation or verification remains.
+
+### Handoff state
+
+All implementation changes are committed locally on `u9d-schema-v1-3-0`.
+This appended report is intended for one final focused documentation commit.
+Nothing was pushed, merged, rebased, or amended.
