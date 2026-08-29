@@ -1,8 +1,8 @@
 ---
 artifact_contract: "ce-handoff/v1"
 created_at: "2026-08-29T00:00:00Z"
-title: "U6 in PR #26; U7 built in the last two hours of the weekly window — verify, then PR"
-summary: "U6 is ready to merge on PR #26. U7 (email waves, outbox, SMTP adapter, outbox screens) was built by Opus workers on branch u7-email-waves-and-outbox in the final two hours before the weekly quota reset; it has a review pass applied but still needs a fresh-eyes gate run, a PR, and the human UAT task 5."
+title: "U6 in PR #26, U7 in PR #27 — both reviewed; merge, then the human UAT"
+summary: "U6 looks merge-ready on PR #26. U7 (email waves, outbox, SMTP adapter, outbox screens) was built by Opus workers in the final two hours before the weekly quota reset, reviewed twice, and is on PR #27 stacked on #26 at 605 tests. Next: merge both, then the human UAT that closes U5."
 keywords:
   [
     "porchfest",
@@ -14,10 +14,10 @@ keywords:
     "opus-workers",
     "node-24",
   ]
-resume_focus: "Finish U7: run the full gate on u7-email-waves-and-outbox, open its PR stacked on #26, then run the organizer UAT"
+resume_focus: "Merge PR #26 then PR #27; run the organizer UAT (docs/operations/organizer-uat.md); then U8"
 repository: "porchfest"
 branch: "u7-email-waves-and-outbox"
-head: "8bdffd6"
+head: "6b737a4"
 ---
 
 # Two branches are open. Read this before touching either.
@@ -45,12 +45,13 @@ policy is back to `worker_route=codex` afterward. U7 was decomposed and run as:
 | U7B  | Opus   | `packages/email`: SMTP on `node:net`/`node:tls`, env selection, README                                                                                                                          |
 | U7C  | Opus   | web: `/admin/seasons/:id/outbox`, wave review, edit, send, export                                                                                                                               |
 | U7D  | Opus   | eleven verified review findings on U7A/U7B (P0 address rerouting, P1 recipient deletion on regenerate, P1 decorative send version guard, cleartext AUTH without STARTTLS, TLS upgrade crash, …) |
+| U7E  | Opus   | nine review findings on U7C (send/export share one POST with an intent, a send redirects so reload cannot re-send, unrecorded outcomes shown, mbox export, escaping and select-all pinned)      |
 
 Workers ran in a **shared checkout** (no controller worktrees), on disjoint
 file sets, and were told not to touch git; the orchestrator committed each
-unit path-limited. The full `npm test` gate was green after U7A+U7B
-(572 tests). Check the last commits on the branch for U7C/U7D and whether the
-final gate ran — the session may have run out of quota before the tail.
+unit path-limited. The full `npm test` gate (typecheck, lint, format, suite,
+boundary and clean-room checks) was green at `6b737a4`: **605 tests, 38
+files**. PR #27 carries the residuals list.
 
 What U7 decided that the plan left open:
 
@@ -70,11 +71,19 @@ What U7 decided that the plan left open:
 
 ## Do these next, in order
 
-1. `source ~/.nvm/nvm.sh && nvm use 24 && npm run typecheck && npm run lint && npm run format:check && npm test` on `u7-email-waves-and-outbox`. Fix or revert anything red before reading further.
-2. Read the private review findings copy (machine-local, see the private handoff) against the U7D commit; anything skipped there is a residual for the PR.
-3. Open the U7 PR against `u6-assignment-and-season-transitions` (stacked) or `main` after #26 merges. Run the harness `code-review` or `ce-code-review` on it — U7C never had an independent review.
-4. Update `docs/operations/organizer-uat.md`: task 5 (produce the message) is now runnable; the "Before you can run this" section still says U7 is unbuilt.
-5. Run the human UAT that closes U5.
+1. Merge PR #26 (U6), then PR #27 (U7) — GitHub retargets #27 to `main` once
+   #26 lands. Both have CI green on their heads.
+2. Run the human UAT that closes U5 (`docs/operations/organizer-uat.md`) —
+   every task is runnable now; leave email unconfigured so task 5 exercises
+   export.
+3. Residuals recorded on PR #27 (all P3): `mutationRefusal` maps every
+   lifecycle refusal to 409 (needs distinct core error types); `findWave`
+   scans every season; `.env.example` lacks the `PORCHFEST_SMTP_*` lines
+   (Damien's edit — the path is denied to workers); TLS handshakes are
+   flag-tested only; `NoneEmailAdapter` naming; no direct test of
+   `recorded === false`.
+4. U8 (participant self-serve and magic links) is next in the plan; KTD8's
+   purge of link-bearing bodies is already in place in the outbox for it.
 
 ## Traps that cost time this session
 
