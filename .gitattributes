@@ -1,0 +1,2 @@
+# Preserve pinned map-schema bytes across checkout platforms.
+packages/map/schemas/* -text
