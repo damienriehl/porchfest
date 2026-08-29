@@ -6,7 +6,7 @@
   var DATA_URL = "/data/venues-2026.json";
   var DATA_TIMEOUT_MS = 10000;
   var TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
-  var ALL_HOURS = "";
+  var ALL_FILTERS = {};
   var TILE_ATTRIBUTION =
     '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
   var map = null;
@@ -15,8 +15,8 @@
   var venueLayoutAnimationFrameId = null;
   var venueLayoutResizeTimeoutId = null;
   var viewState = {
-    hour: ALL_HOURS,
-    genre: "all",
+    hour: ALL_FILTERS,
+    genre: ALL_FILTERS,
     sortDirection: "asc",
   };
 
@@ -156,28 +156,83 @@
       });
   }
 
-  function actMatchesHour(act, hour) {
-    if (hour === ALL_HOURS) return true;
+  function timeInSeconds(value) {
+    var match =
+      typeof value === "string" &&
+      /^(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(?:Z|([+-])(\d{2}):?(\d{2}))?$/i.exec(
+        value,
+      );
+    var seconds;
+    var offset;
+    if (!match) return null;
 
-    return Boolean(act && act.slot_label === hour);
+    seconds =
+      Number(match[1]) * 3600 +
+      Number(match[2]) * 60 +
+      Number(match[3]) +
+      Number("0." + (match[4] || "0"));
+    if (match[5]) {
+      offset = Number(match[6]) * 3600 + Number(match[7]) * 60;
+      seconds += match[5] === "+" ? -offset : offset;
+    }
+    return seconds;
   }
 
-  function venueMatchesHour(venue, hour) {
+  function actInterval(act) {
+    var start = timeInSeconds(act && act.slot_start);
+    var end = timeInSeconds(act && act.slot_end);
+    if (start === null || end === null || start >= end) return null;
+    return { start: start, end: end };
+  }
+
+  function hourIntervals(venues, hour) {
+    var intervals = [];
+    venues.forEach(function (venue) {
+      venueActs(venue).forEach(function (act) {
+        var interval;
+        if (act && act.slot_label === hour) {
+          interval = actInterval(act);
+          if (interval) intervals.push(interval);
+        }
+      });
+    });
+    return intervals;
+  }
+
+  function actMatchesHour(act, hour, selectedIntervals) {
+    var interval;
+    if (hour === ALL_FILTERS) return true;
+    if (act && act.slot_label === hour) return true;
+
+    interval = actInterval(act);
+    if (!interval) return false;
+    return selectedIntervals.some(function (selectedInterval) {
+      return (
+        interval.start < selectedInterval.end &&
+        selectedInterval.start < interval.end
+      );
+    });
+  }
+
+  function venueMatchesHour(venue, hour, selectedIntervals) {
     return venueActs(venue).some(function (act) {
-      return actMatchesHour(act, hour);
+      return actMatchesHour(act, hour, selectedIntervals);
     });
   }
 
   function venueMatchesGenre(venue, genre) {
     var acts = venueActs(venue);
-    if (genre === "all") return true;
+    if (genre === ALL_FILTERS) return true;
     return acts.some(function (act) {
       return genreTags(act).indexOf(genre) !== -1;
     });
   }
 
-  function venueMatchesView(venue, hour, genre) {
-    return venueMatchesGenre(venue, genre) && venueMatchesHour(venue, hour);
+  function venueMatchesView(venue, hour, genre, selectedIntervals) {
+    return (
+      venueMatchesGenre(venue, genre) &&
+      venueMatchesHour(venue, hour, selectedIntervals)
+    );
   }
 
   function applyCardViewClasses(node, matches) {
@@ -202,7 +257,9 @@
   function applyView(status, listSection, venues, markerLookup) {
     var hour = viewState.hour;
     var genre = viewState.genre;
-    var hasActiveFilter = hour !== ALL_HOURS || genre !== "all";
+    var selectedIntervals =
+      hour === ALL_FILTERS ? [] : hourIntervals(venues, hour);
+    var hasActiveFilter = hour !== ALL_FILTERS || genre !== ALL_FILTERS;
     var matchedVenueCount = 0;
     var cardsByVenueKey = Object.create(null);
     var matchesByVenueKey = Object.create(null);
@@ -216,7 +273,7 @@
     venues.forEach(function (venue) {
       var key = venueKey(venue);
       var matches = hasActiveFilter
-        ? venueMatchesView(venue, hour, genre)
+        ? venueMatchesView(venue, hour, genre, selectedIntervals)
         : null;
       matchesByVenueKey[key] = matches;
       if (matches === true) matchedVenueCount += 1;
@@ -244,7 +301,7 @@
     group.querySelectorAll("button").forEach(function (button) {
       button.setAttribute(
         "aria-pressed",
-        String(button.dataset.filterValue === activeValue),
+        String(button.porchfestFilterValue === activeValue),
       );
     });
   }
@@ -261,7 +318,8 @@
     button.setAttribute("type", "button");
     button.setAttribute("aria-label", accessibleName);
     button.setAttribute("aria-pressed", String(value === activeValue));
-    button.dataset.filterValue = value;
+    button.porchfestFilterValue = value;
+    button.dataset.filterValue = typeof value === "string" ? value : "";
     button.textContent = label;
     button.addEventListener("click", onActivate);
     return button;
@@ -269,7 +327,7 @@
 
   function createHourControl(status, listSection, venues, markerLookup) {
     var hourControl = document.createElement("div");
-    var labels = new Set();
+    var optionsByLabel = new Map();
     hourControl.className = "porchfest-hour-control";
     hourControl.setAttribute("role", "group");
     hourControl.setAttribute("aria-label", "Filter venues by performance hour");
@@ -277,18 +335,41 @@
     venues.forEach(function (venue) {
       venueActs(venue).forEach(function (act) {
         var label = act && act.slot_label;
-        if (typeof label === "string" && label.length > 0) labels.add(label);
-      });
-    });
-
-    [{ label: "All", name: "Show all performance hours", value: ALL_HOURS }]
-      .concat(
-        Array.from(labels).map(function (label) {
-          return {
+        var interval = actInterval(act);
+        var existing;
+        if (typeof label !== "string" || label.length === 0) return;
+        existing = optionsByLabel.get(label);
+        if (
+          !existing ||
+          (interval &&
+            (existing.start === null || interval.start < existing.start))
+        ) {
+          optionsByLabel.set(label, {
             label: cleanText(label),
             name: "Show performances for " + cleanText(label),
             value: label,
-          };
+            start: interval ? interval.start : null,
+          });
+        }
+      });
+    });
+
+    [{ label: "All", name: "Show all performance hours", value: ALL_FILTERS }]
+      .concat(
+        Array.from(optionsByLabel.values()).sort(function (left, right) {
+          if (left.start !== null && right.start !== null) {
+            return (
+              left.start - right.start ||
+              left.value.localeCompare(right.value, undefined, {
+                numeric: true,
+              })
+            );
+          }
+          if (left.start !== null) return -1;
+          if (right.start !== null) return 1;
+          return left.value.localeCompare(right.value, undefined, {
+            numeric: true,
+          });
         }),
       )
       .forEach(function (option) {
@@ -344,23 +425,32 @@
     chips.setAttribute("role", "group");
     chips.setAttribute("aria-label", "Filter venues by genre");
 
-    ["all"].concat(genresByFrequency(venues)).forEach(function (genre) {
-      var isAll = genre === "all";
-      chips.appendChild(
-        createFilterButton(
-          isAll ? "All" : genre,
-          isAll ? "Show all genres" : "Show " + genre + " performances",
-          genre,
-          viewState.genre,
-          function () {
-            viewState.genre = genre;
-            updatePressedButtons(chips, viewState.genre);
-            applyView(status, listSection, venues, markerLookup);
-            scheduleVenueLayout(listSection);
-          },
-        ),
-      );
-    });
+    [{ label: "All", name: "Show all genres", value: ALL_FILTERS }]
+      .concat(
+        genresByFrequency(venues).map(function (genre) {
+          return {
+            label: genre,
+            name: "Show " + genre + " performances",
+            value: genre,
+          };
+        }),
+      )
+      .forEach(function (option) {
+        chips.appendChild(
+          createFilterButton(
+            option.label,
+            option.name,
+            option.value,
+            viewState.genre,
+            function () {
+              viewState.genre = option.value;
+              updatePressedButtons(chips, viewState.genre);
+              applyView(status, listSection, venues, markerLookup);
+              scheduleVenueLayout(listSection);
+            },
+          ),
+        );
+      });
 
     content.appendChild(chips);
     facet.appendChild(content);

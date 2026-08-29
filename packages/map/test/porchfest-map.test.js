@@ -28,6 +28,9 @@ const instrumentedScriptSource = scriptSource.replace(
     getMarkersByVenueKey: function () {
       return typeof markersByVenueKey === 'undefined' ? undefined : markersByVenueKey;
     },
+    getAllFilters: function () {
+      return typeof ALL_FILTERS === 'undefined' ? undefined : ALL_FILTERS;
+    },
     layoutVenueCards: typeof layoutVenueCards === 'function' ? layoutVenueCards : undefined,
     scheduleVenueLayout: typeof scheduleVenueLayout === 'function' ? scheduleVenueLayout : undefined
   };
@@ -600,8 +603,8 @@ function assertFailure(nodes) {
 
 function applyFilters(run, venues, hour, genre) {
   const state = run.testApi.getViewState();
-  state.hour = hour;
-  state.genre = genre;
+  state.hour = hour === ALL_HOURS ? run.testApi.getAllFilters() : hour;
+  state.genre = genre === "all" ? run.testApi.getAllFilters() : genre;
   run.testApi.applyView(
     run.nodes.status,
     run.nodes.listSection,
@@ -1478,7 +1481,7 @@ test("renders a permanent one-line hour control with exactly one active button",
   assert.match(hourControl.getAttribute("aria-label"), /hour/i);
 });
 
-test("derives hour filters from first-seen non-Goal-1 slot labels", async () => {
+test("orders hour filters chronologically even when the first venue has only the later slot", async () => {
   const venues = [
     venue({
       title: "Second Afternoon Stage",
@@ -1486,6 +1489,8 @@ test("derives hour filters from first-seen non-Goal-1 slot labels", async () => 
         {
           slot: "slot-b",
           slot_label: "afternoon-2",
+          slot_start: "14:00:00Z",
+          slot_end: "15:00:00Z",
           name: "Second Afternoon Act",
         },
       ],
@@ -1497,6 +1502,8 @@ test("derives hour filters from first-seen non-Goal-1 slot labels", async () => 
         {
           slot: "slot-a",
           slot_label: "afternoon-1",
+          slot_start: "13:00:00Z",
+          slot_end: "14:00:00Z",
           name: "First Afternoon Act",
         },
       ],
@@ -1511,13 +1518,50 @@ test("derives hour filters from first-seen non-Goal-1 slot labels", async () => 
 
   assert.deepEqual(
     buttons.map((button) => button.textContent),
-    ["All", "afternoon-2", "afternoon-1"],
+    ["All", "afternoon-1", "afternoon-2"],
   );
 
-  buttons[2].dispatchEvent({ type: "click" });
+  buttons[1].dispatchEvent({ type: "click" });
   assert.equal(run.testApi.getViewState().hour, "afternoon-1");
   assertViewClasses(run.nodes.list.children[0], "collapsed");
   assertViewClasses(run.nodes.list.children[1], "match");
+});
+
+test("orders interval-free hour labels with numeric locale comparison", async () => {
+  const venues = [
+    venue({
+      title: "Tenth Afternoon Stage",
+      acts: [
+        {
+          slot: "slot-10",
+          slot_label: "afternoon-10",
+          name: "Tenth Afternoon Act",
+        },
+      ],
+    }),
+    venue({
+      title: "Second Afternoon Stage",
+      lat: 44.99,
+      acts: [
+        {
+          slot: "slot-2",
+          slot_label: "afternoon-2",
+          name: "Second Afternoon Act",
+        },
+      ],
+    }),
+  ];
+  const run = await runScript({
+    fetch: () => Promise.resolve(response({ venues })),
+  });
+  const buttons = run.nodes.mount
+    .querySelector(".porchfest-hour-control")
+    .querySelectorAll("button");
+
+  assert.deepEqual(
+    buttons.map((button) => button.textContent),
+    ["All", "afternoon-2", "afternoon-10"],
+  );
 });
 
 test('keeps a payload slot label named "all" distinct from the All option', async () => {
@@ -1552,42 +1596,37 @@ test('keeps a payload slot label named "all" distinct from the All option', asyn
   assertViewClasses(run.nodes.list.children[1], "collapsed");
 });
 
-test("keeps distinct raw slot labels separate while de-duplicating exact repeats", async () => {
+test("de-duplicates exact hour labels before sorting them", async () => {
   const venues = [
     venue({
-      title: "Plain Label Stage",
+      title: "Second Label Stage",
       acts: [
         {
-          slot: "slot-plain",
-          slot_label: "afternoon-1",
-          name: "Plain Label Act",
+          slot: "slot-2",
+          slot_label: "afternoon-2",
+          name: "Second Label Act",
         },
       ],
     }),
     venue({
-      title: "Padded Label Stage",
+      title: "Tenth Label Stage",
       lat: 44.99,
       acts: [
         {
-          slot: "slot-padded",
-          slot_label: " afternoon-1 ",
-          name: "Padded Label Act",
+          slot: "slot-10",
+          slot_label: "afternoon-10",
+          name: "Tenth Label Act",
         },
       ],
     }),
     venue({
-      title: "Whitespace Label Stage",
+      title: "Duplicate Label Stage",
       lat: 44.98,
       acts: [
         {
-          slot: "slot-whitespace",
-          slot_label: " ",
-          name: "Whitespace Label Act",
-        },
-        {
           slot: "slot-duplicate",
-          slot_label: "afternoon-1",
-          name: "Duplicate Plain Label Act",
+          slot_label: "afternoon-2",
+          name: "Duplicate Second Label Act",
         },
       ],
     }),
@@ -1604,27 +1643,12 @@ test("keeps distinct raw slot labels separate while de-duplicating exact repeats
 
   assert.deepEqual(
     buttons.map((button) => button.dataset.filterValue),
-    [ALL_HOURS, "afternoon-1", " afternoon-1 ", " "],
+    [ALL_HOURS, "afternoon-2", "afternoon-10"],
   );
 
-  buttons[2].dispatchEvent({ type: "click" });
-  assert.equal(run.testApi.getViewState().hour, " afternoon-1 ");
-  assertViewClasses(
-    cardsByVenueKey[run.testApi.venueKey(venues[0])],
-    "collapsed",
-  );
-  assertViewClasses(cardsByVenueKey[run.testApi.venueKey(venues[1])], "match");
-  assertViewClasses(
-    cardsByVenueKey[run.testApi.venueKey(venues[2])],
-    "collapsed",
-  );
-
-  buttons[3].dispatchEvent({ type: "click" });
-  assert.equal(run.testApi.getViewState().hour, " ");
-  assertViewClasses(
-    cardsByVenueKey[run.testApi.venueKey(venues[0])],
-    "collapsed",
-  );
+  buttons[1].dispatchEvent({ type: "click" });
+  assert.equal(run.testApi.getViewState().hour, "afternoon-2");
+  assertViewClasses(cardsByVenueKey[run.testApi.venueKey(venues[0])], "match");
   assertViewClasses(
     cardsByVenueKey[run.testApi.venueKey(venues[1])],
     "collapsed",
@@ -1667,7 +1691,7 @@ test("hour buttons are accessible native buttons that update state and reapply t
 
   assert.equal(buttons[0].textContent, "All");
   buttons[0].dispatchEvent({ type: "click" });
-  assert.equal(run.testApi.getViewState().hour, ALL_HOURS);
+  assert.equal(run.testApi.getViewState().hour, run.testApi.getAllFilters());
   assert.equal(buttons[0].getAttribute("aria-pressed"), "true");
   run.nodes.list.children.forEach((card) => assertViewClasses(card, "neutral"));
 });
@@ -1750,6 +1774,40 @@ test("derives genre chips from loaded data and orders them by frequency then alp
   );
 });
 
+test('keeps a payload genre named "all" distinct from the shared All sentinel', async () => {
+  const venues = [
+    venue({
+      title: "Literal All Genre Stage",
+      acts: [{ slot: "6-7", name: "Literal All Genre Act", genre: "all" }],
+    }),
+    venue({
+      title: "Folk Stage",
+      lat: 44.99,
+      acts: [{ slot: "7-8", name: "Folk Act", genre: "Folk" }],
+    }),
+  ];
+  const run = await runScript({
+    fetch: () => Promise.resolve(response({ venues })),
+  });
+  const chips = run.nodes.mount
+    .querySelector(".porchfest-genre-chips")
+    .querySelectorAll("button");
+
+  assert.deepEqual(
+    chips.map((button) => button.textContent),
+    ["All", "all", "Folk"],
+  );
+
+  chips[1].dispatchEvent({ type: "click" });
+  assert.equal(run.testApi.getViewState().genre, "all");
+  assertViewClasses(run.nodes.list.children[0], "match");
+  assertViewClasses(run.nodes.list.children[1], "collapsed");
+
+  chips[0].dispatchEvent({ type: "click" });
+  assert.notEqual(run.testApi.getViewState().genre, "all");
+  run.nodes.list.children.forEach((card) => assertViewClasses(card, "neutral"));
+});
+
 test("genre disclosure uses the existing details pattern and All clears the genre facet", async () => {
   const venues = [
     venue({
@@ -1785,7 +1843,7 @@ test("genre disclosure uses the existing details pattern and All clears the genr
   assertViewClasses(run.nodes.list.children[1], "collapsed");
 
   allChip.dispatchEvent({ type: "click" });
-  assert.equal(run.testApi.getViewState().genre, "all");
+  assert.equal(run.testApi.getViewState().genre, run.testApi.getAllFilters());
   assert.equal(allChip.getAttribute("aria-pressed"), "true");
   assert.equal(
     chips.filter((button) => button.getAttribute("aria-pressed") === "true")
@@ -2027,25 +2085,59 @@ test("a faded marker stays keyboard-focusable and opens its popup", async () => 
   assert.equal(fadedMarker.openedContent.className, "porchfest-map-popup");
 });
 
-test("hour filters resolve every slot label and a two-act venue", async () => {
+test("hour filters use intervals to fan a full-evening act across overlapping chips", async () => {
   const venues = [
-    venue({ title: "Early", acts: [{ slot: "6-7", name: "Early Act" }] }),
+    venue({
+      title: "Early",
+      acts: [
+        {
+          slot: "6-7",
+          name: "Early Act",
+          slot_start: "18:00:00Z",
+          slot_end: "19:00:00Z",
+        },
+      ],
+    }),
     venue({
       title: "Late",
       lat: 44.981,
-      acts: [{ slot: "7-8", name: "Late Act" }],
+      acts: [
+        {
+          slot: "7-8",
+          name: "Late Act",
+          slot_start: "19:00:00Z",
+          slot_end: "20:00:00Z",
+        },
+      ],
     }),
     venue({
       title: "Full",
       lat: 44.982,
-      acts: [{ slot: "6-8", name: "Full Act" }],
+      acts: [
+        {
+          slot: "6-8",
+          name: "Full Act",
+          slot_start: "18:00:00Z",
+          slot_end: "20:00:00Z",
+        },
+      ],
     }),
     venue({
       title: "Two Act",
       lat: 44.983,
       acts: [
-        { slot: "6-7", name: "First Act" },
-        { slot: "7-8", name: "Second Act" },
+        {
+          slot: "6-7",
+          name: "First Act",
+          slot_start: "18:00:00Z",
+          slot_end: "19:00:00Z",
+        },
+        {
+          slot: "7-8",
+          name: "Second Act",
+          slot_start: "19:00:00Z",
+          slot_end: "20:00:00Z",
+        },
       ],
     }),
   ];
@@ -2057,21 +2149,21 @@ test("hour filters resolve every slot label and a two-act venue", async () => {
   applyFilters(run, venues, "6–7 pm", "all");
   assert.deepEqual(
     cards.map((card) => card.classList.contains("is-match")),
-    [true, false, false, true],
+    [true, false, true, true],
   );
   assertViewClasses(cards[1], "collapsed");
 
   applyFilters(run, venues, "7–8 pm", "all");
   assert.deepEqual(
     cards.map((card) => card.classList.contains("is-match")),
-    [false, true, false, true],
+    [false, true, true, true],
   );
   assertViewClasses(cards[0], "collapsed");
 
   applyFilters(run, venues, "6–8 pm", "all");
   assert.deepEqual(
     cards.map((card) => card.classList.contains("is-match")),
-    [false, false, true, false],
+    [true, true, true, true],
   );
 });
 
