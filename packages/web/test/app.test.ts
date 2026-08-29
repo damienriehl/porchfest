@@ -136,6 +136,36 @@ describe("application scaffold", () => {
         path: "/admin/act-links/:id/unlink",
         tier: "organizer",
       },
+      { method: "GET", path: "/admin/assets/admin.js", tier: "public" },
+      { method: "GET", path: "/admin/seasons/:id/outbox", tier: "organizer" },
+      {
+        method: "POST",
+        path: "/admin/seasons/:id/outbox/generate",
+        tier: "organizer",
+      },
+      {
+        method: "POST",
+        path: "/admin/seasons/:id/outbox/ad-hoc",
+        tier: "organizer",
+      },
+      { method: "GET", path: "/admin/outbox/waves/:id", tier: "organizer" },
+      {
+        method: "POST",
+        path: "/admin/outbox/waves/:id/send",
+        tier: "organizer",
+      },
+      {
+        method: "GET",
+        path: "/admin/outbox/waves/:id/export",
+        tier: "organizer",
+      },
+      {
+        method: "GET",
+        path: "/admin/outbox/messages/:id{[0-9]+\\.eml}",
+        tier: "organizer",
+      },
+      { method: "GET", path: "/admin/outbox/messages/:id", tier: "organizer" },
+      { method: "POST", path: "/admin/outbox/messages/:id", tier: "organizer" },
     ]);
   });
 

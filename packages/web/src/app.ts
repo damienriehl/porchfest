@@ -8,6 +8,7 @@ import { registerAdminRecordRoutes } from "./routes/admin-records.js";
 import { registerAdminRetentionRoutes } from "./routes/admin-retention.js";
 import { registerSeasonLifecycleRoutes } from "./routes/season-lifecycle.js";
 import { registerAssignmentRoutes } from "./routes/assign.js";
+import { registerOutboxRoutes } from "./routes/outbox.js";
 import {
   registerSignupRoutes,
   type SignupRouteOptions,
@@ -100,6 +101,8 @@ export function createApp(options: AppOptions): PorchfestApp {
   registerSeasonLifecycleRoutes({ core: options.core, routes, csrfTokenFor });
 
   registerAssignmentRoutes({ core: options.core, routes, csrfTokenFor });
+
+  registerOutboxRoutes({ core: options.core, routes, csrfTokenFor });
 
   return {
     fetch: app.fetch.bind(app),
