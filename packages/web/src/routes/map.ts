@@ -7,7 +7,6 @@ import {
   type Slot,
 } from "@porchfest/core";
 import {
-  loadVerifiedVenuesMapSchema,
   porchfestMapScriptPath,
   porchfestMapStylesheetPath,
   validateVenuesMapDocument,
@@ -19,6 +18,7 @@ import {
 import type { Context } from "hono";
 import { readFileSync } from "node:fs";
 import type { RouteRegistry } from "../router/registry.js";
+import { normalizedHttpUrl, tokenizeLinks } from "./http-links.js";
 
 export const MAP_PAGE_PATH = "/map";
 export const MAP_DATA_PATH = "/map/data.json";
@@ -106,7 +106,7 @@ function mapData(core: CoreRuntime): Response {
     // Five minutes limits the address-withdrawal window without turning every
     // attendee refresh into a database hit; explicit unpublication is visible
     // after the same bounded interval.
-    loadVerifiedVenuesMapSchema();
+    // Validation loads and memoizes the digest-verified schema internally.
     const validation = validateVenuesMapDocument(document);
     if (!validation.ok) {
       const reasons = validation.errors
@@ -313,19 +313,12 @@ function rfc3339Time(value: Date, timezone: string): string {
 }
 
 function publicLinks(value: string | null): VenueMapLink[] {
-  if (value === null) return [];
-  return value
-    .split(/\s+/)
-    .filter(Boolean)
-    .flatMap((candidate) => {
-      try {
-        const url = new URL(candidate);
-        if (url.protocol !== "http:" && url.protocol !== "https:") return [];
-        return [{ url: url.toString() }];
-      } catch {
-        return [];
-      }
-    });
+  // Signup rejects the whole field when one token is bad; public serialization
+  // instead drops only bad tokens so legacy data cannot break the live map.
+  return tokenizeLinks(value).flatMap((candidate) => {
+    const url = normalizedHttpUrl(candidate);
+    return url === null ? [] : [{ url }];
+  });
 }
 
 function invalidMapResponse(): Response {
