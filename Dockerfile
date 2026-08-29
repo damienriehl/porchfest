@@ -17,6 +17,7 @@ COPY packages/web/package.json ./packages/web/package.json
 COPY packages/email/package.json ./packages/email/package.json
 COPY packages/antibot/package.json ./packages/antibot/package.json
 COPY packages/geo/package.json ./packages/geo/package.json
+COPY packages/map/package.json ./packages/map/package.json
 RUN npm install --include-workspace-root --workspaces
 
 COPY tsconfig.json drizzle.config.ts vitest.config.ts eslint.config.js ./
