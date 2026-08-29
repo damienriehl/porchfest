@@ -38,6 +38,7 @@ export type ActChanges = Partial<
     | "durationMinutes"
     | "requiresAmplification"
     | "housePreference"
+    | "sharedMemberNote"
     | "canLendGear"
     | "placeholder"
     | "reachViaContactId"
@@ -51,6 +52,8 @@ export type VenueChanges = Partial<
     | "address"
     | "spaceDescription"
     | "hasPower"
+    | "requestedActNames"
+    | "genrePreferences"
     | "rainBackup"
     | "latitude"
     | "longitude"
@@ -79,6 +82,8 @@ export interface HostSignupInput {
     hasPower: boolean;
     rainBackup: boolean;
     notes: string | null;
+    requestedActNames?: string | null;
+    genrePreferences?: string | null;
   };
   gear: readonly VenueGear["value"][];
   drinks: readonly VenueDrink["value"][];
@@ -98,6 +103,7 @@ export interface PerformerSignupInput {
     housePreference: string | null;
     canLendGear: boolean;
     notes: string | null;
+    sharedMemberNote?: string | null;
   };
   availabilities: readonly {
     startsAt: Date;
@@ -137,6 +143,7 @@ export interface CreatePlaceholderActInput {
     housePreference?: string | null;
     canLendGear?: boolean | null;
     notes?: string | null;
+    sharedMemberNote?: string | null;
   };
 }
 
@@ -153,6 +160,8 @@ export interface CreatePlaceholderVenueInput {
     longitude?: number | null;
     notes?: string | null;
     hostContactId?: number | null;
+    requestedActNames?: string | null;
+    genrePreferences?: string | null;
   };
 }
 
@@ -268,6 +277,8 @@ export function createRecordRepository(
         hasPower: input.venue.hasPower,
         rainBackup: input.venue.rainBackup,
         notes: input.venue.notes,
+        requestedActNames: input.venue.requestedActNames ?? null,
+        genrePreferences: input.venue.genrePreferences ?? null,
         hostContactId: contact.id,
         ...mutableValues(),
       })
@@ -336,6 +347,7 @@ export function createRecordRepository(
         housePreference: input.act.housePreference,
         canLendGear: input.act.canLendGear,
         notes: input.act.notes,
+        sharedMemberNote: input.act.sharedMemberNote ?? null,
         reachViaContactId: contact.id,
         ...mutableValues(),
       })

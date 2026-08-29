@@ -1,0 +1,135 @@
+{
+  "timezone": "America/Chicago",
+  "venues": [
+    {
+      "id": 1,
+      "title": "Maple Street Porch",
+      "hostName": "Host One",
+      "hasPower": true,
+      "requestedActNames": "The Porch Cats",
+      "genrePreferences": "folk / jazz",
+      "slots": [
+        {
+          "id": 11,
+          "venueId": 1,
+          "startsAt": "2105-06-01T18:00:00.000Z",
+          "endsAt": "2105-06-01T19:00:00.000Z",
+          "state": "open"
+        },
+        {
+          "id": 12,
+          "venueId": 1,
+          "startsAt": "2105-06-01T19:00:00.000Z",
+          "endsAt": "2105-06-01T20:00:00.000Z",
+          "state": "held"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Oak Avenue Stage",
+      "hostName": "Host Two",
+      "hasPower": false,
+      "requestedActNames": "Solo Folk",
+      "genrePreferences": "folk",
+      "slots": [
+        {
+          "id": 21,
+          "venueId": 2,
+          "startsAt": "2105-06-01T18:00:00.000Z",
+          "endsAt": "2105-06-01T19:00:00.000Z",
+          "state": "open"
+        },
+        {
+          "id": 23,
+          "venueId": 2,
+          "startsAt": "2105-06-01T18:00:00.000Z",
+          "endsAt": "2105-06-01T19:00:00.000Z",
+          "state": "open"
+        },
+        {
+          "id": 22,
+          "venueId": 2,
+          "startsAt": "2105-06-01T20:00:00.000Z",
+          "endsAt": "2105-06-01T21:00:00.000Z",
+          "state": "assigned"
+        }
+      ]
+    }
+  ],
+  "acts": [
+    {
+      "id": 101,
+      "name": "The Porch Cats",
+      "genre": "Jazz",
+      "requiresAmplification": true,
+      "housePreference": "Maple Street Porch",
+      "availabilities": [
+        {
+          "startsAt": "2105-06-01T18:00:00.000Z",
+          "endsAt": "2105-06-01T20:00:00.000Z"
+        }
+      ],
+      "linkedActIds": []
+    },
+    {
+      "id": 102,
+      "name": "Solo Folk",
+      "genre": "Folk",
+      "requiresAmplification": false,
+      "housePreference": null,
+      "availabilities": [],
+      "linkedActIds": []
+    },
+    {
+      "id": 103,
+      "name": "Amped Friends",
+      "genre": "Rock",
+      "requiresAmplification": true,
+      "housePreference": null,
+      "availabilities": [
+        {
+          "startsAt": "2105-06-01T18:00:00.000Z",
+          "endsAt": "2105-06-01T19:00:00.000Z"
+        }
+      ],
+      "linkedActIds": [104]
+    },
+    {
+      "id": 104,
+      "name": "Booked Friends",
+      "genre": "Rock",
+      "requiresAmplification": false,
+      "housePreference": null,
+      "availabilities": [],
+      "linkedActIds": [103]
+    },
+    {
+      "id": 105,
+      "name": "Already Booked",
+      "genre": "Folk",
+      "requiresAmplification": false,
+      "housePreference": null,
+      "availabilities": [],
+      "linkedActIds": []
+    },
+    {
+      "id": 106,
+      "name": "Partial Window",
+      "genre": "Folk",
+      "requiresAmplification": false,
+      "housePreference": null,
+      "availabilities": [
+        {
+          "startsAt": "2105-06-01T18:00:00.000Z",
+          "endsAt": "2105-06-01T18:30:00.000Z"
+        }
+      ],
+      "linkedActIds": []
+    }
+  ],
+  "assignments": [
+    { "actId": 104, "slotId": 21 },
+    { "actId": 105, "slotId": 22 }
+  ]
+}

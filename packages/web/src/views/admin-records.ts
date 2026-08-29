@@ -24,6 +24,16 @@ export const RECORD_FIELDS: Readonly<
     { name: "spaceDescription", label: "Performance space", kind: "textarea" },
     { name: "hasPower", label: "Electrical power", kind: "boolean" },
     { name: "rainBackup", label: "Rain backup", kind: "boolean" },
+    {
+      name: "requestedActNames",
+      label: "Requested acts",
+      kind: "textarea",
+    },
+    {
+      name: "genrePreferences",
+      label: "Genre preferences",
+      kind: "textarea",
+    },
     { name: "notes", label: "Notes for the organizers", kind: "textarea" },
   ],
   act: [
@@ -39,6 +49,11 @@ export const RECORD_FIELDS: Readonly<
     { name: "requiresAmplification", label: "Amplification", kind: "boolean" },
     { name: "canLendGear", label: "Can lend gear", kind: "boolean" },
     { name: "housePreference", label: "Porch preference", kind: "textarea" },
+    {
+      name: "sharedMemberNote",
+      label: "Members in other acts",
+      kind: "textarea",
+    },
     { name: "notes", label: "Notes for the organizers", kind: "textarea" },
   ],
   contact: [
@@ -91,6 +106,7 @@ export function renderQueuePage(options: {
       <div class="queue-item-body">
         <p class="queue-item-kind">${escapeHtml(item.recordType)}</p>
         <h3><a href="/admin/records/${escapeHtml(item.recordType)}/${item.record.id}?season=${options.seasonId}">${escapeHtml(recordTitle(item) || "Untitled")}</a></h3>
+        ${item.recordType === "venue" ? `<p><a href="/admin/venues/${item.record.id}/assign">Assign acts</a></p>` : item.recordType === "act" ? `<p><a href="/admin/acts/${item.record.id}/assign">Find a porch</a></p>` : ""}
         <p class="help">Updated ${escapeHtml(item.updatedAt.toISOString().slice(0, 16).replace("T", " "))} UTC · version ${item.version}</p>
       </div>
       ${
@@ -159,6 +175,7 @@ export function renderQueuePage(options: {
       <p class="lede">${needsReview === 0 ? "Nothing new for you right now." : `${needsReview} ${needsReview === 1 ? "item needs" : "items need"} your review.`}</p>
       ${options.correctionsClosed ? "" : `<p class="lede"><a href="/admin/placeholders/act/new?season=${options.seasonId}">Add an act without a submission</a> · <a href="/admin/placeholders/venue/new?season=${options.seasonId}">Add a venue without a submission</a></p>`}
       <p class="lede"><a href="/admin/retention">Review participant retention</a></p>
+      <p class="lede"><a href="/admin/seasons/${options.seasonId}">Season settings &amp; state</a></p>
     </header>
     <section aria-labelledby="change-requests-title">
       <h2 id="change-requests-title">Change requests needing a decision</h2>
@@ -420,6 +437,7 @@ export function renderRecordPage(options: {
       <p class="eyebrow">${escapeHtml(options.recordType)}</p>
       <h1>${escapeHtml(options.title || "Untitled")}</h1>
       <p class="lede"><a href="/admin?season=${options.seasonId}">Back to the queue</a></p>
+      ${options.recordType === "venue" ? `<p class="lede"><a href="/admin/venues/${options.recordId}/assign">Assign acts</a></p>` : options.recordType === "act" ? `<p class="lede"><a href="/admin/acts/${options.recordId}/assign">Find a porch</a></p>` : ""}
     </header>
     ${correctionsClosedBlock}
     ${options.saved ? `<section class="confirmation" role="status"><p class="eyebrow success-mark">Saved</p></section>` : ""}

@@ -339,6 +339,8 @@ export const venues = sqliteTable(
     address: text("address"),
     spaceDescription: text("space_description"),
     hasPower: integer("has_power", { mode: "boolean" }),
+    requestedActNames: text("requested_act_names"),
+    genrePreferences: text("genre_preferences"),
     rainBackup: integer("rain_backup", { mode: "boolean" }),
     latitude: real("latitude"),
     longitude: real("longitude"),
@@ -377,6 +379,7 @@ export const acts = sqliteTable(
       mode: "boolean",
     }),
     housePreference: text("house_preference"),
+    sharedMemberNote: text("shared_member_note"),
     canLendGear: integer("can_lend_gear", { mode: "boolean" }),
     // The performer-side counterpart to venues.notes: free text the organizers
     // read and the public map never shows.
@@ -537,6 +540,35 @@ export const actAvailabilities = sqliteTable(
   ],
 );
 
+export const actLinks = sqliteTable(
+  "act_links",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    seasonId: integer("season_id")
+      .notNull()
+      .references(() => seasons.id),
+    actId: integer("act_id")
+      .notNull()
+      .references(() => acts.id),
+    linkedActId: integer("linked_act_id")
+      .notNull()
+      .references(() => acts.id),
+    note: text("note"),
+    ...mutableColumns(),
+  },
+  (table) => [
+    index("act_links_season_id_idx").on(table.seasonId),
+    uniqueIndex("act_links_act_id_linked_act_id_uidx").on(
+      table.actId,
+      table.linkedActId,
+    ),
+    check(
+      "act_links_normalized_check",
+      sql`${table.actId} < ${table.linkedActId}`,
+    ),
+  ],
+);
+
 export const slots = sqliteTable(
   "slots",
   {
@@ -583,6 +615,7 @@ export const assignments = sqliteTable(
     slotId: integer("slot_id")
       .notNull()
       .references(() => slots.id),
+    sharedMemberOverride: text("shared_member_override"),
     ...mutableColumns(),
   },
   (table) => [
@@ -642,6 +675,7 @@ const schemaTables = [
   venueDrinks,
   venueAmenities,
   actAvailabilities,
+  actLinks,
   slots,
   assignments,
   emailLog,
@@ -707,6 +741,8 @@ export type VenueAmenity = typeof venueAmenities.$inferSelect;
 export type NewVenueAmenity = typeof venueAmenities.$inferInsert;
 export type ActAvailability = typeof actAvailabilities.$inferSelect;
 export type NewActAvailability = typeof actAvailabilities.$inferInsert;
+export type ActLink = typeof actLinks.$inferSelect;
+export type NewActLink = typeof actLinks.$inferInsert;
 export type Slot = typeof slots.$inferSelect;
 export type NewSlot = typeof slots.$inferInsert;
 export type Assignment = typeof assignments.$inferSelect;

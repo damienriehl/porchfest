@@ -17,19 +17,26 @@ export {
   type CoreDatabaseConnection,
 } from "./storage/connection.js";
 export {
+  seasonStates,
   venueAmenityValues,
   venueDrinkValues,
   venueGearValues,
+  type Act,
+  type ActLink,
+  type Assignment,
   type Season,
+  type Slot,
+  type Venue,
 } from "./storage/schema.js";
 export {
+  AssignmentConflictError,
   createSeasonRepository,
   isSeasonActionLegal,
   SeasonActionError,
   SeasonConflictError,
   SeasonLifecycleError,
+  type AssignmentConflictKind,
   type AssignmentCorrection,
-  type AssignmentSuggestion,
   type PriorSeasonContact,
   type ReleasedSlotHold,
   type SeasonAction,
@@ -37,6 +44,20 @@ export {
   type SeasonState,
   type SlotHold,
 } from "./season.js";
+export {
+  formatZonedWindow,
+  overlaps,
+  rankPairings,
+  suggestionsForAct,
+  suggestionsForVenue,
+  type MatchingAct,
+  type MatchingAssignment,
+  type MatchingInput,
+  type MatchingSlot,
+  type MatchingVenue,
+  type RankedPairing,
+  type SuggestionReason,
+} from "./matching.js";
 export type {
   CreatePlaceholderActInput,
   CreatePlaceholderVenueInput,

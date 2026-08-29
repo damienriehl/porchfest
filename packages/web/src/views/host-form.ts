@@ -77,6 +77,8 @@ export function renderHostForm(options: {
       ${renderTextarea({ id: "space_description", label: "Performance space", value: firstValue(values, "space_description"), errors, required: true, help: "Describe the porch, yard, driveway, audience space, and anything performers should know." })}
       ${renderBooleanChoices({ id: "has_power", label: "Can performers use electrical power?", value: firstValue(values, "has_power"), errors })}
       ${renderBooleanChoices({ id: "rain_backup", label: "Do you have a rain backup space?", value: firstValue(values, "rain_backup"), errors })}
+      ${renderTextarea({ id: "requested_act_names", label: "Any acts you'd love on your porch?", value: firstValue(values, "requested_act_names"), errors })}
+      ${renderTextarea({ id: "genre_preferences", label: "What kinds of music would suit your porch?", value: firstValue(values, "genre_preferences"), errors })}
     </fieldset>
     <fieldset>
       <legend>What the porch offers</legend>

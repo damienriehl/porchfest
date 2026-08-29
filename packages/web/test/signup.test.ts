@@ -106,6 +106,8 @@ function hostValues(seasonId: number, csrf: string) {
     has_power: "yes",
     rain_backup: "no",
     notes: "Use the side gate & wave.",
+    requested_act_names: "The Test Fixtures",
+    genre_preferences: "Folk and acoustic rock",
     website: "",
   });
   for (const value of ["pa", "microphone", "extension_cord"])
@@ -131,6 +133,7 @@ function performerValues(seasonId: number, csrf: string) {
     description: "Songs with harmonies & handclaps.",
     links: "https://example.invalid/the-test-fixtures",
     house_preference: "Near the park",
+    shared_member_note: "Drummer also plays in Fixture Friends",
     can_lend_gear: "yes",
     availability_start: "2031-06-01T14:00",
     availability_end: "2031-06-01T14:45",
@@ -370,6 +373,8 @@ describe("public signup forms", () => {
       hasPower: true,
       rainBackup: false,
       notes: "Use the side gate & wave.",
+      requestedActNames: "The Test Fixtures",
+      genrePreferences: "Folk and acoustic rock",
     });
     const createdVenue = venue?.record;
     expect(createdVenue && "id" in createdVenue).toBe(true);
@@ -419,6 +424,7 @@ describe("public signup forms", () => {
       links: "https://example.invalid/the-test-fixtures",
       housePreference: "Near the park",
       canLendGear: true,
+      sharedMemberNote: "Drummer also plays in Fixture Friends",
     });
     expect(
       runtime.coreTesting.listActAvailabilities(act?.record.id ?? 0),

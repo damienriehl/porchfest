@@ -21,6 +21,19 @@ export function escapeHtml(value: unknown): string {
     .replaceAll("'", "&#39;");
 }
 
+export function renderOrganizerPage(title: string, body: string): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${escapeHtml(title)} · Porchfest organizers</title>
+  <link rel="stylesheet" href="/signup/assets/signup.css">
+</head>
+<body><main class="signup-page">${body}</main></body>
+</html>`;
+}
+
 export function firstValue(values: SignupValues, name: string): string {
   return values[name]?.[0] ?? "";
 }
@@ -505,6 +518,8 @@ export function renderHostSubmission(values: SignupValues): string {
       row("Your name", firstValue(values, "contact_name")),
       row("Email", firstValue(values, "contact_email")),
       row("Phone", firstValue(values, "contact_phone")),
+      row("Requested acts", firstValue(values, "requested_act_names")),
+      row("Genre preferences", firstValue(values, "genre_preferences")),
       row("Notes for the organizers", firstValue(values, "notes")),
     ]),
     "These details help neighbours find your porch and help performers plan.",
@@ -547,6 +562,7 @@ export function renderPerformerSubmission(
         "Porch or neighbourhood preference",
         firstValue(values, "house_preference"),
       ),
+      row("Members in other acts", firstValue(values, "shared_member_note")),
       row("Anything else", firstValue(values, "performer_notes")),
     ]),
     "These details go on the public map and into organizer materials.",
