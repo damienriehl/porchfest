@@ -3,7 +3,6 @@ import {
   boundingBoxContains,
   haversineDistanceMeters,
   isValidCoordinate,
-  resolveCoordinatePrecedence,
   verifyGeocodedCoordinate,
   verifyOrganizerCoordinate,
   type BoundingBox,
@@ -344,64 +343,6 @@ describe("verifyOrganizerCoordinate", () => {
     );
 
     expect(verdict.code).toBe("invalid-coordinate");
-  });
-});
-
-describe("resolveCoordinatePrecedence (R29)", () => {
-  const geocoded: VerifiedCoordinate = {
-    latitude: 44.95,
-    longitude: -93.1,
-    source: "geocoded",
-    ref: "ramsey-address-points:123456",
-    precision: "parcel",
-    crossCheckDistanceMeters: null,
-  };
-  const organizerVerified: VerifiedCoordinate = {
-    latitude: 44.9512,
-    longitude: -93.1034,
-    source: "organizer-verified",
-    ref: "organizer-edit:record-42",
-    precision: null,
-    crossCheckDistanceMeters: null,
-  };
-
-  it("keeps an organizer-verified coordinate against a geocoded challenger", () => {
-    const decision = resolveCoordinatePrecedence(organizerVerified, geocoded);
-
-    expect(decision.outcome).toBe("keep-existing");
-    expect(decision.coordinate).toEqual(organizerVerified);
-  });
-
-  it("replaces a geocoded coordinate on regeneration", () => {
-    const decision = resolveCoordinatePrecedence(geocoded, {
-      ...geocoded,
-      latitude: 44.9599,
-    });
-
-    expect(decision.outcome).toBe("adopt");
-    expect(decision.coordinate.latitude).toBe(44.9599);
-  });
-
-  it("lets an organizer correction replace a geocoded coordinate", () => {
-    const decision = resolveCoordinatePrecedence(geocoded, organizerVerified);
-
-    expect(decision.outcome).toBe("adopt");
-    expect(decision.coordinate).toEqual(organizerVerified);
-  });
-
-  it("lets a later organizer correction replace an earlier one", () => {
-    const later = { ...organizerVerified, latitude: 44.9613 };
-    const decision = resolveCoordinatePrecedence(organizerVerified, later);
-
-    expect(decision.outcome).toBe("adopt");
-    expect(decision.coordinate).toEqual(later);
-  });
-
-  it("adopts the incoming coordinate when nothing is stored yet", () => {
-    const decision = resolveCoordinatePrecedence(null, geocoded);
-
-    expect(decision.outcome).toBe("adopt");
-    expect(decision.coordinate).toEqual(geocoded);
   });
 });
 

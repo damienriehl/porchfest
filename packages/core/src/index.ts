@@ -4,13 +4,36 @@ export type {
   AntibotPort,
   AntibotRequest,
   AntibotResult,
+  BoundingBox,
+  CoordinatePrecision,
   Coordinates,
   EmailDeliveryResult,
   EmailMessage,
   EmailPort,
   GeocodeRequest,
   GeoPort,
+  LocateCandidate,
+  LocateOutcome,
+  LocateRequest,
 } from "./ports/index.js";
+export {
+  EARTH_RADIUS_METERS,
+  assertBoundingBox,
+  boundingBoxContains,
+  haversineDistanceMeters,
+  isValidCoordinate,
+  verifyGeocodedCoordinate,
+  verifyOrganizerCoordinate,
+  type AcceptedCoordinatePrecision,
+  type CoordinateGateRejectionCode,
+  type CoordinateRejection,
+  type CoordinateSource,
+  type CoordinateVerdict,
+  type CoordinateVerificationOptions,
+  type GeocodeCandidate,
+  type OrganizerCoordinate,
+  type VerifiedCoordinate,
+} from "./geo-verify.js";
 export {
   CORE_DATABASE_FILENAME,
   openCoreDatabase,
@@ -18,15 +41,21 @@ export {
 } from "./storage/connection.js";
 export {
   seasonStates,
+  coordinatePrecisions,
+  coordinateRejectionCodes,
+  coordinateSources,
+  coordinateStatuses,
   venueAmenityValues,
   venueDrinkValues,
   venueGearValues,
   type Act,
   type ActLink,
   type Assignment,
+  type CoordinateRejectionCode,
   type Season,
   type Slot,
   type Venue,
+  type VenueCoordinate,
 } from "./storage/schema.js";
 export {
   AssignmentConflictError,
@@ -125,6 +154,18 @@ export type {
 } from "./records.js";
 export { RecordLifecycleError } from "./records.js";
 export {
+  createGeocodingRepository,
+  GeocodingConflictError,
+  GeocodingLifecycleError,
+  MAX_CROSS_CHECK_DISTANCE_M,
+  type GeocodingActor,
+  type GeocodingPorts,
+  type GeocodingRepository,
+  type GeocodingRepositoryOptions,
+  type GeocodeVenueResult,
+  type VenueCoordinateReview,
+} from "./geocoding.js";
+export {
   AccessError,
   createAccessRepository,
   DEFAULT_BOOTSTRAP_TTL_MS,
@@ -214,6 +255,10 @@ import {
   type OutboxRepository,
   type OutboxRepositoryOptions,
 } from "./outbox.js";
+import {
+  createGeocodingRepository,
+  type GeocodingRepository,
+} from "./geocoding.js";
 import { createQueueRepository, type QueueRepository } from "./queue.js";
 import {
   createRetentionRepository,
@@ -235,6 +280,7 @@ export interface CoreRuntime {
   readonly changeRequests: ChangeRequestRepository;
   readonly retention: RetentionRepository;
   readonly outbox: OutboxRepository;
+  readonly geocoding: GeocodingRepository;
 }
 
 export interface CoreOptions {
@@ -262,5 +308,6 @@ export function createCore(
       { email: ports.email },
       options.outbox,
     ),
+    geocoding: createGeocodingRepository(database, { geo: ports.geo }),
   });
 }

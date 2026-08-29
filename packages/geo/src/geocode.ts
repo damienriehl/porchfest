@@ -1,6 +1,12 @@
-import type { Coordinates, GeocodeRequest, GeoPort } from "@porchfest/core";
+import type {
+  BoundingBox,
+  Coordinates,
+  GeocodeRequest,
+  GeoPort,
+  LocateOutcome,
+  LocateRequest,
+} from "@porchfest/core";
 import { assertBoundingBox, boundingBoxContains } from "./verify.js";
-import type { BoundingBox, GeocodeCandidate } from "./verify.js";
 
 export const OVERPASS_URL = "https://overpass-api.de/api/interpreter";
 export const NOMINATIM_URL = "https://nominatim.openstreetmap.org/search";
@@ -10,6 +16,8 @@ export const DEFAULT_OPENSTREETMAP_USER_AGENT =
 export const DEFAULT_OVERPASS_TIMEOUT_MS = 180_000;
 export const DEFAULT_NOMINATIM_TIMEOUT_MS = 10_000;
 export const NOMINATIM_INTERVAL_MS = 1_000;
+export const MAX_OVERPASS_SNAPSHOTS = 4;
+export const OVERPASS_SNAPSHOT_TTL_MS = 6 * 60 * 60 * 1_000;
 
 const HOUSE_LEVEL_TYPES = new Set(["house", "building"]);
 const STREET_LEVEL_TYPES = new Set([
@@ -46,16 +54,7 @@ const DIRECTION_ALIASES: Readonly<Record<string, string>> = {
   w: "west",
 };
 
-export type GeocodeOutcome =
-  | {
-      readonly kind: "located";
-      readonly candidate: GeocodeCandidate;
-      readonly crossCheck: Coordinates | null;
-      readonly reason?: string;
-    }
-  | { readonly kind: "not-found"; readonly reason: string }
-  | { readonly kind: "refused"; readonly reason: string }
-  | { readonly kind: "unavailable"; readonly reason: string };
+export type GeocodeOutcome = LocateOutcome;
 
 export interface GeocodeCache {
   get(key: string): Promise<GeocodeOutcome | undefined>;
@@ -92,9 +91,12 @@ export interface ParsedAddress {
 }
 
 export interface OpenStreetMapGeoAdapterOptions {
-  /** Core's season bounds. The adapter never supplies a city-specific box. */
-  readonly boundingBox: BoundingBox;
-  /** Locality appended to address queries that do not already end with it. */
+  /** Legacy fallback only; core supplies season bounds to every locate call. */
+  readonly boundingBox?: BoundingBox;
+  /**
+   * Explicit fallback locality for callers that omit request.localityName.
+   * Without either value, queries and parsing remain locality-free.
+   */
   readonly localitySuffix?: string;
   /**
    * Nominatim requires an identifying User-Agent. Deployments should replace
@@ -144,6 +146,11 @@ interface LocalityGrammar {
   readonly tail: RegExp;
 }
 
+interface OverpassSnapshot {
+  readonly value: ReadonlyMap<string, readonly OverpassPoint[]>;
+  readonly expiresAt: number;
+}
+
 type FetchJsonResult =
   | { readonly kind: "success"; readonly body: unknown }
   | { readonly kind: "http-error"; readonly status: number }
@@ -169,7 +176,7 @@ export function parseAddress(
 
 function parseAddressWithGrammar(
   address: string,
-  grammar: LocalityGrammar,
+  grammar: LocalityGrammar | null,
 ): ParsedAddress {
   const houseMatch = /^\s*(\d+(?:-[A-Za-z]|[A-Za-z]|\s+\d+\/\d+)?)\b/.exec(
     address,
@@ -223,11 +230,10 @@ function streetTokenSequencesMatch(
 export class OpenStreetMapGeoAdapter implements GeoPort {
   readonly name = "openstreetmap";
   readonly configured = true;
-  readonly #boundingBox: BoundingBox;
-  readonly #localityGrammar: LocalityGrammar;
+  readonly #defaultBoundingBox: BoundingBox | null;
+  readonly #defaultLocalityGrammar: LocalityGrammar | null;
   readonly #userAgent: string;
   readonly #countryCodes: string;
-  readonly #cacheNamespace: string;
   readonly #overpassTimeoutMs: number;
   readonly #nominatimTimeoutMs: number;
   readonly #fetcher: typeof fetch;
@@ -235,18 +241,24 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
   readonly #wait: (milliseconds: number) => Promise<void>;
   readonly #cache: GeocodeCache;
   readonly #inFlight = new Map<string, Promise<GeocodeOutcome>>();
-  #overpassPoints: Promise<
-    ProviderResult<ReadonlyMap<string, readonly OverpassPoint[]>>
-  > | null = null;
+  readonly #overpassPoints = new Map<string, OverpassSnapshot>();
+  readonly #overpassInFlight = new Map<
+    string,
+    Promise<ProviderResult<ReadonlyMap<string, readonly OverpassPoint[]>>>
+  >();
   #lastNominatimRequestAt: number | null = null;
   #nominatimQueue: Promise<void> = Promise.resolve();
 
   constructor(options: OpenStreetMapGeoAdapterOptions) {
-    assertBoundingBox(options.boundingBox);
-    this.#boundingBox = { ...options.boundingBox };
-    this.#localityGrammar = localityGrammar(
-      options.localitySuffix ?? DEFAULT_LOCALITY_SUFFIX,
-    );
+    if (options.boundingBox !== undefined) {
+      assertBoundingBox(options.boundingBox);
+    }
+    this.#defaultBoundingBox =
+      options.boundingBox === undefined ? null : { ...options.boundingBox };
+    this.#defaultLocalityGrammar =
+      options.localitySuffix === undefined
+        ? null
+        : localityGrammar(options.localitySuffix, "localitySuffix");
     this.#userAgent = requireNonEmpty(
       options.userAgent ?? DEFAULT_OPENSTREETMAP_USER_AGENT,
       "userAgent",
@@ -254,10 +266,6 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
     this.#countryCodes = requireNonEmpty(
       options.countryCodes ?? "us",
       "countryCodes",
-    );
-    this.#cacheNamespace = cacheNamespace(
-      this.#boundingBox,
-      this.#countryCodes,
     );
     this.#overpassTimeoutMs = positiveTimeout(
       options.overpassTimeoutMs ?? DEFAULT_OVERPASS_TIMEOUT_MS,
@@ -282,16 +290,34 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
     };
   }
 
-  async locate(request: GeocodeRequest): Promise<GeocodeOutcome> {
+  async locate(request: LocateRequest): Promise<GeocodeOutcome> {
+    const boundingBox = request.boundingBox ?? this.#defaultBoundingBox;
+    if (boundingBox === null) {
+      return {
+        kind: "unavailable",
+        reason: "No season bounding box was supplied for geocoding.",
+      };
+    }
+    assertBoundingBox(boundingBox);
+    const grammar =
+      request.localityName === undefined
+        ? this.#defaultLocalityGrammar
+        : localityGrammar(request.localityName, "localityName");
     const { key, query } = normalizedAddressKey(
       request.address,
-      this.#localityGrammar,
-      this.#cacheNamespace,
+      grammar,
+      cacheNamespace(boundingBox, this.#countryCodes, grammar),
     );
     const active = this.#inFlight.get(key);
     if (active !== undefined) return active;
 
-    const operation = this.#locateWithCache(key, request.address, query);
+    const operation = this.#locateWithCache(
+      key,
+      request.address,
+      query,
+      grammar,
+      boundingBox,
+    );
     this.#inFlight.set(key, operation);
     try {
       return await operation;
@@ -304,6 +330,8 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
     key: string,
     address: string,
     query: string,
+    grammar: LocalityGrammar | null,
+    boundingBox: BoundingBox,
   ): Promise<GeocodeOutcome> {
     try {
       const cached = await this.#cache.get(key);
@@ -312,7 +340,12 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
       // A persistent cache is an optimization, not a provider dependency.
     }
 
-    const attempt = await this.#locateUncached(address, query);
+    const attempt = await this.#locateUncached(
+      address,
+      query,
+      grammar,
+      boundingBox,
+    );
     const { outcome } = attempt;
     if (!attempt.cacheable) return outcome;
     try {
@@ -326,10 +359,12 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
   async #locateUncached(
     address: string,
     submittedQuery: string,
+    grammar: LocalityGrammar | null,
+    boundingBox: BoundingBox,
   ): Promise<LocateAttempt> {
     let parsed: ParsedAddress;
     try {
-      parsed = parseAddressWithGrammar(address, this.#localityGrammar);
+      parsed = parseAddressWithGrammar(address, grammar);
     } catch (error) {
       if (error instanceof AddressParseError) {
         return cacheableAttempt({ kind: "refused", reason: error.message });
@@ -339,8 +374,8 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
 
     const submittedStreetTokens = normalizedStreetTokens(parsed.street);
     const [overpass, nominatim] = await Promise.all([
-      this.#loadOverpassPoints(),
-      this.#lookupNominatim(submittedQuery),
+      this.#loadOverpassPoints(boundingBox),
+      this.#lookupNominatim(submittedQuery, boundingBox),
     ]);
     const parcel =
       overpass.kind === "available"
@@ -362,7 +397,7 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
       nominatim.value,
       parsed,
       submittedStreetTokens,
-      this.#boundingBox,
+      boundingBox,
       parcel === null ? undefined : overpassReference(parcel),
     );
 
@@ -384,9 +419,10 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
           ref: nominatimResult.ref,
         },
         crossCheck: null,
-        ...(overpass.kind === "unavailable"
-          ? { reason: `Overpass was unavailable: ${overpass.reason}` }
-          : {}),
+        reason:
+          overpass.kind === "unavailable"
+            ? `Located a house-level result, but Overpass was unavailable: ${overpass.reason}`
+            : "Located a house-level address result.",
       };
       return overpass.kind === "unavailable"
         ? uncacheableAttempt(outcome)
@@ -401,33 +437,52 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
     return cacheableAttempt(nominatimResult);
   }
 
-  #loadOverpassPoints(): Promise<
-    ProviderResult<ReadonlyMap<string, readonly OverpassPoint[]>>
-  > {
-    if (this.#overpassPoints !== null) return this.#overpassPoints;
-    const operation = this.#fetchOverpassPoints();
-    this.#overpassPoints = operation;
+  #loadOverpassPoints(
+    boundingBox: BoundingBox,
+  ): Promise<ProviderResult<ReadonlyMap<string, readonly OverpassPoint[]>>> {
+    const key = boundingBoxNamespace(boundingBox);
+    const currentTime = this.#now();
+    const current = this.#overpassPoints.get(key);
+    if (current !== undefined && current.expiresAt > currentTime) {
+      this.#overpassPoints.delete(key);
+      this.#overpassPoints.set(key, current);
+      return Promise.resolve({ kind: "available", value: current.value });
+    }
+    if (current !== undefined) this.#overpassPoints.delete(key);
+    const pending = this.#overpassInFlight.get(key);
+    if (pending !== undefined) return pending;
+    const operation = this.#fetchOverpassPoints(boundingBox);
+    this.#overpassInFlight.set(key, operation);
     void operation.then(
       (result) => {
-        if (
-          result.kind === "unavailable" &&
-          this.#overpassPoints === operation
-        ) {
-          this.#overpassPoints = null;
+        if (this.#overpassInFlight.get(key) !== operation) return;
+        this.#overpassInFlight.delete(key);
+        if (result.kind === "available") {
+          this.#overpassPoints.set(key, {
+            value: result.value,
+            expiresAt: this.#now() + OVERPASS_SNAPSHOT_TTL_MS,
+          });
+          while (this.#overpassPoints.size > MAX_OVERPASS_SNAPSHOTS) {
+            const oldestKey = this.#overpassPoints.keys().next().value;
+            if (oldestKey === undefined) break;
+            this.#overpassPoints.delete(oldestKey);
+          }
         }
       },
       () => {
-        if (this.#overpassPoints === operation) this.#overpassPoints = null;
+        if (this.#overpassInFlight.get(key) === operation) {
+          this.#overpassInFlight.delete(key);
+        }
       },
     );
     return operation;
   }
 
-  async #fetchOverpassPoints(): Promise<
-    ProviderResult<ReadonlyMap<string, readonly OverpassPoint[]>>
-  > {
+  async #fetchOverpassPoints(
+    boundingBox: BoundingBox,
+  ): Promise<ProviderResult<ReadonlyMap<string, readonly OverpassPoint[]>>> {
     const form = new URLSearchParams({
-      data: overpassQuery(this.#boundingBox),
+      data: overpassQuery(boundingBox),
     });
     const request = await fetchJsonWithTimeout(
       this.#fetcher,
@@ -470,9 +525,12 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
     return { kind: "available", value: indexOverpassElements(elements) };
   }
 
-  #lookupNominatim(query: string): Promise<ProviderResult<readonly unknown[]>> {
+  #lookupNominatim(
+    query: string,
+    boundingBox: BoundingBox,
+  ): Promise<ProviderResult<readonly unknown[]>> {
     const operation = this.#nominatimQueue.then(() =>
-      this.#fetchNominatim(query),
+      this.#fetchNominatim(query, boundingBox),
     );
     this.#nominatimQueue = operation.then(
       () => undefined,
@@ -483,6 +541,7 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
 
   async #fetchNominatim(
     query: string,
+    boundingBox: BoundingBox,
   ): Promise<ProviderResult<readonly unknown[]>> {
     if (this.#lastNominatimRequestAt !== null) {
       const remaining =
@@ -497,7 +556,7 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
       limit: "5",
       addressdetails: "1",
       countrycodes: this.#countryCodes,
-      viewbox: `${this.#boundingBox.west},${this.#boundingBox.south},${this.#boundingBox.east},${this.#boundingBox.north}`,
+      viewbox: `${boundingBox.west},${boundingBox.south},${boundingBox.east},${boundingBox.north}`,
       bounded: "1",
       q: query,
     }).toString();
@@ -623,6 +682,7 @@ function locatedParcel(
       ref: overpassReference(parcel),
     },
     crossCheck,
+    reason: "Located a parcel-level address point.",
   };
 }
 
@@ -816,7 +876,7 @@ function overpassReference(point: OverpassPoint): string {
 
 function normalizedAddressKey(
   address: string,
-  grammar: LocalityGrammar,
+  grammar: LocalityGrammar | null,
   namespace: string,
 ): { readonly key: string; readonly query: string } {
   const query = queryStringWithGrammar(address.trim(), grammar);
@@ -826,18 +886,31 @@ function normalizedAddressKey(
   };
 }
 
-function cacheNamespace(box: BoundingBox, countryCodes: string): string {
+function cacheNamespace(
+  box: BoundingBox,
+  countryCodes: string,
+  grammar: LocalityGrammar | null,
+): string {
   const canonicalCountryCodes = countryCodes
     .split(",")
     .map((code) => caseFold(code.trim()))
     .join(",");
-  return `openstreetmap-v1|countrycodes=${canonicalCountryCodes}|bbox=${box.west},${box.south},${box.east},${box.north}`;
+  const locality =
+    grammar === null
+      ? "absent"
+      : `present:${caseFold(grammar.suffix).replace(/\s+/g, " ").trim()}`;
+  return `openstreetmap-v1|countrycodes=${canonicalCountryCodes}|bbox=${boundingBoxNamespace(box)}|locality=${locality}`;
+}
+
+function boundingBoxNamespace(box: BoundingBox): string {
+  return `${box.west},${box.south},${box.east},${box.north}`;
 }
 
 function queryStringWithGrammar(
   address: string,
-  grammar: LocalityGrammar,
+  grammar: LocalityGrammar | null,
 ): string {
+  if (grammar === null) return address.trim();
   if (containsLocality(address, grammar)) return address;
   return `${address}, ${grammar.suffix}`;
 }
@@ -846,15 +919,21 @@ function containsLocality(address: string, grammar: LocalityGrammar): boolean {
   return grammar.tail.test(address);
 }
 
-function stripLocalityTail(street: string, grammar: LocalityGrammar): string {
-  return street.replace(grammar.tail, "");
+function stripLocalityTail(
+  street: string,
+  grammar: LocalityGrammar | null,
+): string {
+  return grammar === null ? street : street.replace(grammar.tail, "");
 }
 
-function localityGrammar(localitySuffix: string): LocalityGrammar {
-  const suffix = requireNonEmpty(localitySuffix, "localitySuffix");
+function localityGrammar(
+  localitySuffix: string,
+  fieldName = "localitySuffix",
+): LocalityGrammar {
+  const suffix = requireNonEmpty(localitySuffix, fieldName);
   const tokenMatches = [...suffix.matchAll(/[A-Za-z0-9]+(?:\.)?/g)];
   if (tokenMatches.length === 0) {
-    throw new TypeError("localitySuffix must contain a word or number.");
+    throw new TypeError(`${fieldName} must contain a word or number.`);
   }
 
   let localityPattern = localityTokenPattern(tokenMatches[0]?.[0] ?? "");

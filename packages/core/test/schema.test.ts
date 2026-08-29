@@ -1,6 +1,8 @@
 import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import { getTableName, is } from "drizzle-orm";
+import { readMigrationFiles } from "drizzle-orm/migrator";
 import { SQLiteTable } from "drizzle-orm/sqlite-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import * as schema from "../src/storage/schema.js";
@@ -58,6 +60,89 @@ describe("core schema migration", () => {
         .map((row) => (row as { name: string }).name);
 
       expect(columnNames, table.name).toEqual(table.columns);
+    }
+  });
+
+  it("upgrades complete and partial 0013 coordinates into explicit provenance", () => {
+    const upgrade = new Database(":memory:");
+    upgrade.pragma("foreign_keys = ON");
+    const migrations = readMigrationFiles({
+      migrationsFolder: fileURLToPath(new URL("../drizzle", import.meta.url)),
+    });
+    const migration0014 = migrations.at(-1);
+    if (migration0014 === undefined) {
+      throw new Error("migration 0014 was not loaded");
+    }
+
+    try {
+      for (const migration of migrations.slice(0, -1)) {
+        for (const statement of migration.sql) {
+          if (statement.trim() !== "") upgrade.exec(statement);
+        }
+      }
+      const season = upgrade
+        .prepare(
+          "insert into seasons (year, display_name) values (?, ?) returning id",
+        )
+        .get(2114, "Upgrade Sample") as { id: number };
+      const insertVenue = upgrade.prepare(
+        "insert into venues (season_id, title, address, latitude, longitude) values (?, ?, ?, ?, ?)",
+      );
+      insertVenue.run(
+        season.id,
+        "Complete Coordinate",
+        "201 Aurora Way",
+        10.5,
+        20.5,
+      );
+      insertVenue.run(
+        season.id,
+        "Partial Coordinate",
+        "202 Aurora Way",
+        10.6,
+        null,
+      );
+      insertVenue.run(season.id, "No Coordinate", "203 Aurora Way", null, null);
+
+      for (const statement of migration0014.sql) {
+        if (statement.trim() !== "") upgrade.exec(statement);
+      }
+
+      expect(
+        upgrade
+          .prepare(
+            "select latitude, longitude, source, provider, status, rejection_code, address_at_geocode from venue_coordinates order by venue_id",
+          )
+          .all(),
+      ).toEqual([
+        {
+          latitude: 10.5,
+          longitude: 20.5,
+          source: "organizer-verified",
+          provider: "legacy",
+          status: "pending",
+          rejection_code: null,
+          address_at_geocode: "201 Aurora Way",
+        },
+        {
+          latitude: null,
+          longitude: null,
+          source: "organizer-verified",
+          provider: "legacy",
+          status: "needs-review",
+          rejection_code: "invalid-coordinate",
+          address_at_geocode: "202 Aurora Way",
+        },
+      ]);
+      expect(
+        upgrade
+          .prepare("select name from pragma_table_info('venues')")
+          .all()
+          .map((row) => (row as { name: string }).name),
+      ).not.toEqual(expect.arrayContaining(["latitude", "longitude"]));
+      expect(upgrade.pragma("foreign_key_check")).toEqual([]);
+    } finally {
+      upgrade.close();
     }
   });
 
@@ -347,6 +432,25 @@ describe("core schema migration", () => {
     expect(
       constraintValues(migration, "outbox_messages_record_type_check"),
     ).toEqual(schema.outboxRecordTypes);
+  });
+
+  it("keeps coordinate provenance checks aligned with the schema value lists", async () => {
+    const migration = await readFile(
+      new URL("../drizzle/0014_venue_coordinates.sql", import.meta.url),
+      "utf8",
+    );
+    expect(
+      constraintValues(migration, "venue_coordinates_source_check"),
+    ).toEqual(schema.coordinateSources);
+    expect(
+      constraintValues(migration, "venue_coordinates_precision_check"),
+    ).toEqual(schema.coordinatePrecisions);
+    expect(
+      constraintValues(migration, "venue_coordinates_status_check"),
+    ).toEqual(schema.coordinateStatuses);
+    expect(
+      constraintValues(migration, "venue_coordinates_rejection_code_check"),
+    ).toEqual(schema.coordinateRejectionCodes);
   });
 
   it("keeps pre-outbox email_log rows valid and one row per recipient", () => {

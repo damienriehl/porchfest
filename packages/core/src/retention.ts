@@ -19,6 +19,7 @@ import {
   changeRequests,
   contacts,
   deletionReceipts,
+  venueCoordinates,
   venues,
   type Contact,
   type DeletionReceipt,
@@ -308,13 +309,17 @@ export function createRetentionRepository(
         .set({
           address: null,
           spaceDescription: null,
-          latitude: null,
-          longitude: null,
           notes: null,
           version: sql`${venues.version} + 1`,
           updatedAt: stamp,
         })
         .where(inArray(venues.id, venueIds))
+        .run();
+      // Coordinate provenance includes the private address-at-geocode and the
+      // attendee point itself, so anonymization removes the complete row.
+      executor
+        .delete(venueCoordinates)
+        .where(inArray(venueCoordinates.venueId, venueIds))
         .run();
       executor
         .update(changeRequests)

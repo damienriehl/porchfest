@@ -27,6 +27,27 @@ export const slotStates = ["open", "held", "assigned"] as const;
  */
 export const recordStatuses = ["tentative", "confirmed", "withdrawn"] as const;
 
+export const coordinateSources = ["geocoded", "organizer-verified"] as const;
+export const coordinatePrecisions = ["parcel", "house", "street"] as const;
+export const coordinateStatuses = [
+  "verified",
+  "needs-review",
+  "rejected",
+  "pending",
+] as const;
+export const coordinateRejectionCodes = [
+  "invalid-coordinate",
+  "missing-ref",
+  "interpolated",
+  "imprecise",
+  "out-of-bounds",
+  "cross-check-missing",
+  "cross-check-distance",
+  "address-changed",
+  "not-found",
+  "refused",
+] as const;
+
 export const changeRequestRecordTypes = ["act", "venue"] as const;
 export const changeRequestKinds = [
   "withdrawal",
@@ -385,8 +406,6 @@ export const venues = sqliteTable(
     requestedActNames: text("requested_act_names"),
     genrePreferences: text("genre_preferences"),
     rainBackup: integer("rain_backup", { mode: "boolean" }),
-    latitude: real("latitude"),
-    longitude: real("longitude"),
     notes: text("notes"),
     status: text("status", { enum: recordStatuses })
       .notNull()
@@ -404,6 +423,64 @@ export const venues = sqliteTable(
     ...mutableColumns(),
   },
   (table) => [index("venues_season_id_idx").on(table.seasonId)],
+);
+
+/**
+ * KTD11/R29: coordinates have a lifecycle independent of venue record edits.
+ * A one-to-one row keeps provider attempts, provenance, organizer attribution,
+ * and review state together without making ordinary venue CAS writes own them.
+ * Nullable point/ref fields let not-found and refused attempts retain their
+ * address/provider provenance without pretending a coordinate was produced.
+ */
+export const venueCoordinates = sqliteTable(
+  "venue_coordinates",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    venueId: integer("venue_id")
+      .notNull()
+      .references(() => venues.id),
+    latitude: real("latitude"),
+    longitude: real("longitude"),
+    source: text("source", { enum: coordinateSources }).notNull(),
+    precision: text("precision", { enum: coordinatePrecisions }),
+    provider: text("provider").notNull(),
+    ref: text("ref"),
+    crossCheckDistanceM: real("cross_check_distance_m"),
+    status: text("status", { enum: coordinateStatuses }).notNull(),
+    rejectionCode: text("rejection_code", {
+      enum: coordinateRejectionCodes,
+    }),
+    addressAtGeocode: text("address_at_geocode").notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+    updatedBy: integer("updated_by").references(() => organizers.id),
+    version: integer("version").notNull().default(1),
+  },
+  (table) => [
+    uniqueIndex("venue_coordinates_venue_id_uidx").on(table.venueId),
+    index("venue_coordinates_status_idx").on(table.status),
+    check(
+      "venue_coordinates_source_check",
+      sql`${table.source} in ('geocoded', 'organizer-verified')`,
+    ),
+    check(
+      "venue_coordinates_precision_check",
+      sql`${table.precision} is null or ${table.precision} in ('parcel', 'house', 'street')`,
+    ),
+    check(
+      "venue_coordinates_status_check",
+      sql`${table.status} in ('verified', 'needs-review', 'rejected', 'pending')`,
+    ),
+    check(
+      "venue_coordinates_rejection_code_check",
+      sql`${table.rejectionCode} is null or ${table.rejectionCode} in ('invalid-coordinate', 'missing-ref', 'interpolated', 'imprecise', 'out-of-bounds', 'cross-check-missing', 'cross-check-distance', 'address-changed', 'not-found', 'refused')`,
+    ),
+    check(
+      "venue_coordinates_point_pair_check",
+      sql`(${table.latitude} is null and ${table.longitude} is null) or (${table.latitude} is not null and ${table.longitude} is not null)`,
+    ),
+  ],
 );
 
 export const acts = sqliteTable(
@@ -856,6 +933,7 @@ const schemaTables = [
   contacts,
   deletionReceipts,
   venues,
+  venueCoordinates,
   acts,
   changeRequests,
   venueGear,
@@ -921,6 +999,12 @@ export type DeletionReceiptBackupStatus =
   (typeof deletionReceiptBackupStatuses)[number];
 export type Venue = typeof venues.$inferSelect;
 export type NewVenue = typeof venues.$inferInsert;
+export type VenueCoordinate = typeof venueCoordinates.$inferSelect;
+export type NewVenueCoordinate = typeof venueCoordinates.$inferInsert;
+export type CoordinateSource = (typeof coordinateSources)[number];
+export type CoordinatePrecision = (typeof coordinatePrecisions)[number];
+export type CoordinateStatus = (typeof coordinateStatuses)[number];
+export type CoordinateRejectionCode = (typeof coordinateRejectionCodes)[number];
 export type Act = typeof acts.$inferSelect;
 export type NewAct = typeof acts.$inferInsert;
 export type VenueGear = typeof venueGear.$inferSelect;

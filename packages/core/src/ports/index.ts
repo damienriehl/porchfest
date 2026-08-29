@@ -5,7 +5,16 @@ export type {
   AntibotRequest,
   AntibotResult,
 } from "./antibot.js";
-export type { Coordinates, GeocodeRequest, GeoPort } from "./geo.js";
+export type {
+  BoundingBox,
+  CoordinatePrecision,
+  Coordinates,
+  GeocodeRequest,
+  GeoPort,
+  LocateCandidate,
+  LocateOutcome,
+  LocateRequest,
+} from "./geo.js";
 
 import type { AntibotPort } from "./antibot.js";
 import type { EmailPort } from "./email.js";

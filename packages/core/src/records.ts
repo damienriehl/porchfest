@@ -10,6 +10,7 @@ import {
   venueAmenities,
   venueDrinks,
   venueGear,
+  venueCoordinates,
   venues,
   type Act,
   type ActAvailability,
@@ -19,6 +20,10 @@ import {
   type VenueDrink,
   type VenueGear,
 } from "./storage/schema.js";
+import {
+  invalidateCoordinateForAddressChange,
+  upsertCoordinate,
+} from "./geocoding.js";
 import {
   type CoreExecutor,
   type CoreTransaction,
@@ -55,8 +60,6 @@ export type VenueChanges = Partial<
     | "requestedActNames"
     | "genrePreferences"
     | "rainBackup"
-    | "latitude"
-    | "longitude"
     | "notes"
     | "hostContactId"
     | "placeholder"
@@ -156,8 +159,6 @@ export interface CreatePlaceholderVenueInput {
     spaceDescription?: string | null;
     hasPower?: boolean | null;
     rainBackup?: boolean | null;
-    latitude?: number | null;
-    longitude?: number | null;
     notes?: string | null;
     hostContactId?: number | null;
     requestedActNames?: string | null;
@@ -512,6 +513,9 @@ export function createRecordRepository(
       .where(and(eq(venues.id, id), eq(venues.version, expectedVersion)))
       .run();
     if (result.changes !== 1) conflict("venue", id, fields);
+    if (changes.address !== undefined) {
+      invalidateCoordinateForAddressChange(db, id, now());
+    }
     return getVenue(id);
   }
 
@@ -752,8 +756,6 @@ export function createRecordRepository(
             submission.spaceDescription ?? placeholder.spaceDescription,
           hasPower: submission.hasPower ?? placeholder.hasPower,
           rainBackup: submission.rainBackup ?? placeholder.rainBackup,
-          latitude: submission.latitude ?? placeholder.latitude,
-          longitude: submission.longitude ?? placeholder.longitude,
           notes: submission.notes ?? placeholder.notes,
           hostContactId: submission.hostContactId ?? placeholder.hostContactId,
           placeholder: false,
@@ -771,6 +773,43 @@ export function createRecordRepository(
         .run();
       if (placeholderResult.changes !== 1)
         conflict("venue", placeholderId, ["promotion"]);
+
+      const placeholderCoordinate = tx
+        .select()
+        .from(venueCoordinates)
+        .where(eq(venueCoordinates.venueId, placeholderId))
+        .get();
+      const submittedCoordinate = tx
+        .select()
+        .from(venueCoordinates)
+        .where(eq(venueCoordinates.venueId, submissionId))
+        .get();
+      const preserveOrganizerCoordinate =
+        placeholderCoordinate?.source === "organizer-verified" &&
+        submittedCoordinate?.source === "geocoded";
+      if (submittedCoordinate !== undefined && !preserveOrganizerCoordinate) {
+        upsertCoordinate(tx, {
+          venueId: placeholderId,
+          latitude: submittedCoordinate.latitude,
+          longitude: submittedCoordinate.longitude,
+          source: submittedCoordinate.source,
+          precision: submittedCoordinate.precision,
+          provider: submittedCoordinate.provider,
+          ref: submittedCoordinate.ref,
+          crossCheckDistanceM: submittedCoordinate.crossCheckDistanceM,
+          status: submittedCoordinate.status,
+          rejectionCode: submittedCoordinate.rejectionCode,
+          addressAtGeocode: submittedCoordinate.addressAtGeocode,
+          updatedAt: now(),
+          updatedBy: submittedCoordinate.updatedBy,
+        });
+      }
+      if (submittedCoordinate !== undefined) {
+        tx.delete(venueCoordinates)
+          .where(eq(venueCoordinates.venueId, submissionId))
+          .run();
+      }
+      invalidateCoordinateForAddressChange(tx, placeholderId, now());
 
       tx.update(slots)
         .set({
