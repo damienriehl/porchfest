@@ -1,4 +1,10 @@
-import type { GeoPort, LocateOutcome, LocateRequest } from "@porchfest/core";
+import {
+  CORE_DATABASE_FILENAME,
+  type GeoPort,
+  type LocateOutcome,
+  type LocateRequest,
+} from "@porchfest/core";
+import Database from "better-sqlite3";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -98,7 +104,7 @@ async function boot(geo?: GeoPort) {
     bounds: { north: 11, south: 10, east: 21, west: 20 },
     openSignups: true,
   }).season;
-  return { runtime, cookie, season };
+  return { runtime, cookie, season, dataDirectory };
 }
 
 function createVenue(
@@ -125,6 +131,42 @@ function createVenue(
     drinks: [],
     amenities: [],
   }).venue;
+}
+
+function makePublishable(
+  runtime: PorchfestTestingRuntime,
+  seasonId: number,
+  title = "Publishable Porch",
+) {
+  const venue = createVenue(runtime, seasonId, title, "51 Publishable Way");
+  const performer = runtime.core.seasons.createPerformerSignup({
+    seasonId,
+    contact: {
+      name: "Publishable Performer",
+      email: "publishable-performer@example.invalid",
+    },
+    act: {
+      name: "Publishable Act",
+      genre: "Synthetic",
+      description: "A publishable synthetic set.",
+      links: "",
+      durationMinutes: 45,
+      requiresAmplification: false,
+      housePreference: null,
+      canLendGear: false,
+      notes: null,
+    },
+    availabilities: [],
+  });
+  const slot = runtime.core.seasons.ensureVenueSlots(venue.id)[0]!;
+  runtime.core.seasons.assignSlot(slot.id, slot.version, performer.act.id);
+  runtime.core.geocoding.verifyVenueCoordinate(
+    venue.id,
+    { latitude: 10.5, longitude: 20.5 },
+    null,
+    venue.version,
+  );
+  return venue;
 }
 
 function formHeaders(cookie = "") {
@@ -468,6 +510,7 @@ describe("organizer coordinate review and map publication (U9)", () => {
     expect(html).not.toContain(`/seasons/${season.id}/map/publish`);
     expect(html).toContain("Publication controls appear only");
 
+    makePublishable(runtime, season.id);
     const locked = runtime.core.seasons.transitionSeason(
       season.id,
       season.version,
@@ -493,6 +536,9 @@ describe("organizer coordinate review and map publication (U9)", () => {
     expect(
       runtime.core.seasons.getSeason(season.id).mapPublishedAt,
     ).not.toBeNull();
+    expect(
+      (await runtime.request(`${PUBLIC_BASE_URL}/map/data.json`)).status,
+    ).toBe(200);
 
     response = await page(runtime, cookie, season.id);
     html = await response.text();
@@ -508,6 +554,95 @@ describe("organizer coordinate review and map publication (U9)", () => {
       }),
     });
     expect(response.status).toBe(303);
+    expect(runtime.core.seasons.getSeason(season.id).mapPublishedAt).toBeNull();
+  });
+
+  it("refuses publication when no venue has both an assigned act and verified coordinate", async () => {
+    const { runtime, cookie, season } = await boot();
+    const locked = runtime.core.seasons.transitionSeason(
+      season.id,
+      season.version,
+      "locked",
+    );
+    const html = await (await page(runtime, cookie, season.id)).text();
+    const action = `/seasons/${season.id}/map/publish`;
+
+    const response = await runtime.request(`${PUBLIC_BASE_URL}${action}`, {
+      method: "POST",
+      headers: formHeaders(cookie),
+      body: new URLSearchParams({
+        _csrf: tokenFrom(html, action),
+        version: String(locked.version),
+        event_city: "Exampleton",
+        event_state: "WI",
+      }),
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.text()).toContain(
+      "No venue has a verified coordinate and an assigned act",
+    );
+    expect(runtime.core.seasons.getSeason(season.id).mapPublishedAt).toBeNull();
+  });
+
+  it("names an empty-title venue when schema preflight refuses publication", async () => {
+    const { runtime, cookie, season } = await boot();
+    makePublishable(runtime, season.id, "");
+    const locked = runtime.core.seasons.transitionSeason(
+      season.id,
+      season.version,
+      "locked",
+    );
+    const html = await (await page(runtime, cookie, season.id)).text();
+    const action = `/seasons/${season.id}/map/publish`;
+
+    const response = await runtime.request(`${PUBLIC_BASE_URL}${action}`, {
+      method: "POST",
+      headers: formHeaders(cookie),
+      body: new URLSearchParams({
+        _csrf: tokenFrom(html, action),
+        version: String(locked.version),
+        event_city: "Exampleton",
+        event_state: "WI",
+      }),
+    });
+    const text = await response.text();
+
+    expect(response.status).toBe(409);
+    expect(text).toContain("Venue &quot;(empty title)&quot;");
+    expect(text).toMatch(/title.*must NOT have fewer than 1 characters/i);
+    expect(runtime.core.seasons.getSeason(season.id).mapPublishedAt).toBeNull();
+  });
+
+  it("names a legacy null event date when preflight refuses publication", async () => {
+    const { runtime, cookie, season, dataDirectory } = await boot();
+    makePublishable(runtime, season.id);
+    const locked = runtime.core.seasons.transitionSeason(
+      season.id,
+      season.version,
+      "locked",
+    );
+    const sqlite = new Database(join(dataDirectory, CORE_DATABASE_FILENAME));
+    sqlite
+      .prepare("update seasons set event_date = null where id = ?")
+      .run(season.id);
+    sqlite.close();
+    const html = await (await page(runtime, cookie, season.id)).text();
+    const action = `/seasons/${season.id}/map/publish`;
+
+    const response = await runtime.request(`${PUBLIC_BASE_URL}${action}`, {
+      method: "POST",
+      headers: formHeaders(cookie),
+      body: new URLSearchParams({
+        _csrf: tokenFrom(html, action),
+        version: String(locked.version),
+        event_city: "Exampleton",
+        event_state: "WI",
+      }),
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.text()).toMatch(/event date.*format/i);
     expect(runtime.core.seasons.getSeason(season.id).mapPublishedAt).toBeNull();
   });
 });

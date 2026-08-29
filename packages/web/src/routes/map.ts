@@ -100,7 +100,7 @@ function mapData(core: CoreRuntime): Response {
           candidate.year <= currentYearIn(candidate.timezone),
       );
     const document = season
-      ? publishedMapDocument(core, season)
+      ? buildPublishedMapDocument(core, season)
       : EMPTY_MAP_DOCUMENT;
 
     // Five minutes limits the address-withdrawal window without turning every
@@ -131,7 +131,7 @@ function mapData(core: CoreRuntime): Response {
   }
 }
 
-function publishedMapDocument(
+export function buildPublishedMapDocument(
   core: CoreRuntime,
   season: Season,
 ): VenuesMapDocument {
@@ -250,6 +250,63 @@ function publishedMapDocument(
     },
     venues,
   };
+}
+
+export type MapPublicationPreflight =
+  | { readonly ok: true; readonly document: VenuesMapDocument }
+  | { readonly ok: false; readonly error: string };
+
+export function preflightMapPublication(
+  core: CoreRuntime,
+  season: Season,
+): MapPublicationPreflight {
+  let document: VenuesMapDocument;
+  try {
+    document = buildPublishedMapDocument(core, season);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return { ok: false, error: `Map generation failed: ${reason}` };
+  }
+  if (document.venues.length === 0) {
+    return {
+      ok: false,
+      error: "No venue has a verified coordinate and an assigned act.",
+    };
+  }
+  const validation = validateVenuesMapDocument(document);
+  if (validation.ok) return { ok: true, document: validation.document };
+  const first = validation.errors[0];
+  if (first === undefined) {
+    return { ok: false, error: "Map schema validation failed." };
+  }
+  return {
+    ok: false,
+    error: publicationValidationError(document, first),
+  };
+}
+
+function publicationValidationError(
+  document: VenuesMapDocument,
+  error: { readonly path: string; readonly message: string },
+): string {
+  const match = /^\/venues\/(\d+)(?:\/acts\/(\d+))?/.exec(error.path);
+  const venueIndex = match === null ? Number.NaN : Number(match[1]);
+  const actIndex = match?.[2] === undefined ? Number.NaN : Number(match[2]);
+  const venue = Number.isSafeInteger(venueIndex)
+    ? document.venues[venueIndex]
+    : undefined;
+  const venueTitle = venue?.title.trim() || "(empty title)";
+  if (venue !== undefined && Number.isSafeInteger(actIndex)) {
+    const actName = venue.acts[actIndex]?.name.trim() || "(empty title)";
+    return `Act "${actName}" at venue "${venueTitle}": schema ${error.path} ${error.message}.`;
+  }
+  if (venue !== undefined) {
+    return `Venue "${venueTitle}": schema ${error.path} ${error.message}.`;
+  }
+  if (error.path === "/event/date") {
+    return `Event date: schema ${error.path} ${error.message}.`;
+  }
+  return `Map document: schema ${error.path} ${error.message}.`;
 }
 
 function currentYearIn(timezone: string): number {

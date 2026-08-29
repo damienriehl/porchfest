@@ -16,6 +16,7 @@ import {
   type GeocodeSeasonCounts,
 } from "../views/coordinates.js";
 import { readFields, redirect, unauthorized } from "./admin-http.js";
+import { preflightMapPublication } from "./map.js";
 
 export const COORDINATES_PATH = "/seasons/:id/coordinates";
 export const VERIFY_COORDINATE_PATH =
@@ -198,6 +199,16 @@ function registerPublicationAction(
         if (action === "publish") {
           const eventCity = fields.event_city?.trim() ?? "";
           const eventState = fields.event_state?.trim() ?? "";
+          const preflight = preflightMapPublication(options.core, {
+            ...season,
+            eventCity,
+            eventState,
+          });
+          if (!preflight.ok) {
+            return coordinatePage(options, season, 409, {
+              error: preflight.error,
+            });
+          }
           options.core.seasons.publishSeasonMap(season.id, version, {
             eventCity,
             eventState,
