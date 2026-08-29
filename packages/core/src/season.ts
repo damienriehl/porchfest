@@ -1014,7 +1014,6 @@ export function createSeasonRepository(
   }
 
   function listSeasonSlots(seasonId: number): Slot[] {
-    getSeason(seasonId);
     return db
       .select()
       .from(slots)
@@ -1024,7 +1023,6 @@ export function createSeasonRepository(
   }
 
   function listSeasonVenues(seasonId: number): Venue[] {
-    getSeason(seasonId);
     return db
       .select()
       .from(venues)
@@ -1034,7 +1032,6 @@ export function createSeasonRepository(
   }
 
   function listSeasonActs(seasonId: number): Act[] {
-    getSeason(seasonId);
     return db
       .select()
       .from(acts)

@@ -140,6 +140,8 @@ function publishedMapDocument(
   const slotIds = new Set(slots.map((slot) => slot.id));
   const assignments = core.seasons.listAssignments(season.id);
   const seasonActs = core.seasons.listSeasonActs(season.id);
+  const coordinates =
+    core.geocoding.publishableCoordinatesForSeason(season.id);
   const actsById: Record<number, (typeof seasonActs)[number] | undefined> =
     Object.create(null) as Record<
       number,
@@ -170,8 +172,8 @@ function publishedMapDocument(
         venue.status !== "withdrawn" && venue.canonicalVenueId === null,
     )
     .flatMap((venue) => {
-      const coordinate = core.geocoding.publishableCoordinate(venue.id);
-      if (coordinate === null) return [];
+      const coordinate = coordinates.get(venue.id);
+      if (coordinate === undefined) return [];
 
       const acts = (slotsByVenue[venue.id] ?? []).flatMap((slot) => {
         if (slot.state !== "assigned") return [];

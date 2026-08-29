@@ -228,6 +228,25 @@ describe("core venue geocoding (U9 / KTD11)", () => {
     });
   });
 
+  it("loads every verified coordinate for one season in a venue-keyed map", async () => {
+    const first = fixture();
+    const second = fixture(2035);
+    await geocoding().geocodeVenue(first.venue.id, actor);
+    fake.locate.mockResolvedValue(located({ latitude: 12 }));
+    await geocoding().geocodeVenue(second.venue.id, actor);
+
+    expect(
+      geocoding().publishableCoordinatesForSeason(first.season.id),
+    ).toEqual(
+      new Map([
+        [first.venue.id, { latitude: 10.5, longitude: 20.5 }],
+      ]),
+    );
+    expect(
+      geocoding().publishableCoordinatesForSeason(second.season.id),
+    ).toEqual(new Map());
+  });
+
   it("R17: an out-of-bounds result is stored for review and never published", async () => {
     const { season, venue } = fixture();
     fake.locate.mockResolvedValue(located({ latitude: 12 }));

@@ -321,11 +321,41 @@ export function createGeocodingRepository(
     return { latitude, longitude };
   }
 
+  function publishableCoordinatesForSeason(
+    seasonId: number,
+  ): Map<number, Coordinates> {
+    const rows = db
+      .select({
+        venueId: venueCoordinates.venueId,
+        latitude: venueCoordinates.latitude,
+        longitude: venueCoordinates.longitude,
+      })
+      .from(venueCoordinates)
+      .innerJoin(venues, eq(venues.id, venueCoordinates.venueId))
+      .where(
+        and(
+          eq(venues.seasonId, seasonId),
+          eq(venueCoordinates.status, "verified"),
+        ),
+      )
+      .all();
+    const coordinates = new Map<number, Coordinates>();
+    for (const row of rows) {
+      if (row.latitude == null || row.longitude == null) continue;
+      coordinates.set(row.venueId, {
+        latitude: row.latitude,
+        longitude: row.longitude,
+      });
+    }
+    return coordinates;
+  }
+
   return Object.freeze({
     geocodeVenue,
     verifyVenueCoordinate,
     listVenuesNeedingCoordinateReview,
     publishableCoordinate,
+    publishableCoordinatesForSeason,
   });
 }
 
