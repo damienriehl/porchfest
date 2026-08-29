@@ -29,6 +29,13 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
+function stalledJsonResponse(): Response {
+  return new Response(new ReadableStream<Uint8Array>({ start() {} }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
 function options(
   fetcher: typeof fetch,
   overrides: Partial<OpenStreetMapGeoAdapterOptions> = {},
@@ -377,6 +384,43 @@ describe("OpenStreetMapGeoAdapter", () => {
     expect(secondFetcher).not.toHaveBeenCalled();
   });
 
+  it("does not reuse a shared cache across lookup policies", async () => {
+    const cache = new InMemoryGeocodeCache();
+    const firstFetcher = sequencedFetcher({ elements: [] }, []);
+    await new OpenStreetMapGeoAdapter(
+      options(firstFetcher, { cache, countryCodes: "US" }),
+    ).locate({ address: ADDRESS });
+
+    const samePolicyFetcher = vi.fn<typeof fetch>();
+    await new OpenStreetMapGeoAdapter(
+      options(samePolicyFetcher, { cache, countryCodes: "us" }),
+    ).locate({ address: ADDRESS });
+    expect(samePolicyFetcher).not.toHaveBeenCalled();
+
+    const otherCountryFetcher = sequencedFetcher({ elements: [] }, []);
+    await new OpenStreetMapGeoAdapter(
+      options(otherCountryFetcher, { cache, countryCodes: "ca" }),
+    ).locate({ address: ADDRESS });
+    expect(otherCountryFetcher).toHaveBeenCalledTimes(2);
+
+    const otherBoundsFetcher = sequencedFetcher({ elements: [] }, []);
+    const otherBounds: BoundingBox = {
+      south: 30,
+      north: 31,
+      west: 40,
+      east: 41,
+    };
+    await new OpenStreetMapGeoAdapter(
+      options(otherBoundsFetcher, {
+        boundingBox: otherBounds,
+        cache,
+        countryCodes: "US",
+      }),
+    ).locate({ address: ADDRESS });
+
+    expect(otherBoundsFetcher).toHaveBeenCalledTimes(2);
+  });
+
   it("treats a cache read failure as a miss", async () => {
     const cache: GeocodeCache = {
       get: vi.fn(async () => Promise.reject(new Error("read failed"))),
@@ -613,25 +657,33 @@ describe("OpenStreetMapGeoAdapter", () => {
     ).toMatchObject({ status: "accepted" });
   });
 
-  it("retries Overpass after a fault and still runs the Nominatim house path", async () => {
+  it("does not cache an Overpass-degraded house result", async () => {
     let overpassCalls = 0;
     const fetcher = vi.fn<typeof fetch>(async (input) => {
       if (String(input).includes("overpass")) {
         overpassCalls += 1;
         return overpassCalls === 1
           ? new Response(null, { status: 503 })
-          : jsonResponse({ elements: [] });
+          : jsonResponse({
+              elements: [overpassElement("way", 42, 10.25, 20.25)],
+            });
       }
       return jsonResponse([nominatimHouse("10.4", "20.4")]);
     });
-    const adapter = new OpenStreetMapGeoAdapter(options(fetcher));
+    const adapter = new OpenStreetMapGeoAdapter(
+      options(fetcher, { now: () => 0, wait: async () => undefined }),
+    );
 
     await expect(adapter.locate({ address: ADDRESS })).resolves.toMatchObject({
       kind: "located",
       candidate: { precision: "house" },
       reason: expect.stringMatching(/Overpass.*unavailable/i),
     });
-    await adapter.locate({ address: "202 Quasar Pl" });
+    await expect(adapter.locate({ address: ADDRESS })).resolves.toMatchObject({
+      kind: "located",
+      candidate: { precision: "parcel", ref: "way/42" },
+      crossCheck: { latitude: 10.4, longitude: 20.4 },
+    });
     expect(overpassCalls).toBe(2);
   });
 
@@ -664,9 +716,11 @@ describe("OpenStreetMapGeoAdapter", () => {
     "reports when %s times out",
     async (service, timeoutMs, timeoutOptions) => {
       vi.useFakeTimers();
-      const fetcher = vi.fn<typeof fetch>(async (input) => {
+      let timedOutSignal: AbortSignal | null | undefined;
+      const fetcher = vi.fn<typeof fetch>(async (input, init) => {
         const isOverpass = String(input).includes("overpass");
         if ((service === "Overpass") === isOverpass) {
+          timedOutSignal = init?.signal;
           return new Promise<Response>(() => undefined);
         }
         return isOverpass
@@ -681,6 +735,37 @@ describe("OpenStreetMapGeoAdapter", () => {
       await expect(pending).resolves.toMatchObject({
         reason: expect.stringMatching(new RegExp(`${service}.*timed out`, "i")),
       });
+      expect(timedOutSignal?.aborted).toBe(true);
+    },
+  );
+
+  it.each([
+    ["Nominatim", 25, { nominatimTimeoutMs: 25 }],
+    ["Overpass", 50, { overpassTimeoutMs: 50 }],
+  ])(
+    "times out while reading a stalled %s response body",
+    async (service, timeoutMs, timeoutOptions) => {
+      vi.useFakeTimers();
+      let timedOutSignal: AbortSignal | null | undefined;
+      const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+        const isOverpass = String(input).includes("overpass");
+        if ((service === "Overpass") === isOverpass) {
+          timedOutSignal = init?.signal;
+          return stalledJsonResponse();
+        }
+        return isOverpass
+          ? jsonResponse({ elements: [] })
+          : jsonResponse([nominatimHouse("10.4", "20.4")]);
+      });
+      const pending = new OpenStreetMapGeoAdapter(
+        options(fetcher, timeoutOptions),
+      ).locate({ address: ADDRESS });
+
+      await vi.advanceTimersByTimeAsync(timeoutMs);
+      await expect(pending).resolves.toMatchObject({
+        reason: expect.stringMatching(new RegExp(`${service}.*timed out`, "i")),
+      });
+      expect(timedOutSignal?.aborted).toBe(true);
     },
   );
 
@@ -747,6 +832,13 @@ describe("address parsing", () => {
       houseNumber: "101",
       street: "Nebula Ave",
     });
+    const commaFreeLocality = "Example Borough ZZ";
+    expect(
+      queryString(`${ADDRESS}, Example Borough,ZZ`, commaFreeLocality),
+    ).toBe(`${ADDRESS}, Example Borough,ZZ`);
+    expect(
+      parseAddress(`${ADDRESS}, Example Borough,ZZ`, commaFreeLocality),
+    ).toEqual({ houseNumber: "101", street: "Nebula Ave" });
   });
 
   it("strips a configured trailing locality, state, and ZIP tail", () => {
@@ -808,8 +900,11 @@ describe("streetsMatch", () => {
     ["Quasar Place", "North Quasar Pl", true],
     ["W Comet Avenue", "East Comet Ave", false],
     ["St Anthony Ave", "Saint Anthony Avenue", true],
+    ["N St Anthony Ave", "North Saint Anthony Avenue", true],
     ["N Example St", "North Example Street", true],
     ["Example St N", "Example Street North", true],
+    ["Example St Plaza", "Example Street Plaza", false],
+    ["West Oak E Avenue", "West Oak East Avenue", false],
     ["Example Blvd", "Example Boulevard", true],
     ["Example Dr", "Example Drive", true],
     ["Example Ct", "Example Court", true],

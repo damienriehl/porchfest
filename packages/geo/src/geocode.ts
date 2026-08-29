@@ -134,13 +134,20 @@ type NominatimResult =
   | { readonly kind: "not-found"; readonly reason: string }
   | { readonly kind: "refused"; readonly reason: string };
 
+interface LocateAttempt {
+  readonly outcome: GeocodeOutcome;
+  readonly cacheable: boolean;
+}
+
 interface LocalityGrammar {
   readonly suffix: string;
   readonly tail: RegExp;
 }
 
-type FetchResult =
-  | { readonly kind: "response"; readonly response: Response }
+type FetchJsonResult =
+  | { readonly kind: "success"; readonly body: unknown }
+  | { readonly kind: "http-error"; readonly status: number }
+  | { readonly kind: "malformed-json" }
   | { readonly kind: "timeout" }
   | { readonly kind: "unreachable" };
 
@@ -220,6 +227,7 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
   readonly #localityGrammar: LocalityGrammar;
   readonly #userAgent: string;
   readonly #countryCodes: string;
+  readonly #cacheNamespace: string;
   readonly #overpassTimeoutMs: number;
   readonly #nominatimTimeoutMs: number;
   readonly #fetcher: typeof fetch;
@@ -246,6 +254,10 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
     this.#countryCodes = requireNonEmpty(
       options.countryCodes ?? "us",
       "countryCodes",
+    );
+    this.#cacheNamespace = cacheNamespace(
+      this.#boundingBox,
+      this.#countryCodes,
     );
     this.#overpassTimeoutMs = positiveTimeout(
       options.overpassTimeoutMs ?? DEFAULT_OVERPASS_TIMEOUT_MS,
@@ -274,6 +286,7 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
     const { key, query } = normalizedAddressKey(
       request.address,
       this.#localityGrammar,
+      this.#cacheNamespace,
     );
     const active = this.#inFlight.get(key);
     if (active !== undefined) return active;
@@ -299,8 +312,9 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
       // A persistent cache is an optimization, not a provider dependency.
     }
 
-    const outcome = await this.#locateUncached(address, query);
-    if (outcome.kind === "unavailable") return outcome;
+    const attempt = await this.#locateUncached(address, query);
+    const { outcome } = attempt;
+    if (!attempt.cacheable) return outcome;
     try {
       await this.#cache.set(key, outcome);
     } catch {
@@ -312,13 +326,13 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
   async #locateUncached(
     address: string,
     submittedQuery: string,
-  ): Promise<GeocodeOutcome> {
+  ): Promise<LocateAttempt> {
     let parsed: ParsedAddress;
     try {
       parsed = parseAddressWithGrammar(address, this.#localityGrammar);
     } catch (error) {
       if (error instanceof AddressParseError) {
-        return { kind: "refused", reason: error.message };
+        return cacheableAttempt({ kind: "refused", reason: error.message });
       }
       throw error;
     }
@@ -333,13 +347,15 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
         ? selectParcelPoint(parsed, submittedStreetTokens, overpass.value)
         : null;
     if (nominatim.kind === "unavailable") {
-      if (parcel !== null) return locatedParcel(parcel, null);
-      return overpass.kind === "unavailable"
-        ? {
-            kind: "unavailable",
-            reason: `${overpass.reason} ${nominatim.reason}`,
-          }
-        : nominatim;
+      if (parcel !== null) return cacheableAttempt(locatedParcel(parcel, null));
+      return uncacheableAttempt(
+        overpass.kind === "unavailable"
+          ? {
+              kind: "unavailable",
+              reason: `${overpass.reason} ${nominatim.reason}`,
+            }
+          : nominatim,
+      );
     }
 
     const nominatimResult = selectNominatimResult(
@@ -351,13 +367,15 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
     );
 
     if (parcel !== null) {
-      return locatedParcel(
-        parcel,
-        nominatimResult.kind === "located" ? nominatimResult.point : null,
+      return cacheableAttempt(
+        locatedParcel(
+          parcel,
+          nominatimResult.kind === "located" ? nominatimResult.point : null,
+        ),
       );
     }
     if (nominatimResult.kind === "located") {
-      return {
+      const outcome: GeocodeOutcome = {
         kind: "located",
         candidate: {
           ...nominatimResult.point,
@@ -370,14 +388,17 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
           ? { reason: `Overpass was unavailable: ${overpass.reason}` }
           : {}),
       };
+      return overpass.kind === "unavailable"
+        ? uncacheableAttempt(outcome)
+        : cacheableAttempt(outcome);
     }
     if (overpass.kind === "unavailable") {
-      return {
+      return uncacheableAttempt({
         kind: "unavailable",
         reason: `Overpass was unavailable: ${overpass.reason} ${nominatimResult.reason}`,
-      };
+      });
     }
-    return nominatimResult;
+    return cacheableAttempt(nominatimResult);
   }
 
   #loadOverpassPoints(): Promise<
@@ -408,7 +429,7 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
     const form = new URLSearchParams({
       data: overpassQuery(this.#boundingBox),
     });
-    const request = await fetchWithTimeout(
+    const request = await fetchJsonWithTimeout(
       this.#fetcher,
       OVERPASS_URL,
       {
@@ -427,24 +448,19 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
     if (request.kind === "unreachable") {
       return { kind: "unavailable", reason: "Overpass could not be reached." };
     }
-    const { response } = request;
-    if (!response.ok) {
+    if (request.kind === "http-error") {
       return {
         kind: "unavailable",
-        reason: `Overpass returned ${response.status}.`,
+        reason: `Overpass returned ${request.status}.`,
       };
     }
-
-    let body: unknown;
-    try {
-      body = await response.json();
-    } catch {
+    if (request.kind === "malformed-json") {
       return {
         kind: "unavailable",
         reason: "Overpass returned malformed JSON.",
       };
     }
-    const elements = objectProperty(body, "elements");
+    const elements = objectProperty(request.body, "elements");
     if (!Array.isArray(elements)) {
       return {
         kind: "unavailable",
@@ -485,7 +501,7 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
       bounded: "1",
       q: query,
     }).toString();
-    const request = await fetchWithTimeout(
+    const request = await fetchJsonWithTimeout(
       this.#fetcher,
       url,
       {
@@ -502,30 +518,25 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
         reason: "Nominatim could not be reached.",
       };
     }
-    const { response } = request;
-    if (!response.ok) {
+    if (request.kind === "http-error") {
       return {
         kind: "unavailable",
-        reason: `Nominatim returned ${response.status}.`,
+        reason: `Nominatim returned ${request.status}.`,
       };
     }
-
-    let body: unknown;
-    try {
-      body = await response.json();
-    } catch {
+    if (request.kind === "malformed-json") {
       return {
         kind: "unavailable",
         reason: "Nominatim returned malformed JSON.",
       };
     }
-    if (!Array.isArray(body)) {
+    if (!Array.isArray(request.body)) {
       return {
         kind: "unavailable",
         reason: "Nominatim returned a malformed body.",
       };
     }
-    return { kind: "available", value: body };
+    return { kind: "available", value: request.body };
   }
 }
 
@@ -751,18 +762,19 @@ function normalizedStreetTokens(street: string): string[] {
   if (tokens.length === 0) return tokens;
 
   const normalized = tokens.map((token, index) => {
-    if (
-      index === 0 &&
-      tokens.length > 1 &&
-      (token === "st" || token === "ste")
-    ) {
-      return "saint";
-    }
     if (index === 0 || index === tokens.length - 1) {
       return DIRECTION_ALIASES[token] ?? token;
     }
     return token;
   });
+  const streetNameIndex = DIRECTION_WORDS.has(normalized[0] ?? "") ? 1 : 0;
+  const streetNameToken = normalized[streetNameIndex];
+  if (
+    streetNameIndex < normalized.length - 1 &&
+    (streetNameToken === "st" || streetNameToken === "ste")
+  ) {
+    normalized[streetNameIndex] = "saint";
+  }
   const lastIndex = normalized.length - 1;
   const suffixIndex = DIRECTION_WORDS.has(normalized[lastIndex] ?? "")
     ? lastIndex - 1
@@ -805,12 +817,21 @@ function overpassReference(point: OverpassPoint): string {
 function normalizedAddressKey(
   address: string,
   grammar: LocalityGrammar,
+  namespace: string,
 ): { readonly key: string; readonly query: string } {
   const query = queryStringWithGrammar(address.trim(), grammar);
   return {
     query,
-    key: caseFold(query).replace(/\s+/g, " ").trim(),
+    key: `${namespace}|${caseFold(query).replace(/\s+/g, " ").trim()}`,
   };
+}
+
+function cacheNamespace(box: BoundingBox, countryCodes: string): string {
+  const canonicalCountryCodes = countryCodes
+    .split(",")
+    .map((code) => caseFold(code.trim()))
+    .join(",");
+  return `openstreetmap-v1|countrycodes=${canonicalCountryCodes}|bbox=${box.west},${box.south},${box.east},${box.north}`;
 }
 
 function queryStringWithGrammar(
@@ -841,13 +862,7 @@ function localityGrammar(localitySuffix: string): LocalityGrammar {
     const previous = tokenMatches[index - 1];
     const current = tokenMatches[index];
     if (previous === undefined || current === undefined) continue;
-    const separator = suffix.slice(
-      (previous.index ?? 0) + previous[0].length,
-      current.index,
-    );
-    localityPattern += separator.includes(",")
-      ? String.raw`(?:\s*,\s*|\s+)`
-      : String.raw`\s+`;
+    localityPattern += String.raw`(?:\s*,\s*|\s+)`;
     localityPattern += localityTokenPattern(current[0]);
   }
 
@@ -920,24 +935,29 @@ function positiveTimeout(value: number, name: string): number {
   return value;
 }
 
-async function fetchWithTimeout(
+async function fetchJsonWithTimeout(
   fetcher: typeof fetch,
   input: string | URL,
   init: RequestInit,
   timeoutMs: number,
-): Promise<FetchResult> {
+): Promise<FetchJsonResult> {
   const abortController = new AbortController();
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-  let operation: Promise<Response>;
-  try {
-    operation = fetcher(input, {
+  const operation: Promise<FetchJsonResult> = (async () => {
+    const response = await fetcher(input, {
       ...init,
       signal: abortController.signal,
     });
-  } catch {
-    return { kind: "unreachable" };
-  }
-  const timeout = new Promise<FetchResult>((resolve) => {
+    if (!response.ok) {
+      return { kind: "http-error", status: response.status };
+    }
+    try {
+      return { kind: "success", body: await response.json() };
+    } catch {
+      return { kind: "malformed-json" };
+    }
+  })();
+  const timeout = new Promise<FetchJsonResult>((resolve) => {
     timeoutHandle = setTimeout(() => {
       resolve({ kind: "timeout" });
       abortController.abort();
@@ -945,18 +965,20 @@ async function fetchWithTimeout(
   });
 
   try {
-    return await Promise.race([
-      operation.then((response): FetchResult => ({
-        kind: "response",
-        response,
-      })),
-      timeout,
-    ]);
+    return await Promise.race([operation, timeout]);
   } catch {
     return { kind: "unreachable" };
   } finally {
     if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
   }
+}
+
+function cacheableAttempt(outcome: GeocodeOutcome): LocateAttempt {
+  return { outcome, cacheable: true };
+}
+
+function uncacheableAttempt(outcome: GeocodeOutcome): LocateAttempt {
+  return { outcome, cacheable: false };
 }
 
 function defaultWait(milliseconds: number): Promise<void> {
