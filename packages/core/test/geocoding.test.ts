@@ -187,15 +187,21 @@ describe("core venue geocoding (U9 / KTD11)", () => {
       longitude: 20.5,
     });
 
-    seasons.updateVenue(venue.id, venue.version, {
+    const changedVenue = seasons.updateVenue(venue.id, venue.version, {
       address: "103 Nebula Avenue",
     });
 
-    expect(stored(venue.id)).toMatchObject({
+    const invalidated = stored(venue.id);
+    expect(invalidated).toMatchObject({
       status: "needs-review",
       rejectionCode: "address-changed",
     });
     expect(geocoding().publishableCoordinate(venue.id)).toBeNull();
+
+    seasons.updateVenue(venue.id, changedVenue.version, {
+      address: "103 Nebula Avenue",
+    });
+    expect(stored(venue.id)?.version).toBe(invalidated?.version);
   });
 
   it("keeps a verified pin published after a whitespace-only address edit", async () => {

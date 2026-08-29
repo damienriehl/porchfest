@@ -270,7 +270,12 @@ export function createGeocodingRepository(
     seasonId: number,
   ): VenueCoordinateReview[] {
     return db
-      .select({ venue: venues, coordinate: venueCoordinates })
+      .select({
+        venueId: venues.id,
+        title: venues.title,
+        address: venues.address,
+        coordinate: venueCoordinates,
+      })
       .from(venueCoordinates)
       .innerJoin(venues, eq(venues.id, venueCoordinates.venueId))
       .where(
@@ -281,10 +286,10 @@ export function createGeocodingRepository(
       )
       .orderBy(venues.id)
       .all()
-      .map(({ venue, coordinate }) => ({
-        venueId: venue.id,
-        title: venue.title,
-        address: venue.address,
+      .map(({ venueId, title, address, coordinate }) => ({
+        venueId,
+        title,
+        address,
         status: coordinate.status as Exclude<CoordinateStatus, "verified">,
         rejectionCode: coordinate.rejectionCode,
         coordinate,
@@ -503,6 +508,8 @@ export function invalidateCoordinateForAddressChange(
     .select({
       address: venues.address,
       addressAtGeocode: venueCoordinates.addressAtGeocode,
+      status: venueCoordinates.status,
+      rejectionCode: venueCoordinates.rejectionCode,
     })
     .from(venueCoordinates)
     .innerJoin(venues, eq(venues.id, venueCoordinates.venueId))
@@ -510,6 +517,8 @@ export function invalidateCoordinateForAddressChange(
     .get();
   if (
     state === undefined ||
+    (state.status === "needs-review" &&
+      state.rejectionCode === "address-changed") ||
     normalizeVenueAddress(state.address) ===
       normalizeVenueAddress(state.addressAtGeocode)
   ) {

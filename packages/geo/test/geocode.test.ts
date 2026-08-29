@@ -389,6 +389,65 @@ describe("OpenStreetMapGeoAdapter", () => {
     ).toHaveLength(6);
   });
 
+  it("does not evict and duplicate an Overpass request that is still in flight", async () => {
+    const releases: Array<(response: Response) => void> = [];
+    const cache: GeocodeCache = {
+      get: vi.fn(async () => undefined),
+      set: vi.fn(async () => undefined),
+    };
+    const fetcher = vi.fn<typeof fetch>(async (input) => {
+      if (!String(input).includes("overpass")) return jsonResponse([]);
+      return new Promise<Response>((resolve) => {
+        releases.push(resolve);
+      });
+    });
+    const adapter = new OpenStreetMapGeoAdapter({
+      userAgent: "porchfest-geocoder-tests/1.0 (example.invalid)",
+      fetcher,
+      cache,
+      wait: async () => undefined,
+    });
+    const boxes = Array.from({ length: 5 }, (_, index) => ({
+      south: 10 + index,
+      north: 11 + index,
+      west: 20 + index,
+      east: 21 + index,
+    }));
+    const pending = boxes.map((boundingBox, index) =>
+      adapter.locate({
+        address: `${101 + index} Nebula Avenue`,
+        boundingBox,
+      }),
+    );
+    await vi.waitFor(() => {
+      expect(releases).toHaveLength(5);
+    });
+
+    const sameBox = adapter.locate({
+      address: "909 Quasar Place",
+      boundingBox: boxes[0],
+    });
+    await vi.waitFor(() => {
+      expect(cache.get).toHaveBeenCalledTimes(6);
+    });
+    expect(
+      fetcher.mock.calls.filter(([input]) =>
+        String(input).includes("overpass"),
+      ),
+    ).toHaveLength(5);
+    await vi.waitFor(() => {
+      expect(
+        fetcher.mock.calls.filter(
+          ([input]) => !String(input).includes("overpass"),
+        ),
+      ).toHaveLength(6);
+    });
+    for (const release of releases) {
+      release(jsonResponse({ elements: [] }));
+    }
+    await Promise.all([...pending, sameBox]);
+  });
+
   it("refetches an expired Overpass snapshot", async () => {
     let now = 0;
     const cache: GeocodeCache = {

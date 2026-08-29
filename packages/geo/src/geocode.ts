@@ -147,9 +147,7 @@ interface LocalityGrammar {
 }
 
 interface OverpassSnapshot {
-  readonly operation: Promise<
-    ProviderResult<ReadonlyMap<string, readonly OverpassPoint[]>>
-  >;
+  readonly value: ReadonlyMap<string, readonly OverpassPoint[]>;
   readonly expiresAt: number;
 }
 
@@ -233,7 +231,7 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
   readonly name = "openstreetmap";
   readonly configured = true;
   readonly #defaultBoundingBox: BoundingBox | null;
-  readonly #defaultLocalitySuffix: string | null;
+  readonly #defaultLocalityGrammar: LocalityGrammar | null;
   readonly #userAgent: string;
   readonly #countryCodes: string;
   readonly #overpassTimeoutMs: number;
@@ -244,6 +242,10 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
   readonly #cache: GeocodeCache;
   readonly #inFlight = new Map<string, Promise<GeocodeOutcome>>();
   readonly #overpassPoints = new Map<string, OverpassSnapshot>();
+  readonly #overpassInFlight = new Map<
+    string,
+    Promise<ProviderResult<ReadonlyMap<string, readonly OverpassPoint[]>>>
+  >();
   #lastNominatimRequestAt: number | null = null;
   #nominatimQueue: Promise<void> = Promise.resolve();
 
@@ -253,10 +255,10 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
     }
     this.#defaultBoundingBox =
       options.boundingBox === undefined ? null : { ...options.boundingBox };
-    this.#defaultLocalitySuffix =
+    this.#defaultLocalityGrammar =
       options.localitySuffix === undefined
         ? null
-        : localityGrammar(options.localitySuffix, "localitySuffix").suffix;
+        : localityGrammar(options.localitySuffix, "localitySuffix");
     this.#userAgent = requireNonEmpty(
       options.userAgent ?? DEFAULT_OPENSTREETMAP_USER_AGENT,
       "userAgent",
@@ -297,16 +299,10 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
       };
     }
     assertBoundingBox(boundingBox);
-    const localitySuffix = request.localityName ?? this.#defaultLocalitySuffix;
     const grammar =
-      localitySuffix === null
-        ? null
-        : localityGrammar(
-            localitySuffix,
-            request.localityName === undefined
-              ? "localitySuffix"
-              : "localityName",
-          );
+      request.localityName === undefined
+        ? this.#defaultLocalityGrammar
+        : localityGrammar(request.localityName, "localityName");
     const { key, query } = normalizedAddressKey(
       request.address,
       grammar,
@@ -450,30 +446,32 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
     if (current !== undefined && current.expiresAt > currentTime) {
       this.#overpassPoints.delete(key);
       this.#overpassPoints.set(key, current);
-      return current.operation;
+      return Promise.resolve({ kind: "available", value: current.value });
     }
     if (current !== undefined) this.#overpassPoints.delete(key);
+    const pending = this.#overpassInFlight.get(key);
+    if (pending !== undefined) return pending;
     const operation = this.#fetchOverpassPoints(boundingBox);
-    this.#overpassPoints.set(key, {
-      operation,
-      expiresAt: currentTime + OVERPASS_SNAPSHOT_TTL_MS,
-    });
-    while (this.#overpassPoints.size > MAX_OVERPASS_SNAPSHOTS) {
-      const oldestKey = this.#overpassPoints.keys().next().value;
-      if (oldestKey === undefined) break;
-      this.#overpassPoints.delete(oldestKey);
-    }
+    this.#overpassInFlight.set(key, operation);
     void operation.then(
       (result) => {
-        if (result.kind === "unavailable") {
-          if (this.#overpassPoints.get(key)?.operation === operation) {
-            this.#overpassPoints.delete(key);
+        if (this.#overpassInFlight.get(key) !== operation) return;
+        this.#overpassInFlight.delete(key);
+        if (result.kind === "available") {
+          this.#overpassPoints.set(key, {
+            value: result.value,
+            expiresAt: this.#now() + OVERPASS_SNAPSHOT_TTL_MS,
+          });
+          while (this.#overpassPoints.size > MAX_OVERPASS_SNAPSHOTS) {
+            const oldestKey = this.#overpassPoints.keys().next().value;
+            if (oldestKey === undefined) break;
+            this.#overpassPoints.delete(oldestKey);
           }
         }
       },
       () => {
-        if (this.#overpassPoints.get(key)?.operation === operation) {
-          this.#overpassPoints.delete(key);
+        if (this.#overpassInFlight.get(key) === operation) {
+          this.#overpassInFlight.delete(key);
         }
       },
     );
