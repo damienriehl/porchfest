@@ -17,7 +17,12 @@ import {
   type CoreTestingRepository,
 } from "@porchfest/core/testing";
 import { NoneEmailAdapter, SmtpEmailAdapter } from "@porchfest/email";
-import { NullGeoAdapter } from "@porchfest/geo";
+import {
+  DEFAULT_NOMINATIM_TIMEOUT_MS,
+  DEFAULT_OVERPASS_TIMEOUT_MS,
+  NullGeoAdapter,
+  OpenStreetMapGeoAdapter,
+} from "@porchfest/geo";
 import type { Hono } from "hono";
 import type { Context } from "hono";
 import { readFileSync } from "node:fs";
@@ -63,8 +68,60 @@ export function createAdapterSet(
   return Object.freeze({
     email: overrides.email ?? createEmailAdapter(env),
     antibot: overrides.antibot ?? createAntibotAdapter(env),
-    geo: overrides.geo ?? new NullGeoAdapter(),
+    geo: overrides.geo ?? createGeoAdapter(env),
   });
+}
+
+/**
+ * R17/KTD11: one composition-root instance is shared with core, so the
+ * adapter's Nominatim queue is deployment-wide rather than reset per request.
+ */
+function createGeoAdapter(
+  env: Readonly<Record<string, string | undefined>>,
+): AdapterPorts["geo"] {
+  const provider = env.GEO_PROVIDER?.trim() || "null";
+  if (provider === "null") return new NullGeoAdapter();
+  if (provider !== "osm") {
+    throw new TypeError('GEO_PROVIDER must be either "osm" or "null".');
+  }
+
+  const userAgent = env.GEO_USER_AGENT?.trim() ?? "";
+  if (!userAgent) {
+    throw new TypeError(
+      "GEO_USER_AGENT is required when GEO_PROVIDER=osm. Set a deployment-specific application identifier.",
+    );
+  }
+
+  return new OpenStreetMapGeoAdapter({
+    userAgent,
+    countryCodes: env.GEO_COUNTRY_CODES?.trim() || "us",
+    overpassTimeoutMs: parseGeoTimeout(
+      env.GEO_OVERPASS_TIMEOUT_MS,
+      "GEO_OVERPASS_TIMEOUT_MS",
+      DEFAULT_OVERPASS_TIMEOUT_MS,
+    ),
+    nominatimTimeoutMs: parseGeoTimeout(
+      env.GEO_NOMINATIM_TIMEOUT_MS,
+      "GEO_NOMINATIM_TIMEOUT_MS",
+      DEFAULT_NOMINATIM_TIMEOUT_MS,
+    ),
+  });
+}
+
+function parseGeoTimeout(
+  value: string | undefined,
+  name: string,
+  fallback: number,
+): number {
+  const configured = value?.trim() ?? "";
+  if (!configured) return fallback;
+  const timeout = Number(configured);
+  if (!Number.isSafeInteger(timeout) || timeout <= 0) {
+    throw new TypeError(
+      `${name} must be a positive integer number of milliseconds.`,
+    );
+  }
+  return timeout;
 }
 
 /**
