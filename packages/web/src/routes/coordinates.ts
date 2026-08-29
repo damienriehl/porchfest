@@ -25,6 +25,11 @@ export const GEOCODE_SEASON_PATH = "/seasons/:id/coordinates/geocode";
 export const PUBLISH_MAP_PATH = "/seasons/:id/map/publish";
 export const UNPUBLISH_MAP_PATH = "/seasons/:id/map/unpublish";
 
+// 20 × (the 1 s Nominatim interval + provider latency) stays comfortably
+// below common proxy timeouts while keeping organizer retries manageable.
+const GEOCODE_SEASON_BATCH_SIZE = 20;
+const geocodingSeasonsInProgress = new Set<number>();
+
 interface CoordinateRouteOptions {
   readonly core: CoreRuntime;
   readonly routes: RouteRegistry;
@@ -116,6 +121,12 @@ export function registerCoordinateRoutes(
             "Geocoding is not configured. Set GEO_PROVIDER before running season geocoding.",
         });
       }
+      if (geocodingSeasonsInProgress.has(season.id)) {
+        return coordinatePage(options, season, 409, {
+          error:
+            "Geocoding is already running for this season. Wait for it to finish before trying again.",
+        });
+      }
 
       const counts: GeocodeSeasonCounts = {
         stored: 0,
@@ -123,50 +134,67 @@ export function registerCoordinateRoutes(
         preserved: 0,
         needsReview: 0,
         unavailable: 0,
+        remaining: 0,
       };
-      // Deliberately sequential. Nominatim permits one request per second per
-      // IP, and the shared adapter enforces that delay between these awaits.
-      for (const venue of options.core.seasons.listSeasonVenues(season.id)) {
-        if (venue.status === "withdrawn" || venue.canonicalVenueId !== null) {
-          continue;
-        }
-        if (options.core.geocoding.publishableCoordinate(venue.id) !== null) {
-          continue;
-        }
-        let result: GeocodeVenueResult;
-        try {
-          result = await options.core.geocoding.geocodeVenue(
-            venue.id,
-            organizer.id,
+      geocodingSeasonsInProgress.add(season.id);
+      try {
+        const verified = options.core.geocoding.publishableCoordinatesForSeason(
+          season.id,
+        );
+        const eligible = options.core.seasons
+          .listSeasonVenues(season.id)
+          .filter(
+            (venue) =>
+              venue.status !== "withdrawn" &&
+              venue.canonicalVenueId === null &&
+              !verified.has(venue.id),
           );
-        } catch (error) {
-          // Legacy/imported season locality text can predate setup validation.
-          // Treat adapter request validation as an unavailable lookup rather
-          // than turning the whole organizer batch into a 500.
-          if (error instanceof TypeError || error instanceof RangeError) {
-            counts.unavailable += 1;
-            continue;
+        const batch = eligible.slice(0, GEOCODE_SEASON_BATCH_SIZE);
+        // Deliberately sequential. Nominatim permits one request per second per
+        // IP, and the shared adapter enforces that delay between these awaits.
+        for (const [index, venue] of batch.entries()) {
+          let result: GeocodeVenueResult;
+          try {
+            result = await options.core.geocoding.geocodeVenue(
+              venue.id,
+              organizer.id,
+            );
+          } catch (error) {
+            if (error instanceof TypeError || error instanceof RangeError) {
+              const reason = error.message.trim() || error.name;
+              counts.remaining = eligible.length - index;
+              console.error(
+                `season ${season.id} geocoding configuration fault: ${reason}`,
+              );
+              return coordinatePage(options, season, 409, {
+                error: `Season geocoding stopped because its configuration is invalid: ${reason} Fix the season locality and bounding-box fields in Season settings & state, then run again.`,
+                counts,
+              });
+            }
+            throw error;
           }
-          throw error;
+          if (result.kind === "unavailable") {
+            counts.unavailable += 1;
+          } else if (result.kind === "preserved") {
+            counts.preserved += 1;
+          } else if (result.kind === "cached") {
+            counts.cached += 1;
+          } else if (result.coordinate.status === "verified") {
+            counts.stored += 1;
+          } else {
+            counts.needsReview += 1;
+          }
         }
-        if (result.kind === "unavailable") {
-          counts.unavailable += 1;
-        } else if (result.kind === "preserved") {
-          counts.preserved += 1;
-        } else if (result.kind === "cached") {
-          counts.cached += 1;
-        } else if (result.coordinate.status === "verified") {
-          counts.stored += 1;
-        } else {
-          counts.needsReview += 1;
-        }
+        counts.remaining = eligible.length - batch.length;
+        return coordinatePage(
+          options,
+          options.core.seasons.getSeason(season.id),
+          200,
+          { counts },
+        );
+      } finally {
+        geocodingSeasonsInProgress.delete(season.id);
       }
-      return coordinatePage(
-        options,
-        options.core.seasons.getSeason(season.id),
-        200,
-        { counts },
-      );
     },
   });
 

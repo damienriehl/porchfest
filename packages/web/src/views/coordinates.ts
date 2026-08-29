@@ -28,6 +28,7 @@ export interface GeocodeSeasonCounts {
   preserved: number;
   needsReview: number;
   unavailable: number;
+  remaining: number;
 }
 
 export function renderCoordinatesPage(options: {
@@ -78,15 +79,21 @@ function renderNotice(options: {
   readonly counts?: GeocodeSeasonCounts;
 }): string {
   if (options.error) {
-    return `<section class="error-summary" role="alert" tabindex="-1"><h2>Coordinate action was not completed</h2><p>${escapeHtml(options.error)}</p></section>`;
+    return `<section class="error-summary" role="alert" tabindex="-1"><h2>Coordinate action was not completed</h2><p>${escapeHtml(options.error)}</p>${options.counts ? `<p>${geocodeCountsText(options.counts)}</p>` : ""}</section>`;
   }
   if (options.counts) {
-    const counts = options.counts;
-    return `<section class="confirmation-card" role="status"><p>Season geocoding finished: stored ${counts.stored}; cached ${counts.cached}; preserved ${counts.preserved}; needs review ${counts.needsReview}; unavailable ${counts.unavailable}.</p></section>`;
+    return `<section class="confirmation-card" role="status"><p>Season geocoding finished: ${geocodeCountsText(options.counts)}</p></section>`;
   }
   return options.notice
     ? `<section class="confirmation-card" role="status"><p>${escapeHtml(options.notice)}</p></section>`
     : "";
+}
+
+function geocodeCountsText(counts: GeocodeSeasonCounts): string {
+  const summary = `stored ${counts.stored}; cached ${counts.cached}; preserved ${counts.preserved}; needs review ${counts.needsReview}; unavailable ${counts.unavailable}.`;
+  return counts.remaining > 0
+    ? `${summary} ${counts.remaining} venues remain — run again.`
+    : summary;
 }
 
 function renderGeocodeSection(options: {

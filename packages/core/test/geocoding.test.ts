@@ -237,11 +237,7 @@ describe("core venue geocoding (U9 / KTD11)", () => {
 
     expect(
       geocoding().publishableCoordinatesForSeason(first.season.id),
-    ).toEqual(
-      new Map([
-        [first.venue.id, { latitude: 10.5, longitude: 20.5 }],
-      ]),
-    );
+    ).toEqual(new Map([[first.venue.id, { latitude: 10.5, longitude: 20.5 }]]));
     expect(
       geocoding().publishableCoordinatesForSeason(second.season.id),
     ).toEqual(new Map());
@@ -357,6 +353,18 @@ describe("core venue geocoding (U9 / KTD11)", () => {
       reason:
         "fake-geo failed before returning a geocoding outcome: synthetic provider failure",
     });
+    expect(stored(venue.id)).toBeUndefined();
+  });
+
+  it("surfaces an invalid locality as a caller configuration fault", async () => {
+    const { venue } = fixture();
+    fake.locate.mockRejectedValue(
+      new TypeError("localityName must contain a word or number."),
+    );
+
+    await expect(geocoding().geocodeVenue(venue.id, actor)).rejects.toThrow(
+      /localityName must contain a word or number/,
+    );
     expect(stored(venue.id)).toBeUndefined();
   });
 

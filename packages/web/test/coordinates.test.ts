@@ -8,7 +8,7 @@ import Database from "better-sqlite3";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createTestingRuntime,
   type PorchfestRuntime,
@@ -53,6 +53,33 @@ class FakeGeoPort implements GeoPort {
         reason: "No synthetic outcome was configured.",
       }
     );
+  }
+
+  async geocode(request: LocateRequest) {
+    const outcome = await this.locate(request);
+    return outcome.kind === "located" ? outcome.candidate : null;
+  }
+}
+
+class BlockingGeoPort implements GeoPort {
+  readonly name = "blocking-geo";
+  readonly configured = true;
+  private releaseLocate!: () => void;
+  private signalStarted!: () => void;
+  readonly started = new Promise<void>((resolve) => {
+    this.signalStarted = resolve;
+  });
+
+  async locate(_request: LocateRequest): Promise<LocateOutcome> {
+    this.signalStarted();
+    await new Promise<void>((resolve) => {
+      this.releaseLocate = resolve;
+    });
+    return { kind: "unavailable", reason: "Synthetic release." };
+  }
+
+  release(): void {
+    this.releaseLocate();
   }
 
   async geocode(request: LocateRequest) {
@@ -428,7 +455,7 @@ describe("organizer coordinate review and map publication (U9)", () => {
     ]);
   });
 
-  it("turns legacy invalid locality text into an unavailable count", async () => {
+  it("stops and reports a legacy invalid locality as a configuration fault", async () => {
     const geo = new FakeGeoPort({
       "49 Legacy Way": new TypeError(
         "localityName must contain a word or number.",
@@ -436,6 +463,9 @@ describe("organizer coordinate review and map publication (U9)", () => {
     });
     const { runtime, cookie, season } = await boot(geo);
     createVenue(runtime, season.id, "Legacy Locality Porch", "49 Legacy Way");
+    const error = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
     const before = await page(runtime, cookie, season.id);
     const html = await before.text();
     const action = `/seasons/${season.id}/coordinates/geocode`;
@@ -446,8 +476,81 @@ describe("organizer coordinate review and map publication (U9)", () => {
       body: new URLSearchParams({ _csrf: tokenFrom(html, action) }),
     });
 
-    expect(response.status).toBe(200);
-    expect(await response.text()).toContain("unavailable 1");
+    expect(response.status).toBe(409);
+    const text = await response.text();
+    expect(text).toContain("localityName must contain a word or number");
+    expect(text).toContain("Season settings &amp; state");
+    expect(text).toContain("stored 0; cached 0; preserved 0");
+    expect(error).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /season 1 geocoding configuration fault.*localityName/i,
+      ),
+    );
+  });
+
+  it("caps one season geocoding submission at 20 venues and reports the remainder", async () => {
+    const outcomes: Record<string, LocateOutcome> = {};
+    for (let index = 1; index <= 25; index += 1) {
+      const address = `${index} Batch Way`;
+      outcomes[address] = located(10.2, 20.2);
+    }
+    const geo = new FakeGeoPort(outcomes);
+    const { runtime, cookie, season } = await boot(geo);
+    for (let index = 1; index <= 25; index += 1) {
+      createVenue(
+        runtime,
+        season.id,
+        `Batch Porch ${index}`,
+        `${index} Batch Way`,
+      );
+    }
+    const action = `/seasons/${season.id}/coordinates/geocode`;
+    let html = await (await page(runtime, cookie, season.id)).text();
+
+    const first = await runtime.request(`${PUBLIC_BASE_URL}${action}`, {
+      method: "POST",
+      headers: formHeaders(cookie),
+      body: new URLSearchParams({ _csrf: tokenFrom(html, action) }),
+    });
+
+    expect(first.status).toBe(200);
+    expect(await first.text()).toContain("5 venues remain — run again");
+    expect(geo.requests).toHaveLength(20);
+
+    html = await (await page(runtime, cookie, season.id)).text();
+    const second = await runtime.request(`${PUBLIC_BASE_URL}${action}`, {
+      method: "POST",
+      headers: formHeaders(cookie),
+      body: new URLSearchParams({ _csrf: tokenFrom(html, action) }),
+    });
+    expect(second.status).toBe(200);
+    expect(geo.requests).toHaveLength(25);
+  });
+
+  it("refuses a concurrent geocoding submission for the same season", async () => {
+    const geo = new BlockingGeoPort();
+    const { runtime, cookie, season } = await boot(geo);
+    createVenue(runtime, season.id, "Blocking Porch", "50 Blocking Way");
+    const action = `/seasons/${season.id}/coordinates/geocode`;
+    const html = await (await page(runtime, cookie, season.id)).text();
+    const body = new URLSearchParams({ _csrf: tokenFrom(html, action) });
+    const first = runtime.request(`${PUBLIC_BASE_URL}${action}`, {
+      method: "POST",
+      headers: formHeaders(cookie),
+      body,
+    });
+    await geo.started;
+
+    const second = await runtime.request(`${PUBLIC_BASE_URL}${action}`, {
+      method: "POST",
+      headers: formHeaders(cookie),
+      body: new URLSearchParams({ _csrf: tokenFrom(html, action) }),
+    });
+
+    expect(second.status).toBe(409);
+    expect(await second.text()).toContain("Geocoding is already running");
+    geo.release();
+    expect((await first).status).toBe(200);
   });
 
   it("requires an address before a review pin can be verified", async () => {
