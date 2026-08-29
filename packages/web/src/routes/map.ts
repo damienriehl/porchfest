@@ -13,6 +13,7 @@ import {
   VENUES_MAP_SCHEMA_VERSION,
   type VenueMapAct,
   type VenueMapLink,
+  type VenuesMapValidationError,
   type VenuesMapDocument,
 } from "@porchfest/map";
 import type { Context } from "hono";
@@ -132,7 +133,7 @@ function mapData(core: CoreRuntime): Response {
   }
 }
 
-export function buildPublishedMapDocument(
+function buildPublishedMapDocument(
   core: CoreRuntime,
   season: Season,
 ): VenuesMapDocument {
@@ -148,35 +149,24 @@ export function buildPublishedMapDocument(
   const assignments = core.seasons.listAssignments(season.id);
   const seasonActs = core.seasons.listSeasonActs(season.id);
   const coordinates = core.geocoding.publishableCoordinatesForSeason(season.id);
-  const actsById: Record<number, (typeof seasonActs)[number] | undefined> =
-    Object.create(null) as Record<
-      number,
-      (typeof seasonActs)[number] | undefined
-    >;
-  for (const act of seasonActs) actsById[act.id] = act;
-  const assignmentsBySlot: Record<
-    number,
-    (typeof assignments)[number] | undefined
-  > = Object.create(null) as Record<
-    number,
-    (typeof assignments)[number] | undefined
-  >;
-  for (const assignment of assignments) {
-    assignmentsBySlot[assignment.slotId] = assignment;
-  }
-  const slotsByVenue: Record<number, Slot[] | undefined> = Object.create(
-    null,
-  ) as Record<number, Slot[] | undefined>;
+  const actsById = new Map(seasonActs.map((act) => [act.id, act]));
+  const assignmentsBySlot = new Map(
+    assignments.map((assignment) => [assignment.slotId, assignment]),
+  );
+  const slotsByVenue = new Map<number, Slot[]>();
   for (const slot of slots) {
-    (slotsByVenue[slot.venueId] ??= []).push(slot);
+    const venueSlots = slotsByVenue.get(slot.venueId) ?? [];
+    venueSlots.push(slot);
+    slotsByVenue.set(slot.venueId, venueSlots);
   }
-  for (const venueSlots of Object.values(slotsByVenue)) {
-    venueSlots?.sort(
-      (left, right) =>
-        left.startsAt.getTime() - right.startsAt.getTime() ||
-        left.id - right.id,
-    );
-  }
+  const slotTimeFormatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: season.timezone,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+    timeZoneName: "longOffset",
+  });
 
   const venues = core.seasons
     .listSeasonVenues(season.id)
@@ -188,23 +178,23 @@ export function buildPublishedMapDocument(
       const coordinate = coordinates.get(venue.id);
       if (coordinate === undefined) return [];
 
-      const acts = (slotsByVenue[venue.id] ?? []).flatMap((slot) => {
+      const acts = (slotsByVenue.get(venue.id) ?? []).flatMap((slot) => {
         if (slot.state !== "assigned") return [];
-        const assignment = assignmentsBySlot[slot.id];
+        const assignment = assignmentsBySlot.get(slot.id);
         if (assignment === undefined) return [];
-        const act = actsById[assignment.actId];
+        const act = actsById.get(assignment.actId);
         if (act === undefined) {
           throw new Error(`assignment ${assignment.id} has no current act`);
         }
         if (act.status === "withdrawn" || act.canonicalActId !== null) {
           return [];
         }
-        return [publishedAct(season, templates, slot, act)];
+        return [publishedAct(season, templates, slot, act, slotTimeFormatter)];
       });
       if (acts.length === 0) return [];
 
       // Named fields only: adding a column to Venue can never widen this public
-      // response. The v1.3.0 contract carries city/state at event level and
+      // response. The contract carries city/state at event level and
       // rejects them as per-venue additional properties.
       return [
         {
@@ -253,9 +243,8 @@ export function buildPublishedMapDocument(
   };
 }
 
-export type MapPublicationPreflight =
-  | { readonly ok: true; readonly document: VenuesMapDocument }
-  | { readonly ok: false; readonly error: string };
+type MapPublicationPreflight =
+  { readonly ok: true } | { readonly ok: false; readonly error: string };
 
 export function preflightMapPublication(
   core: CoreRuntime,
@@ -275,7 +264,7 @@ export function preflightMapPublication(
     };
   }
   const validation = validateVenuesMapDocument(document);
-  if (validation.ok) return { ok: true, document: validation.document };
+  if (validation.ok) return { ok: true };
   const first = validation.errors[0];
   if (first === undefined) {
     return { ok: false, error: "Map schema validation failed." };
@@ -288,7 +277,7 @@ export function preflightMapPublication(
 
 function publicationValidationError(
   document: VenuesMapDocument,
-  error: { readonly path: string; readonly message: string },
+  error: VenuesMapValidationError,
 ): string {
   const match = /^\/venues\/(\d+)(?:\/acts\/(\d+))?/.exec(error.path);
   const venueIndex = match === null ? Number.NaN : Number(match[1]);
@@ -316,6 +305,7 @@ function publishedAct(
   templates: readonly SeasonTimeSlot[],
   slot: Slot,
   act: Act,
+  slotTimeFormatter: Intl.DateTimeFormat,
 ): VenueMapAct {
   const template = templates.find(
     (candidate) =>
@@ -331,8 +321,8 @@ function publishedAct(
   return {
     slot: String(template.position),
     slot_label: label,
-    slot_start: rfc3339Time(template.startsAt, season.timezone),
-    slot_end: rfc3339Time(template.endsAt, season.timezone),
+    slot_start: rfc3339Time(template.startsAt, slotTimeFormatter),
+    slot_end: rfc3339Time(template.endsAt, slotTimeFormatter),
     name: act.name,
     genre: act.genre ?? "",
     description: act.description ?? "",
@@ -340,22 +330,17 @@ function publishedAct(
   };
 }
 
-function rfc3339Time(value: Date, timezone: string): string {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: timezone,
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23",
-    timeZoneName: "longOffset",
-  }).formatToParts(value);
+function rfc3339Time(value: Date, formatter: Intl.DateTimeFormat): string {
+  const parts = formatter.formatToParts(value);
   const part = (type: Intl.DateTimeFormatPartTypes): string =>
     parts.find((candidate) => candidate.type === type)?.value ?? "";
   const timeZoneName = part("timeZoneName");
   const offset =
     timeZoneName === "GMT" ? "Z" : timeZoneName.replace(/^GMT/, "");
   if (!/^(?:Z|[+-]\d{2}:\d{2})$/.test(offset)) {
-    throw new Error(`cannot format RFC 3339 offset for ${timezone}`);
+    throw new Error(
+      `cannot format RFC 3339 offset for ${formatter.resolvedOptions().timeZone}`,
+    );
   }
   return `${part("hour")}:${part("minute")}:${part("second")}${offset}`;
 }

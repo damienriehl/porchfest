@@ -102,7 +102,7 @@ export function createGeocodingRepository(
         reason: "The venue has no address to geocode.",
       };
     }
-    const boundingBox = boundsFor(context);
+    const boundingBox = seasonBoundingBox(context);
     if (boundingBox === null) {
       return {
         kind: "unavailable",
@@ -215,7 +215,7 @@ export function createGeocodingRepository(
             `Venue ${venueId} has no address to verify. Add an address before verifying its pin.`,
           );
         }
-        const boundingBox = boundsFor(context);
+        const boundingBox = seasonBoundingBox(context);
         if (boundingBox === null) {
           throw new GeocodingLifecycleError(
             `${context.seasonName} has no complete geocoding bounding box.`,
@@ -387,10 +387,6 @@ function venueContext(db: CoreExecutor, venueId: number): VenueSeasonContext {
   return context;
 }
 
-function boundsFor(context: VenueSeasonContext) {
-  return seasonBoundingBox(context);
-}
-
 export function seasonBoundingBox(
   season: Pick<
     Season,
@@ -431,7 +427,7 @@ interface StoreOutcomeInput {
   readonly provider: string;
   readonly actor: GeocodingActor;
   readonly outcome: Exclude<LocateOutcome, { kind: "unavailable" }>;
-  readonly boundingBox: NonNullable<ReturnType<typeof boundsFor>>;
+  readonly boundingBox: NonNullable<ReturnType<typeof seasonBoundingBox>>;
   readonly updatedAt: Date;
 }
 

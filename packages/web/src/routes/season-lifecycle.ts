@@ -14,6 +14,7 @@ import { renderSeasonLifecyclePage } from "../views/season-lifecycle.js";
 import {
   findSeason,
   notFound,
+  positiveInteger,
   readFields,
   redirect,
   unauthorized,
@@ -64,8 +65,8 @@ export function registerSeasonLifecycleRoutes(options: {
           `Unknown season state "${fields.target_state ?? ""}".`,
         );
       }
-      const version = Number(fields.version ?? "");
-      if (!Number.isSafeInteger(version) || version < 1) {
+      const version = positiveInteger(fields.version);
+      if (version === null) {
         return seasonPage(
           options,
           season,
