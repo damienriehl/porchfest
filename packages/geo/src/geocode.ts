@@ -897,8 +897,8 @@ function cacheNamespace(
     .join(",");
   const locality =
     grammar === null
-      ? "none"
-      : caseFold(grammar.suffix).replace(/\s+/g, " ").trim();
+      ? "absent"
+      : `present:${caseFold(grammar.suffix).replace(/\s+/g, " ").trim()}`;
   return `openstreetmap-v1|countrycodes=${canonicalCountryCodes}|bbox=${boundingBoxNamespace(box)}|locality=${locality}`;
 }
 

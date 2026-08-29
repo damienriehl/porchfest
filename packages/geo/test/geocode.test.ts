@@ -389,6 +389,66 @@ describe("OpenStreetMapGeoAdapter", () => {
     ).toHaveLength(6);
   });
 
+  it("promotes a reused Overpass snapshot before evicting the least recently used box", async () => {
+    const cache: GeocodeCache = {
+      get: vi.fn(async () => undefined),
+      set: vi.fn(async () => undefined),
+    };
+    const overpassRequests: string[] = [];
+    const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+      if (String(input).includes("overpass")) {
+        overpassRequests.push(String(init?.body));
+        return jsonResponse({ elements: [] });
+      }
+      return jsonResponse([]);
+    });
+    const adapter = new OpenStreetMapGeoAdapter({
+      userAgent: "porchfest-geocoder-tests/1.0 (example.invalid)",
+      fetcher,
+      cache,
+      wait: async () => undefined,
+    });
+    const boxes = Array.from({ length: 5 }, (_, index) => ({
+      south: 10 + index,
+      north: 11 + index,
+      west: 20 + index,
+      east: 21 + index,
+    }));
+
+    for (let index = 0; index < 4; index += 1) {
+      await adapter.locate({
+        address: `${101 + index} Nebula Avenue`,
+        boundingBox: boxes[index],
+      });
+    }
+    await adapter.locate({
+      address: "201 Quasar Place",
+      boundingBox: boxes[0],
+    });
+    await adapter.locate({
+      address: "202 Quasar Place",
+      boundingBox: boxes[4],
+    });
+    await adapter.locate({
+      address: "203 Quasar Place",
+      boundingBox: boxes[1],
+    });
+    await adapter.locate({
+      address: "204 Quasar Place",
+      boundingBox: boxes[0],
+    });
+
+    const firstBox = "10%2C20%2C11%2C21";
+    const secondBox = "11%2C21%2C12%2C22";
+    expect(
+      overpassRequests.filter((body) => body.includes(firstBox)),
+    ).toHaveLength(1);
+    expect(
+      overpassRequests.filter((body) => body.includes(secondBox)),
+    ).toHaveLength(2);
+    expect(overpassRequests).toHaveLength(6);
+  });
+
   it("does not evict and duplicate an Overpass request that is still in flight", async () => {
     const releases: Array<(response: Response) => void> = [];
     const cache: GeocodeCache = {
@@ -650,6 +710,31 @@ describe("OpenStreetMapGeoAdapter", () => {
         address,
         localityName: "St Nebula, ZZ",
       }),
+    ]);
+
+    expect(cache.get).toHaveBeenCalledTimes(2);
+    expect(cache.set).toHaveBeenCalledTimes(2);
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+
+  it("distinguishes an absent locality from the literal locality none", async () => {
+    const cache: GeocodeCache = {
+      get: vi.fn(async () => undefined),
+      set: vi.fn(async () => undefined),
+    };
+    const fetcher = sequencedFetcher({ elements: [] }, [], []);
+    const adapter = new OpenStreetMapGeoAdapter({
+      boundingBox: BOUNDS,
+      userAgent: "porchfest-geocoder-tests/1.0 (example.invalid)",
+      fetcher,
+      cache,
+      wait: async () => undefined,
+    });
+    const address = `${ADDRESS}, none`;
+
+    await Promise.all([
+      adapter.locate({ address }),
+      adapter.locate({ address, localityName: "none" }),
     ]);
 
     expect(cache.get).toHaveBeenCalledTimes(2);
