@@ -3,8 +3,7 @@
 // drifting copy is how KTD8's no-store header or KTD14's 401 shape quietly stops
 // applying to one route.
 //
-// `notFound` is deliberately NOT here: its body names the thing that was missing,
-// which is domain wording, not plumbing.
+// `notFound` accepts domain wording while keeping the shared response headers.
 //
 // One divergence is deliberate and must stay: `readFields` in
 // `packages/web/src/routes/admin.ts` trims its values, because the setup and
@@ -12,6 +11,11 @@
 // forms do not trim, because a record's stored text is the organizer's to control.
 // Folding that file in here would silently change what those forms store.
 
+import {
+  SeasonLifecycleError,
+  type CoreRuntime,
+  type Season,
+} from "@porchfest/core";
 import type { Context } from "hono";
 import { adminHeaders } from "../auth.js";
 
@@ -58,5 +62,31 @@ export function unauthorized(): Response {
   return new Response(JSON.stringify({ error: "unauthorized" }), {
     status: 401,
     headers: { ...adminHeaders(), "content-type": "application/json" },
+  });
+}
+
+export function positiveInteger(value: string | undefined): number | null {
+  const parsed = Number(value ?? "");
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+export function findSeason(
+  core: CoreRuntime,
+  rawId: string | undefined,
+): Season | null {
+  const id = positiveInteger(rawId);
+  if (id === null) return null;
+  try {
+    return core.seasons.getSeason(id);
+  } catch (error) {
+    if (error instanceof SeasonLifecycleError) return null;
+    throw error;
+  }
+}
+
+export function notFound(message = "No such season."): Response {
+  return new Response(message, {
+    status: 404,
+    headers: { ...adminHeaders(), "content-type": "text/plain; charset=UTF-8" },
   });
 }

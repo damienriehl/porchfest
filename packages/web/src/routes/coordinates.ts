@@ -15,7 +15,14 @@ import {
   renderCoordinatesPage,
   type GeocodeSeasonCounts,
 } from "../views/coordinates.js";
-import { readFields, redirect, unauthorized } from "./admin-http.js";
+import {
+  findSeason,
+  notFound,
+  positiveInteger,
+  readFields,
+  redirect,
+  unauthorized,
+} from "./admin-http.js";
 import { preflightMapPublication } from "./map.js";
 
 export const COORDINATES_PATH = "/seasons/:id/coordinates";
@@ -48,7 +55,7 @@ export function registerCoordinateRoutes(
         return options.routes.organizerGetRefusal(context);
       }
       const season = findSeason(options.core, context.req.param("id"));
-      if (!season) return notFound();
+      if (!season) return notFound("No such season or venue.");
       return coordinatePage(options, season, 200, {
         notice: publicationNotice(context.req.query("map")),
       });
@@ -63,17 +70,19 @@ export function registerCoordinateRoutes(
       const organizer = currentOrganizer(options.core, context);
       if (!organizer) return unauthorized();
       const season = findSeason(options.core, context.req.param("id"));
-      if (!season) return notFound();
+      if (!season) return notFound("No such season or venue.");
       const venueId = positiveInteger(context.req.param("venueId"));
-      if (venueId === null) return notFound();
+      if (venueId === null) return notFound("No such season or venue.");
       let venue;
       try {
         venue = options.core.seasons.getVenue(venueId);
       } catch (error) {
-        if (error instanceof SeasonLifecycleError) return notFound();
+        if (error instanceof SeasonLifecycleError)
+          return notFound("No such season or venue.");
         throw error;
       }
-      if (venue.seasonId !== season.id) return notFound();
+      if (venue.seasonId !== season.id)
+        return notFound("No such season or venue.");
       const fields = await readFields(context);
       const latitude = finiteNumber(fields.latitude);
       const longitude = finiteNumber(fields.longitude);
@@ -114,7 +123,7 @@ export function registerCoordinateRoutes(
       const organizer = currentOrganizer(options.core, context);
       if (!organizer) return unauthorized();
       const season = findSeason(options.core, context.req.param("id"));
-      if (!season) return notFound();
+      if (!season) return notFound("No such season or venue.");
       if (!options.core.ports.geo.configured) {
         return coordinatePage(options, season, 409, {
           error:
@@ -215,7 +224,7 @@ function registerPublicationAction(
       const organizer = currentOrganizer(options.core, context);
       if (!organizer) return unauthorized();
       const season = findSeason(options.core, context.req.param("id"));
-      if (!season) return notFound();
+      if (!season) return notFound("No such season or venue.");
       const fields = await readFields(context);
       const version = positiveInteger(fields.version);
       if (version === null) {
@@ -304,25 +313,6 @@ function coordinatePage(
   );
 }
 
-function findSeason(
-  core: CoreRuntime,
-  rawId: string | undefined,
-): Season | null {
-  const id = positiveInteger(rawId);
-  if (id === null) return null;
-  try {
-    return core.seasons.getSeason(id);
-  } catch (error) {
-    if (error instanceof SeasonLifecycleError) return null;
-    throw error;
-  }
-}
-
-function positiveInteger(value: string | undefined): number | null {
-  const parsed = Number(value ?? "");
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
-}
-
 function finiteNumber(value: string | undefined): number | null {
   const trimmed = value?.trim() ?? "";
   if (!trimmed) return null;
@@ -334,11 +324,4 @@ function publicationNotice(value: string | undefined): string | undefined {
   if (value === "published") return "The public map is published.";
   if (value === "unpublished") return "The public map is unpublished.";
   return undefined;
-}
-
-function notFound(): Response {
-  return new Response("No such season or venue.", {
-    status: 404,
-    headers: { ...adminHeaders(), "content-type": "text/plain; charset=UTF-8" },
-  });
 }
