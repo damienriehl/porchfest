@@ -30,6 +30,7 @@ Status: implemented, reviewed, and locally verified; committed locally but not p
 
 - `packages/geo/src/geocode.ts`
 - `packages/geo/src/index.ts`
+- `packages/geo/src/verify.ts`
 - `packages/geo/test/geocode.test.ts`
 - `docs/handoffs/worker-u9-geocoder-report.md`
 
@@ -45,7 +46,7 @@ Status: implemented, reviewed, and locally verified; committed locally but not p
 - `packages/core/src/ports/geo.ts`
 - `packages/antibot/src/turnstile.ts`
 - `packages/antibot/test/turnstile.test.ts`
-- `~/worktrees/woodshed-porchfest/porchfest/tools/geocode.py`
+- the Goal-1 repo's `porchfest/tools/geocode.py`
 
 The Turnstile adapter's dependency-injection, timeout, and outcome patterns were reused.
 The committed verification gate remains the authority for deciding whether a located
@@ -122,14 +123,13 @@ changed because it is outside this package and task.
 - A `residential` result is refused even if another provider field describes it as a
   building, because the settled street-level type list explicitly includes
   `residential`.
-- Provider-unavailable outcomes are cached, and one failed Overpass bulk request is not
-  retried within the adapter run. This preserves the requirements that a repeated
-  address never re-fetches and Overpass is queried only once per run.
+- Provider-unavailable outcomes are never cached. A successful Overpass bulk result is
+  reused for the adapter run, while a failed load is released so the next lookup retries.
 - The in-memory cache is intentionally not size-limited. Eviction would violate the
   repeat-address no-refetch guarantee; durable lifecycle and retention belong with the
   later database-backed implementation.
-- The aliases are applied exactly as specified, including `st -> street`; no
-  position-sensitive interpretation of `St` as `Saint` was introduced.
+- Street suffix and direction aliases are position-sensitive, and leading `St`/`Ste`
+  before another word is normalized to `Saint` rather than `Street`.
 - Provider URLs remain the selected public OSM endpoints. Adding mirror configuration,
   a deployment-wide coordinator, or route composition would widen this adapter-only
   slice.
@@ -161,11 +161,12 @@ this task did not touch core storage or the database schema.
 ## Review and residual findings
 
 A local multi-lens review covered correctness, tests, maintainability, performance,
-reliability, and adversarial cases. It found three worthwhile test gaps—concurrent cache
-deduplication, structurally invalid JSON, and parcel retention during a Nominatim
-failure—which were added. Suggested production changes that conflicted with the settled
-requirements or widened scope are recorded under judgment calls above. The final review
-had no actionable finding and a ready-to-merge verdict.
+reliability, and adversarial cases. Its initial pass added concurrent cache
+deduplication, structurally invalid JSON, and parcel-retention coverage. The final pass
+identified five follow-up defects: response-body timeouts, caching a degraded house
+fallback, direction-prefixed Saint aliases, reverse locality punctuation, and cache
+isolation across lookup policies. An independent validator confirmed all five; they
+were fixed with focused regression tests. No actionable finding remains.
 
 The optional external cross-model review could not run because source-code egress was
 not approved; a local adversarial review ran instead. No implementation blocker remains.
@@ -177,6 +178,94 @@ for that newer main commit.
 
 ## Delivery
 
-- Implementation commit: `d88be07` (`feat(geo): locate addresses with OpenStreetMap provenance (U9)`).
+- Initial implementation commit: `d88be07` (`feat(geo): locate addresses with OpenStreetMap provenance (U9)`).
+- Review-hardening commit: `9636cf8` (`fix(geo): harden OpenStreetMap geocoding`).
+- Follow-up review commit: `c56259f` (`fix(geo): address follow-up review findings`).
 - This handoff is committed separately so the documentation commit remains focused.
-- Neither commit was pushed or merged.
+- No commit was pushed or merged.
+
+## Review fixes (2026-08-29)
+
+1. Provider faults are no longer written to `GeocodeCache`, and stale cached
+   `unavailable` values are ignored. Failed Overpass loads clear their memoized promise
+   so a later lookup retries. Overpass failure no longer prevents the parallel
+   Nominatim house lookup; outcomes that depend on that degraded path identify the
+   Overpass outage in `reason`. A degraded `located` house outcome is also explicitly
+   non-cacheable, so the same address can recover a parcel cross-check after Overpass
+   returns.
+2. Every Nominatim request now sends `viewbox=20,10,21,11`-ordered deployment bounds
+   (`W,S,E,N`) and `bounded=1`. Returned points are independently checked against the
+   configured box before ranking; an in-box later result can beat an out-of-box earlier
+   result, and an all-out-of-box response is `not-found`.
+3. `countryCodes?: string` is a documented adapter option with the default `"us"` and
+   is passed through as Nominatim's `countrycodes` parameter.
+4. One compiled, trailing-only locality grammar now serves suffix detection, stripping,
+   query construction, and normalized cache keys. It accepts optional commas and
+   flexible whitespace and treats `Saint`, `St.`, and `St` as aliases for any configured
+   suffix without mistaking an interior street name for the locality. Optional commas
+   work in both directions, including comma-form input with a comma-free configured
+   suffix.
+5. Street normalization now applies suffix aliases only at the street-suffix position,
+   including before a trailing direction; applies one-letter directions only at an
+   endpoint; treats leading `St`/`Ste` as `Saint`; and covers boulevard, drive, court,
+   road, lane, and parkway aliases. Submitted street tokens are computed once per
+   lookup. The Saint alias begins after an optional leading direction, while
+   alias-looking interior tokens remain literal.
+6. Address parsing now requires the house number at the beginning and accepts plain,
+   letter-suffixed, hyphen-letter, and fractional forms. Unit-prefixed and numberless
+   inputs produce a typed refusal whose reason says the adapter could not parse a house
+   number.
+7. Nominatim results without both an OSM feature type and id are skipped instead of
+   receiving a fabricated type-based reference.
+8. Overpass ways carrying `addr:interpolation` are skipped. The code records that
+   Nominatim interpolation cannot be identified from its response and remains protected
+   by the independent cross-check gate.
+9. Provider timeouts are split into `overpassTimeoutMs` (180,000 ms default) and
+   `nominatimTimeoutMs` (10,000 ms default). Each request uses an abort controller,
+   keeps the deadline active through JSON body consumption, clears its timer in
+   `finally`, and reports timeout, reachability, HTTP status, and malformed JSON as
+   distinct reasons. Never-resolving fetches and stalled response bodies are covered
+   with fake timers that also assert the request signal was aborted.
+10. Cache read failures are treated as misses, cache write failures are swallowed after
+    the provider outcome is obtained, and `locate()` returns an outcome for both cases.
+    Concurrent equivalents consult the synchronous in-flight map before awaiting the
+    cache. Versioned cache keys include canonical country codes and ordered bounding-box
+    coordinates so shared caches cannot cross lookup policies.
+11. Bulk Overpass loading and the serial, rate-limited Nominatim request now start
+    together. Parcel selection and preferred-ref ranking happen only after both settle,
+    preserving rank zero without serializing the network calls.
+12. `assertBoundingBox` is exported from `verify.ts` and reused. The lookup computes its
+    submitted query once; Overpass parsing returns a nullable point, derives refs from
+    kind and id, and uses a flattened Nominatim outcome union with
+    `results.every(isStreetLevelNominatimResult)` for the refusal test.
+13. This report now uses repo-relative wording for the Goal-1 Python reference, updates
+    the superseded cache and alias judgment calls, and records the review-fix evidence,
+    including the independently validated follow-up fixes.
+
+The proof-first focused run initially failed 29 assertions for the intended defects.
+After implementation, cleanup, and follow-up review fixes, the focused geocoder suite
+passed 66/66. The exact
+Node v24.13.0 verification chain then passed:
+
+```text
+npm run typecheck: exit 0
+npm run lint: exit 0 (0 errors; 2 pre-existing packages/core/src/access.ts warnings)
+npm run format:check: exit 0
+npm test: exit 0; 39 files / 671 tests
+OK: core boundary self-test refuses adapter imports
+OK: route boundary self-test refuses direct registration
+OK: core imports no adapter package
+OK: web routes are registered only through the central registry
+OK: clean-room self-test refuses participant-data artifacts and content
+OK: clean-room scan found no participant-data artifacts in working tree (including ignored paths) and Git history
+```
+
+The first sandboxed `npm test` attempt could not bind the SMTP integration test's local
+listener (`EPERM` on `127.0.0.1`); the permitted final rerun passed in 22.17 seconds. The
+existing Node TLS `ServerName` warning also printed and remained outside this unit.
+
+Review-fix commits: `9636cf8` (`fix(geo): harden OpenStreetMap geocoding`) and
+`c56259f` (`fix(geo): address follow-up review findings`).
+No requested fix was left incomplete. The two recorded map-route design findings remain
+out of scope: the core port was not widened, and boot-time composition was not changed.
+No dependency or lockfile changed; no rebase, amend, push, or merge was performed.
