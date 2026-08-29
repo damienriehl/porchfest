@@ -69,6 +69,49 @@ export const venueAmenityValues = [
   "other",
 ] as const;
 
+// --- U7 outbox (R10-R13, R30, KTD5, KTD6, KTD8) ---------------------------
+
+export const outboxWaveKinds = [
+  "thank_you",
+  "match",
+  "reminder_7day",
+  "day_of",
+  "post_event",
+  "ad_hoc",
+] as const;
+
+export const outboxRecipientRules = [
+  "matched_venues",
+  "unmatched_venues",
+  "unmatched_acts",
+  "all_participants",
+  "manual",
+] as const;
+
+export const outboxWaveStatuses = ["open", "complete"] as const;
+
+/**
+ * KTD5's message lifecycle. The two `_stale` states exist so that changing data
+ * behind an unsent message never rewrites it: the message is flagged, its
+ * organizer edits survive, and the organizer decides what happens next.
+ */
+export const outboxMessageStates = [
+  "generated",
+  "edited",
+  "sent",
+  "generated_stale",
+  "edited_stale",
+] as const;
+
+/**
+ * A generated message belongs to the venue or act it is about. `contact` exists
+ * only for organizer-authored ad-hoc waves, whose recipients are named directly
+ * and may not correspond to a single record.
+ */
+export const outboxRecordTypes = ["venue", "act", "contact"] as const;
+
+export const outboxSendOutcomes = ["sent", "skipped", "failed"] as const;
+
 function mutableColumns() {
   return {
     version: integer("version").notNull().default(1),
@@ -641,11 +684,155 @@ export const emailLog = sqliteTable(
     sentAt: integer("sent_at", { mode: "timestamp" })
       .notNull()
       .default(sql`(unixepoch())`),
+    // R13/KTD6: the send is recorded against the address it actually went to,
+    // so correcting a contact later cannot rewrite what was already delivered.
+    // All three are nullable because rows written before U7 predate them.
+    address: text("address"),
+    outcome: text("outcome"),
+    messageId: integer("message_id"),
   },
   (table) => [
     index("email_log_season_id_idx").on(table.seasonId),
     index("email_log_record_idx").on(table.recordType, table.recordId),
     index("email_log_recipient_contact_id_idx").on(table.recipientContactId),
+  ],
+);
+
+/**
+ * R10/R11: a wave is the organizer-visible unit of generation. Its templates are
+ * stored on the row rather than only in code so a season keeps the wording it
+ * was generated with, and so an organizer-authored ad-hoc wave has somewhere to
+ * put its own subject and body.
+ */
+export const outboxWaves = sqliteTable(
+  "outbox_waves",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    seasonId: integer("season_id")
+      .notNull()
+      .references(() => seasons.id),
+    kind: text("kind", { enum: outboxWaveKinds }).notNull(),
+    label: text("label").notNull(),
+    subjectTemplate: text("subject_template").notNull(),
+    bodyTemplate: text("body_template").notNull(),
+    recipientRule: text("recipient_rule", {
+      enum: outboxRecipientRules,
+    }).notNull(),
+    status: text("status", { enum: outboxWaveStatuses })
+      .notNull()
+      .default("open"),
+    ...mutableColumns(),
+  },
+  (table) => [
+    index("outbox_waves_season_id_idx").on(table.seasonId),
+    uniqueIndex("outbox_waves_season_label_uidx").on(
+      table.seasonId,
+      table.label,
+    ),
+    check(
+      "outbox_waves_kind_check",
+      sql`${table.kind} in ('thank_you', 'match', 'reminder_7day', 'day_of', 'post_event', 'ad_hoc')`,
+    ),
+    check(
+      "outbox_waves_recipient_rule_check",
+      sql`${table.recipientRule} in ('matched_venues', 'unmatched_venues', 'unmatched_acts', 'all_participants', 'manual')`,
+    ),
+    check(
+      "outbox_waves_status_check",
+      sql`${table.status} in ('open', 'complete')`,
+    ),
+  ],
+);
+
+/**
+ * KTD5: the outbox stores the exact payload that will be sent. Nothing is
+ * re-derived at send time, so what an organizer reviewed is what transmits.
+ *
+ * `sourceFingerprint` is the hash of the values the body was rendered from; a
+ * mismatch against a freshly built context is what makes a message stale.
+ * `preSendState` remembers which lifecycle state a message left when it was
+ * sent, so AE9's address correction can put it back exactly where it was.
+ * Bodies are nullable because KTD8 purges them once a wave completes.
+ */
+export const outboxMessages = sqliteTable(
+  "outbox_messages",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    seasonId: integer("season_id")
+      .notNull()
+      .references(() => seasons.id),
+    waveId: integer("wave_id")
+      .notNull()
+      .references(() => outboxWaves.id),
+    recordType: text("record_type", { enum: outboxRecordTypes }).notNull(),
+    recordId: integer("record_id").notNull(),
+    state: text("state", { enum: outboxMessageStates })
+      .notNull()
+      .default("generated"),
+    subject: text("subject").notNull(),
+    textBody: text("text_body"),
+    htmlBody: text("html_body"),
+    sourceFingerprint: text("source_fingerprint").notNull(),
+    preSendState: text("pre_send_state", { enum: outboxMessageStates }),
+    sentAt: integer("sent_at", { mode: "timestamp" }),
+    ...mutableColumns(),
+  },
+  (table) => [
+    index("outbox_messages_season_id_idx").on(table.seasonId),
+    index("outbox_messages_wave_id_idx").on(table.waveId),
+    uniqueIndex("outbox_messages_wave_record_uidx").on(
+      table.waveId,
+      table.recordType,
+      table.recordId,
+    ),
+    check(
+      "outbox_messages_record_type_check",
+      sql`${table.recordType} in ('venue', 'act', 'contact')`,
+    ),
+    check(
+      "outbox_messages_state_check",
+      sql`${table.state} in ('generated', 'edited', 'sent', 'generated_stale', 'edited_stale')`,
+    ),
+  ],
+);
+
+/**
+ * KTD6: send state is per recipient and keyed to the address it was sent to.
+ * `previousAddress` keeps the address a correction replaced so a sweep can
+ * report "corrected - needs resend" rather than silently skipping the person.
+ */
+export const outboxRecipients = sqliteTable(
+  "outbox_recipients",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    seasonId: integer("season_id")
+      .notNull()
+      .references(() => seasons.id),
+    messageId: integer("message_id")
+      .notNull()
+      .references(() => outboxMessages.id),
+    contactId: integer("contact_id")
+      .notNull()
+      .references(() => contacts.id),
+    address: text("address").notNull(),
+    previousAddress: text("previous_address"),
+    sentAt: integer("sent_at", { mode: "timestamp" }),
+    outcome: text("outcome", { enum: outboxSendOutcomes }),
+    providerMessageId: text("provider_message_id"),
+    reason: text("reason"),
+    ...mutableColumns(),
+  },
+  (table) => [
+    index("outbox_recipients_season_id_idx").on(table.seasonId),
+    index("outbox_recipients_message_id_idx").on(table.messageId),
+    uniqueIndex("outbox_recipients_message_contact_uidx").on(
+      table.messageId,
+      table.contactId,
+    ),
+    check(
+      "outbox_recipients_outcome_check",
+      sql`${table.outcome} is null or ${table.outcome} in ('sent', 'skipped', 'failed')`,
+    ),
   ],
 );
 
@@ -679,6 +866,9 @@ const schemaTables = [
   slots,
   assignments,
   emailLog,
+  outboxWaves,
+  outboxMessages,
+  outboxRecipients,
   annotations,
   organizers,
   organizerSessions,
@@ -749,5 +939,17 @@ export type Assignment = typeof assignments.$inferSelect;
 export type NewAssignment = typeof assignments.$inferInsert;
 export type EmailLogEntry = typeof emailLog.$inferSelect;
 export type NewEmailLogEntry = typeof emailLog.$inferInsert;
+export type OutboxWave = typeof outboxWaves.$inferSelect;
+export type NewOutboxWave = typeof outboxWaves.$inferInsert;
+export type OutboxMessage = typeof outboxMessages.$inferSelect;
+export type NewOutboxMessage = typeof outboxMessages.$inferInsert;
+export type OutboxRecipient = typeof outboxRecipients.$inferSelect;
+export type NewOutboxRecipient = typeof outboxRecipients.$inferInsert;
+export type OutboxWaveKind = (typeof outboxWaveKinds)[number];
+export type OutboxRecipientRule = (typeof outboxRecipientRules)[number];
+export type OutboxWaveStatus = (typeof outboxWaveStatuses)[number];
+export type OutboxMessageState = (typeof outboxMessageStates)[number];
+export type OutboxRecordType = (typeof outboxRecordTypes)[number];
+export type OutboxSendOutcome = (typeof outboxSendOutcomes)[number];
 export type Annotation = typeof annotations.$inferSelect;
 export type NewAnnotation = typeof annotations.$inferInsert;

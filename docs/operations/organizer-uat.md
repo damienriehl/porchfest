@@ -26,18 +26,12 @@ else.
 
 ## Before you can run this at all
 
-**The loop is one unit short.** The DoD names three things in sequence: a
-record gets corrected, **gets assigned**, and **produces a reviewable message**.
-Assignment landed with U6, so task 4 is runnable. Messages are U7 and are not
-built — no route in the application produces one — so task 5 cannot be attempted
-until U7 lands.
-
-Season state changes also landed with U6: an organizer can close signups, lock
-a season, and archive it from the admin, so task 6 is runnable. That was the
-gap the 2026-08-24 UAT found (no route called `transitionSeason`); it is closed.
-
-Tasks 1–4 and 6 are runnable today and are worth running today. Running them
-early finds interface problems while they are still cheap to fix.
+**The loop is complete.** The DoD names three things in sequence: a record
+gets corrected, **gets assigned**, and **produces a reviewable message**.
+Assignment landed with U6 and the outbox with U7, so every task below is
+runnable. Leave the email adapter unconfigured: the outbox then offers
+copy-paste and export instead of a send button, which is the deployment a new
+festival starts from and exactly what task 5 asks the tester to find.
 
 ## Setting up for the tester
 
@@ -76,8 +70,8 @@ festival starts from, and the application is designed to work without them.
 >    it. Then mark the porch confirmed.
 > 4. Put the act on the porch, in a slot. The software should tell you why it
 >    suggests what it suggests — say out loud whether that helped.
-> 5. _(needs U7)_ Produce the message that tells them both, and read it over
->    before anything is sent.
+> 5. Produce the message that tells them both, and read it over before
+>    anything is sent. Fix one word in it.
 > 6. Close the season for the year.
 
 ## The observer's sheet — this is the actual result
@@ -123,8 +117,9 @@ automated suite (500+ tests after U6):
 - Every form control has a label, focus is visible, and touch targets are at
   least 44×44 at phone width.
 
-Covered by automated tests only (U6, 2026-08-28 — no browser walkthrough yet,
-so an interface finding here is expected, not a regression):
+Covered by automated tests only (U6 on 2026-08-28, U7 on 2026-08-29 — no
+browser walkthrough of either yet, so an interface finding here is expected,
+not a regression):
 
 - A venue's assignment page lists its slots with ranked candidate acts and the
   reasons beside each; an act's page lists its ranked slots the same way.
@@ -132,6 +127,9 @@ so an interface finding here is expected, not a regression):
   member need a recorded override to play the same hour.
 - The season page offers only forward transitions and says what each stops
   allowing before it is taken; lock and archive ask for confirmation.
+- The outbox generates a wave from stored records, lists every message with
+  its recipients and state, lets an organizer edit the text, and — with no
+  provider configured — exports copy-paste text and `.eml` instead of sending.
 
 If the tester hits something in that list, it is a regression and worth
 escalating immediately rather than filing as a usability finding.

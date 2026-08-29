@@ -45,6 +45,60 @@ export {
   type SlotHold,
 } from "./season.js";
 export {
+  applyContactAddressChange,
+  createOutboxRepository,
+  OutboxConflictError,
+  OutboxLifecycleError,
+  type AdHocWaveInput,
+  type ContactAddressChange,
+  type EditMessageInput,
+  type ExportedMessage,
+  type GeneratedWave,
+  type GenerateWaveInput,
+  type OutboxMessageView,
+  type OutboxPorts,
+  type OutboxRepository,
+  type OutboxRepositoryOptions,
+  type SendRecipientOutcome,
+  type SendReport,
+  type SendSelectionInput,
+} from "./outbox.js";
+export {
+  CRLF,
+  encodeHeaderValue,
+  encodeQuotedPrintable,
+  formatRfc5322Date,
+  isPrintableAscii,
+} from "./mime.js";
+export {
+  renderEml,
+  renderWave,
+  textToHtml,
+  waveTemplateKeys,
+  waveTemplates,
+  WaveTemplateError,
+  type RenderContext,
+  type RenderedWave,
+  type WavePlaceholder,
+  type WaveTemplateKey,
+} from "./waves.js";
+export type {
+  OutboxMessage,
+  OutboxMessageState,
+  OutboxRecipient,
+  OutboxRecipientRule,
+  OutboxRecordType,
+  OutboxSendOutcome,
+  OutboxWave,
+  OutboxWaveKind,
+  OutboxWaveStatus,
+} from "./storage/schema.js";
+export {
+  outboxMessageStates,
+  outboxRecipientRules,
+  outboxWaveKinds,
+} from "./storage/schema.js";
+export {
   formatZonedWindow,
   overlaps,
   rankPairings,
@@ -155,6 +209,11 @@ import {
   createChangeRequestRepository,
   type ChangeRequestRepository,
 } from "./change-requests.js";
+import {
+  createOutboxRepository,
+  type OutboxRepository,
+  type OutboxRepositoryOptions,
+} from "./outbox.js";
 import { createQueueRepository, type QueueRepository } from "./queue.js";
 import {
   createRetentionRepository,
@@ -175,10 +234,12 @@ export interface CoreRuntime {
   readonly queue: QueueRepository;
   readonly changeRequests: ChangeRequestRepository;
   readonly retention: RetentionRepository;
+  readonly outbox: OutboxRepository;
 }
 
 export interface CoreOptions {
   readonly retention?: RetentionRepositoryOptions;
+  readonly outbox?: OutboxRepositoryOptions;
 }
 
 export function createCore(
@@ -194,5 +255,12 @@ export function createCore(
     queue: createQueueRepository(database),
     changeRequests: createChangeRequestRepository(database),
     retention: createRetentionRepository(database, options.retention),
+    // The outbox is handed only the email port: core generates and stores, and
+    // the adapter is reached exactly once, inside an explicit send.
+    outbox: createOutboxRepository(
+      database,
+      { email: ports.email },
+      options.outbox,
+    ),
   });
 }

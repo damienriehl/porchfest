@@ -4,16 +4,12 @@ export type {
   EmailPort,
 } from "@porchfest/core";
 
-import type { EmailMessage, EmailPort } from "@porchfest/core";
-
-export class NullEmailAdapter implements EmailPort {
-  readonly name = "none";
-  readonly configured = false;
-
-  async deliver(_message: EmailMessage) {
-    return {
-      status: "skipped" as const,
-      reason: "No email provider is configured; use copy-paste delivery.",
-    };
-  }
-}
+export { NoneEmailAdapter } from "./none.js";
+export {
+  DEFAULT_SMTP_TIMEOUT_MS,
+  SmtpEmailAdapter,
+  buildMimeMessage,
+  encodeQuotedPrintable,
+  type MimeMessageInput,
+  type SmtpEmailAdapterOptions,
+} from "./smtp.js";

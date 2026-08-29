@@ -327,6 +327,72 @@ describe("core schema migration", () => {
     );
   });
 
+  it("keeps the outbox migration checks aligned with the schema value lists", async () => {
+    const migration = await readFile(
+      new URL("../drizzle/0013_youthful_falcon.sql", import.meta.url),
+      "utf8",
+    );
+    expect(constraintValues(migration, "outbox_waves_kind_check")).toEqual(
+      schema.outboxWaveKinds,
+    );
+    expect(
+      constraintValues(migration, "outbox_waves_recipient_rule_check"),
+    ).toEqual(schema.outboxRecipientRules);
+    expect(constraintValues(migration, "outbox_waves_status_check")).toEqual(
+      schema.outboxWaveStatuses,
+    );
+    expect(constraintValues(migration, "outbox_messages_state_check")).toEqual(
+      schema.outboxMessageStates,
+    );
+    expect(
+      constraintValues(migration, "outbox_messages_record_type_check"),
+    ).toEqual(schema.outboxRecordTypes);
+  });
+
+  it("keeps pre-outbox email_log rows valid and one row per recipient", () => {
+    const season = sqlite
+      .prepare(
+        "insert into seasons (year, display_name) values (?, ?) returning id",
+      )
+      .get(2107, "Send History Sample") as { id: number };
+    const contact = sqlite
+      .prepare(
+        "insert into contacts (season_id, name) values (?, ?) returning id",
+      )
+      .get(season.id, "History Contact") as { id: number };
+    // A row written before U7 named no address, outcome, or message.
+    const legacy = sqlite
+      .prepare(
+        "insert into email_log (season_id, record_type, record_id, wave_label, recipient_contact_id) values (?, ?, ?, ?, ?) returning address, outcome, message_id",
+      )
+      .get(season.id, "venue", 1, "wave1", contact.id);
+    expect(legacy).toEqual({
+      address: null,
+      outcome: null,
+      message_id: null,
+    });
+
+    sqlite
+      .prepare(
+        "insert into email_log (season_id, record_type, record_id, wave_label, recipient_contact_id, address, outcome, message_id) values (?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        season.id,
+        "venue",
+        1,
+        "match",
+        contact.id,
+        "history@example.invalid",
+        "sent",
+        7,
+      );
+    expect(
+      sqlite
+        .prepare("select count(*) as total from email_log where season_id = ?")
+        .get(season.id),
+    ).toEqual({ total: 2 });
+  });
+
   it("defaults the optimistic-concurrency version to one", () => {
     const inserted = sqlite
       .prepare(

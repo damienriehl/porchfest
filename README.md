@@ -67,8 +67,37 @@ unconfigured; participant magic-link features stay unavailable until email is co
 To add or configure a provider later, implement the relevant port in `packages/email`,
 `packages/antibot`, or `packages/geo`, run that package's shared contract suite, and select the
 implementation in the `packages/web` composition root. Provider credentials must come from an
-environment variable or mounted file, never source control or an image. U2 intentionally ships no
-live provider implementation or provider-specific environment switch yet.
+environment variable or mounted file, never source control or an image.
+
+Two seams now ship a live implementation the environment selects: SMTP email (below) and Turnstile
+anti-bot (`PORCHFEST_TURNSTILE_SITE_KEY` plus `PORCHFEST_TURNSTILE_SECRET_KEY`). Geocoding is still
+null-only.
+
+### Email delivery (SMTP)
+
+Email is hybrid per deployment. Set none of the `PORCHFEST_SMTP_*` variables and the outbox stays
+in copy-paste/export mode. Set a host and a from address and the platform submits over SMTP itself
+— the client is built directly on Node's `net` and `tls`, so enabling delivery adds no dependency.
+
+| Variable                       | Default | Purpose                                                                                              |
+| ------------------------------ | ------- | ---------------------------------------------------------------------------------------------------- |
+| `PORCHFEST_SMTP_HOST`          | unset   | Submission host. Required to enable sending.                                                         |
+| `PORCHFEST_SMTP_FROM`          | unset   | Sender address, `organizers@example.org` or `Name <organizers@example.org>`. Required with the host. |
+| `PORCHFEST_SMTP_PORT`          | `587`   | Submission port.                                                                                     |
+| `PORCHFEST_SMTP_SECURE`        | `false` | `true` wraps the connection in TLS before the greeting, for implicit-TLS submission on port `465`.   |
+| `PORCHFEST_SMTP_STARTTLS`      | `true`  | Upgrade to TLS after `EHLO` when the server advertises `STARTTLS`.                                   |
+| `PORCHFEST_SMTP_USERNAME`      | unset   | SMTP AUTH user. Must be set together with a password.                                                |
+| `PORCHFEST_SMTP_PASSWORD`      | unset   | SMTP AUTH password. Must be set together with a username.                                            |
+| `PORCHFEST_SMTP_PASSWORD_FILE` | unset   | Path to a mounted file holding the password. Read once at boot; wins over `PORCHFEST_SMTP_PASSWORD`. |
+
+A half-configured provider refuses to start with an error naming the missing variable — a host with
+no from address, or a username with no password. That is deliberate, and matches the Turnstile
+posture: a deployment that believes it turned sending on must not quietly fall back to copy-paste
+mode, because a wave that never goes out looks exactly like a wave nobody pressed send on.
+
+The password is never logged and never written to the data volume. Prefer
+`PORCHFEST_SMTP_PASSWORD_FILE` with a `0600` mount or a Docker secret over putting the credential
+into the environment.
 
 ## Where data lives
 
@@ -99,7 +128,8 @@ npm run check:clean-room
 
 - `@porchfest/core` — Domain and storage ports shared across the application.
 - `@porchfest/web` — Node HTTP server, composition root, and route registry.
-- `@porchfest/email` — Email provider seam and zero-configuration null adapter.
+- `@porchfest/email` — Email provider seam, zero-configuration null adapter, and a dependency-free
+  SMTP adapter the deployment environment selects.
 - `@porchfest/geo` — Geocoding provider seam and zero-configuration null adapter.
 - `@porchfest/antibot` — Anti-bot provider seam and zero-configuration null adapter.
 - `@porchfest/map` — Interactive venue map with hour and genre filters, geographic sort, and
