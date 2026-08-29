@@ -31,7 +31,10 @@ enum is unchanged. Review fixes add optional RFC 3339 `time` values
 `slot_start` and `slot_end` to each act so consumers can determine interval
 overlap without interpreting deployment-specific labels. `schedule`, `slot`,
 and `slot_label` remain deployment-defined non-empty strings but now reject
-surrounding whitespace.
+surrounding whitespace. The platform publication gate also requires a valid
+empty-venues document, so the top-level `venues` array permits zero items while
+each published venue's `acts` array remains non-empty. This clarification
+changes the pinned digest without changing the v1.3.0 shape or version.
 
 1. Update the Goal-1 producer at `porchfest/tools/render.py` to emit
    `schema_version: "1.3.0"`. It may keep emitting its season, date, time, city,
@@ -60,3 +63,13 @@ record the owner decisions from ask stem
 `q3`. The unchanged provenance enum came from ask stem
 `porchfest-2026-08-24-0045-u9-geocoder-and-map-schema`, qid
 `q2-map-schema-generated-from`.
+
+## Browser asset catch-up
+
+The platform mount reads its JSON endpoint from the map script tag's
+`data-map-url` attribute, then from `window.PORCHFEST_MAP_DATA_URL`, with the
+site's existing `/data/venues-2026.json` literal retained as the fallback. When
+the platform and site copies next converge, copy this small configuration seam
+and the deployment-neutral empty-state wording with the rest of the asset.
+Copy the empty top-level `venues` clarification and its updated digest to the
+producer and site contract copies in the same coordinated catch-up.

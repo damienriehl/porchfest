@@ -9,6 +9,7 @@ import { registerAdminRetentionRoutes } from "./routes/admin-retention.js";
 import { registerSeasonLifecycleRoutes } from "./routes/season-lifecycle.js";
 import { registerAssignmentRoutes } from "./routes/assign.js";
 import { registerOutboxRoutes } from "./routes/outbox.js";
+import { registerMapRoutes } from "./routes/map.js";
 import {
   registerSignupRoutes,
   type SignupRouteOptions,
@@ -84,6 +85,8 @@ export function createApp(options: AppOptions): PorchfestApp {
     trustedProxyHops: options.trustedProxyHops,
     guardOptions: options.signupGuardOptions,
   });
+
+  registerMapRoutes({ core: options.core, routes });
 
   registerAdminRoutes({
     core: options.core,

@@ -3,7 +3,11 @@
 (function () {
   "use strict";
 
-  var DATA_URL = "/data/venues-2026.json";
+  var scriptElement = document.currentScript;
+  var DATA_URL =
+    (scriptElement && scriptElement.getAttribute("data-map-url")) ||
+    window.PORCHFEST_MAP_DATA_URL ||
+    "/data/venues-2026.json";
   var DATA_TIMEOUT_MS = 10000;
   var TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
   var ALL_FILTERS = {};
@@ -902,7 +906,7 @@
             status,
             mapElement,
             listSection,
-            "The 2026 lineup is not on the interactive map yet. Please check back soon.",
+            "No map is published yet. Please check back closer to the event.",
             "is-empty",
           );
           return;

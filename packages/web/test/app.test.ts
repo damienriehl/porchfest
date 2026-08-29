@@ -40,6 +40,18 @@ describe("application scaffold", () => {
       { method: "POST", path: "/signup/host", tier: "public" },
       { method: "GET", path: "/signup/performer", tier: "public" },
       { method: "POST", path: "/signup/performer", tier: "public" },
+      { method: "GET", path: "/map", tier: "public" },
+      { method: "GET", path: "/map/data.json", tier: "public" },
+      {
+        method: "GET",
+        path: "/map/assets/porchfest-map.js",
+        tier: "public",
+      },
+      {
+        method: "GET",
+        path: "/map/assets/porchfest-map.css",
+        tier: "public",
+      },
       { method: "GET", path: "/admin", tier: "organizer" },
       { method: "GET", path: "/admin/sign-in", tier: "public" },
       { method: "POST", path: "/admin/sign-in", tier: "public" },
