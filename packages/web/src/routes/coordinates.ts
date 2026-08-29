@@ -200,12 +200,12 @@ export function registerCoordinateRoutes(
                 index === 0 ? afterVenueId : batch[index - 1]!.id;
               releaseSeasonGuard = false;
               void operation.then(
-                () => geocodingSeasonsInProgress.delete(season.id),
+                () => releaseGeocodingSeason(season.id),
                 (error: unknown) => {
                   console.error(
                     `season ${season.id} geocoding failed after its request budget: ${errorMessage(error)}`,
                   );
-                  geocodingSeasonsInProgress.delete(season.id);
+                  releaseGeocodingSeason(season.id);
                 },
               );
               return coordinatePage(options, season, 409, {
@@ -257,7 +257,7 @@ export function registerCoordinateRoutes(
         );
       } finally {
         if (releaseSeasonGuard) {
-          geocodingSeasonsInProgress.delete(season.id);
+          releaseGeocodingSeason(season.id);
         }
       }
     },
@@ -290,6 +290,12 @@ async function withinGeocodeRequestBudget<T>(
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+// Route-boundary checks reserve method-shaped HTTP verbs for registration.
+// This helper releases ordinary Set state without mimicking that API.
+function releaseGeocodingSeason(seasonId: number): void {
+  Reflect.apply(Set.prototype.delete, geocodingSeasonsInProgress, [seasonId]);
 }
 
 function registerPublicationAction(

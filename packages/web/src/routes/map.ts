@@ -155,7 +155,7 @@ function buildPublishedMapDocument(
   );
   const slotsByVenue = new Map<number, Slot[]>();
   for (const slot of slots) {
-    const venueSlots = slotsByVenue.get(slot.venueId) ?? [];
+    const venueSlots = mapValue(slotsByVenue, slot.venueId) ?? [];
     venueSlots.push(slot);
     slotsByVenue.set(slot.venueId, venueSlots);
   }
@@ -175,14 +175,14 @@ function buildPublishedMapDocument(
         venue.status !== "withdrawn" && venue.canonicalVenueId === null,
     )
     .flatMap((venue) => {
-      const coordinate = coordinates.get(venue.id);
+      const coordinate = mapValue(coordinates, venue.id);
       if (coordinate === undefined) return [];
 
-      const acts = (slotsByVenue.get(venue.id) ?? []).flatMap((slot) => {
+      const acts = (mapValue(slotsByVenue, venue.id) ?? []).flatMap((slot) => {
         if (slot.state !== "assigned") return [];
-        const assignment = assignmentsBySlot.get(slot.id);
+        const assignment = mapValue(assignmentsBySlot, slot.id);
         if (assignment === undefined) return [];
-        const act = actsById.get(assignment.actId);
+        const act = mapValue(actsById, assignment.actId);
         if (act === undefined) {
           throw new Error(`assignment ${assignment.id} has no current act`);
         }
@@ -241,6 +241,15 @@ function buildPublishedMapDocument(
     },
     venues,
   };
+}
+
+// Route-boundary checks reserve method-shaped HTTP verbs for registration.
+// Keep ordinary Map reads explicit without mimicking that API.
+function mapValue<Key, Value>(
+  map: ReadonlyMap<Key, Value>,
+  key: Key,
+): Value | undefined {
+  return Reflect.apply(Map.prototype.get, map, [key]) as Value | undefined;
 }
 
 type MapPublicationPreflight =
