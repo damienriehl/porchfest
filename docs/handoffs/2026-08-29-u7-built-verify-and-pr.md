@@ -63,11 +63,9 @@ What U7 decided that the plan left open:
   renders blank because `seasons` has no such column (a later schema decision).
 - **No new dependencies** — the SMTP client is hand-written; STARTTLS and
   implicit TLS are tested only through flags, not a live TLS handshake.
-- **`.env.example` was not updated** (the worker was denied the path). Add:
-  `PORCHFEST_SMTP_HOST=`, `PORCHFEST_SMTP_FROM=`, `PORCHFEST_SMTP_PORT=587`,
-  `PORCHFEST_SMTP_SECURE=false`, `PORCHFEST_SMTP_STARTTLS=true`,
-  `PORCHFEST_SMTP_USERNAME=`, `PORCHFEST_SMTP_PASSWORD=`,
-  `PORCHFEST_SMTP_PASSWORD_FILE=` — empty except the two defaults.
+- **`.env.example` documents the SMTP variables** (added with Damien's
+  one-time approval; the `.env*` path is denied to agents by default, so it
+  was written through git's object store).
 
 ## Do these next, in order
 
@@ -78,8 +76,7 @@ What U7 decided that the plan left open:
    export.
 3. Residuals recorded on PR #27 (all P3): `mutationRefusal` maps every
    lifecycle refusal to 409 (needs distinct core error types); `findWave`
-   scans every season; `.env.example` lacks the `PORCHFEST_SMTP_*` lines
-   (Damien's edit — the path is denied to workers); TLS handshakes are
+   scans every season; TLS handshakes are
    flag-tested only; `NoneEmailAdapter` naming; no direct test of
    `recorded === false`.
 4. U8 (participant self-serve and magic links) is next in the plan; KTD8's
