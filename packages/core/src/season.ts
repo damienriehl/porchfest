@@ -885,79 +885,32 @@ export function createSeasonRepository(
 
   function setSeasonMapPublication(
     seasonId: number,
-    actor: number | null,
     expectedVersion: number,
-    published: boolean,
+    event: { readonly eventCity: string; readonly eventState: string } | null,
   ): Season {
-    void actor;
     return db.transaction(
       (tx) => {
         const season = getSeason(seasonId, tx);
         if (season.state !== "locked") {
           throw new SeasonActionError(
             season.state,
-            published ? "map_publish" : "map_unpublish",
+            event === null ? "map_unpublish" : "map_publish",
           );
         }
-        if (
-          published &&
-          (season.eventCity === "Unconfigured" ||
-            season.eventState === "Unconfigured")
-        ) {
-          throw new SeasonLifecycleError(
-            "Set the event city and state before publishing the public map.",
-          );
-        }
-        const result = tx
-          .update(seasons)
-          .set({
-            mapPublishedAt: published ? now() : null,
-            version: sql`${seasons.version} + 1`,
-            updatedAt: now(),
-          })
-          .where(
-            and(eq(seasons.id, seasonId), eq(seasons.version, expectedVersion)),
-          )
-          .run();
-        if (result.changes !== 1) {
-          conflict("season", seasonId, ["mapPublishedAt"]);
-        }
-        return getSeason(seasonId, tx);
-      },
-      { behavior: "immediate" },
-    );
-  }
-
-  function updateSeasonMapEvent(
-    seasonId: number,
-    input: { readonly city: string; readonly state: string },
-    actor: number | null,
-    expectedVersion: number,
-  ): Season {
-    void actor;
-    const eventCity = input.city.trim();
-    const eventState = input.state.trim();
-    if (
-      !eventCity ||
-      !eventState ||
-      eventCity === "Unconfigured" ||
-      eventState === "Unconfigured"
-    ) {
-      throw new SeasonLifecycleError(
-        "Enter the event city and state before publishing the public map.",
-      );
-    }
-    return db.transaction(
-      (tx) => {
-        const season = getSeason(seasonId, tx);
-        if (season.state !== "locked") {
-          throw new SeasonActionError(season.state, "map_event_update");
-        }
+        const eventCity =
+          event === null
+            ? season.eventCity
+            : requiredMapEventField("city", event.eventCity);
+        const eventState =
+          event === null
+            ? season.eventState
+            : requiredMapEventField("state", event.eventState);
         const result = tx
           .update(seasons)
           .set({
             eventCity,
             eventState,
+            mapPublishedAt: event === null ? null : now(),
             version: sql`${seasons.version} + 1`,
             updatedAt: now(),
           })
@@ -966,7 +919,11 @@ export function createSeasonRepository(
           )
           .run();
         if (result.changes !== 1) {
-          conflict("season", seasonId, ["eventCity", "eventState"]);
+          conflict("season", seasonId, [
+            "eventCity",
+            "eventState",
+            "mapPublishedAt",
+          ]);
         }
         return getSeason(seasonId, tx);
       },
@@ -974,20 +931,32 @@ export function createSeasonRepository(
     );
   }
 
+  function requiredMapEventField(
+    field: "city" | "state",
+    value: string,
+  ): string {
+    const normalized = value.trim();
+    if (!normalized || normalized === "Unconfigured") {
+      throw new SeasonLifecycleError(
+        `Enter the event ${field} before publishing the public map.`,
+      );
+    }
+    return normalized;
+  }
+
   function publishSeasonMap(
     seasonId: number,
-    actor: number | null,
     expectedVersion: number,
+    event: { readonly eventCity: string; readonly eventState: string },
   ): Season {
-    return setSeasonMapPublication(seasonId, actor, expectedVersion, true);
+    return setSeasonMapPublication(seasonId, expectedVersion, event);
   }
 
   function unpublishSeasonMap(
     seasonId: number,
-    actor: number | null,
     expectedVersion: number,
   ): Season {
-    return setSeasonMapPublication(seasonId, actor, expectedVersion, false);
+    return setSeasonMapPublication(seasonId, expectedVersion, null);
   }
 
   function ensureVenueSlots(venueId: number): Slot[] {
@@ -1849,7 +1818,6 @@ export function createSeasonRepository(
     supersedeVenue,
     supersedeContact,
     transitionSeason,
-    updateSeasonMapEvent,
     publishSeasonMap,
     unpublishSeasonMap,
     ensureVenueSlots,

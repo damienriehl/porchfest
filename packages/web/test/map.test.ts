@@ -150,7 +150,10 @@ function assignedPublishedFixture(
     runtime.core.seasons.getSeason(season.id).version,
     "locked",
   );
-  runtime.core.seasons.publishSeasonMap(locked.id, null, locked.version);
+  runtime.core.seasons.publishSeasonMap(locked.id, locked.version, {
+    eventCity: locked.eventCity,
+    eventState: locked.eventState,
+  });
   return { seasonId: season.id, signup, performer, slot };
 }
 
@@ -210,7 +213,10 @@ function assignedScheduleFixture(
     runtime.core.seasons.getSeason(season.id).version,
     "locked",
   );
-  runtime.core.seasons.publishSeasonMap(locked.id, null, locked.version);
+  runtime.core.seasons.publishSeasonMap(locked.id, locked.version, {
+    eventCity: locked.eventCity,
+    eventState: locked.eventState,
+  });
 }
 
 async function mapDocument(runtime: PorchfestRuntime) {
@@ -490,7 +496,10 @@ describe("public map page and data (U9)", () => {
       season.version,
       "locked",
     );
-    runtime.core.seasons.publishSeasonMap(locked.id, null, locked.version);
+    runtime.core.seasons.publishSeasonMap(locked.id, locked.version, {
+      eventCity: locked.eventCity,
+      eventState: locked.eventState,
+    });
 
     const { document, text } = await mapDocument(runtime);
 
@@ -558,7 +567,10 @@ describe("public map page and data (U9)", () => {
       season.version,
       "locked",
     );
-    runtime.core.seasons.publishSeasonMap(locked.id, null, locked.version);
+    runtime.core.seasons.publishSeasonMap(locked.id, locked.version, {
+      eventCity: locked.eventCity,
+      eventState: locked.eventState,
+    });
     const error = vi
       .spyOn(console, "error")
       .mockImplementation(() => undefined);

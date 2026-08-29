@@ -198,23 +198,12 @@ function registerPublicationAction(
         if (action === "publish") {
           const eventCity = fields.event_city?.trim() ?? "";
           const eventState = fields.event_state?.trim() ?? "";
-          const configured = options.core.seasons.updateSeasonMapEvent(
-            season.id,
-            { city: eventCity, state: eventState },
-            organizer.id,
-            version,
-          );
-          options.core.seasons.publishSeasonMap(
-            season.id,
-            organizer.id,
-            configured.version,
-          );
+          options.core.seasons.publishSeasonMap(season.id, version, {
+            eventCity,
+            eventState,
+          });
         } else {
-          options.core.seasons.unpublishSeasonMap(
-            season.id,
-            organizer.id,
-            version,
-          );
+          options.core.seasons.unpublishSeasonMap(season.id, version);
         }
       } catch (error) {
         if (

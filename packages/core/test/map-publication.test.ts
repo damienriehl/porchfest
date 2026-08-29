@@ -50,7 +50,10 @@ describe("season map publication", () => {
       const season = fixture.seasons.getSeason(fixture.seasonId);
 
       expect(() =>
-        fixture.seasons.publishSeasonMap(season.id, 7, season.version),
+        fixture.seasons.publishSeasonMap(season.id, season.version, {
+          eventCity: season.eventCity,
+          eventState: season.eventState,
+        }),
       ).toThrow(`season state ${state} refuses action map_publish`);
       expect(fixture.seasons.getSeason(season.id).mapPublishedAt).toBeNull();
     },
@@ -62,20 +65,19 @@ describe("season map publication", () => {
 
     const published = fixture.seasons.publishSeasonMap(
       locked.id,
-      7,
       locked.version,
+      { eventCity: locked.eventCity, eventState: locked.eventState },
     );
     expect(published.mapPublishedAt).toEqual(
       new Date("2034-08-29T20:00:00.000Z"),
     );
     expect(published.version).toBe(locked.version + 1);
     expect(() =>
-      fixture.seasons.unpublishSeasonMap(published.id, 7, locked.version),
+      fixture.seasons.unpublishSeasonMap(published.id, locked.version),
     ).toThrow(/someone else changed|conflict/i);
 
     const unpublished = fixture.seasons.unpublishSeasonMap(
       published.id,
-      7,
       published.version,
     );
     expect(unpublished.mapPublishedAt).toBeNull();
@@ -92,18 +94,21 @@ describe("season map publication", () => {
     const locked = fixture.seasons.getSeason(fixture.seasonId);
 
     expect(() =>
-      fixture.seasons.publishSeasonMap(locked.id, 7, locked.version),
-    ).toThrow(/city and state/i);
-    const configured = fixture.seasons.updateSeasonMapEvent(
-      locked.id,
-      { city: "Exampleton", state: "WI" },
-      7,
-      locked.version,
-    );
+      fixture.seasons.publishSeasonMap(locked.id, locked.version, {
+        eventCity: "Unconfigured",
+        eventState: "WI",
+      }),
+    ).toThrow(/event city/i);
+    expect(() =>
+      fixture.seasons.publishSeasonMap(locked.id, locked.version, {
+        eventCity: "Exampleton",
+        eventState: " ",
+      }),
+    ).toThrow(/event state/i);
     const published = fixture.seasons.publishSeasonMap(
-      configured.id,
-      7,
-      configured.version,
+      locked.id,
+      locked.version,
+      { eventCity: "Exampleton", eventState: "WI" },
     );
 
     expect(published.eventCity).toBe("Exampleton");
@@ -116,8 +121,8 @@ describe("season map publication", () => {
     const locked = fixture.seasons.getSeason(fixture.seasonId);
     const published = fixture.seasons.publishSeasonMap(
       locked.id,
-      null,
       locked.version,
+      { eventCity: locked.eventCity, eventState: locked.eventState },
     );
 
     const archived = fixture.seasons.transitionSeason(
@@ -128,5 +133,26 @@ describe("season map publication", () => {
 
     expect(archived.state).toBe("archived");
     expect(archived.mapPublishedAt).toBeNull();
+  });
+
+  it("updates event metadata and publication atomically on a version conflict", async () => {
+    const fixture = await seasonIn("locked");
+    const locked = fixture.seasons.getSeason(fixture.seasonId);
+    fixture.database.sqlite
+      .prepare("update seasons set version = version + 1 where id = ?")
+      .run(locked.id);
+
+    expect(() =>
+      fixture.seasons.publishSeasonMap(locked.id, locked.version, {
+        eventCity: "Changed City",
+        eventState: "MN",
+      }),
+    ).toThrow(/someone else changed|conflict/i);
+
+    expect(fixture.seasons.getSeason(locked.id)).toMatchObject({
+      eventCity: "Exampleton",
+      eventState: "WI",
+      mapPublishedAt: null,
+    });
   });
 });
