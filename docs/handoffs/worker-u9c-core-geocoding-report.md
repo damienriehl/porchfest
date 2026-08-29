@@ -202,3 +202,125 @@ it does not fail the suite and is outside this unit.
 - `ce9a680` — `fix(core): harden coordinate provenance transitions`
 - This handoff is committed separately so the documentation commit remains focused.
 - No commit was pushed or merged.
+
+## Review fixes (2026-08-29, PR #34)
+
+This section supersedes the earlier review-fix and residual-risk notes where they
+describe the original PR head. All eleven verified findings were addressed on top of
+`2621aab`; no route, `packages/map` file, dependency, or lockfile changed.
+
+1. **Every non-verified coordinate is visible in review.**
+   `listVenuesNeedingCoordinateReview` now selects every status other than `verified`
+   and returns the row status and rejection code with the coordinate data. Regression
+   coverage includes a migration-backfilled `pending` row, a geocoder `not-found`
+   `pending` row, and a `refused` `rejected` row.
+2. **Legacy coordinates retain organizer ownership.** Migration 0014 now backfills
+   complete legacy pairs as `organizer-verified / legacy / pending`; partial pairs are
+   organizer-owned `needs-review / invalid-coordinate` rows with a null point pair.
+   Migration 0014 is not merged or shipped, so its semantics were edited in place as
+   requested. The schema shape did not change, so its snapshot and journal entries
+   remain consistent. The 0013-to-0014 schema test asserts source, provider, status,
+   rejection code, and point-pair behavior.
+3. **Missing locality has no implicit city.** An absent request locality and absent
+   constructor fallback now use no locality grammar: no suffix is appended and no
+   address tail is stripped. `DEFAULT_LOCALITY_SUFFIX` remains available only to callers
+   that explicitly pass it as the constructor fallback. A bounds-only season test pins
+   the behavior.
+4. **Address caching includes the effective locality grammar.** Both the persistent
+   address-cache key and adapter in-flight key include the effective locality policy.
+   Grammar presence is encoded separately (`absent` versus `present:<suffix>`) so a
+   literal locality named `none` cannot collide with no-locality lookups. Tests cover
+   distinct locality aliases and the absent-versus-literal sentinel case.
+5. **Configuration faults surface to callers.** Adapter `TypeError` and `RangeError`
+   exceptions are rethrown instead of becoming provider outages. Other unexpected
+   adapter errors retain their message when mapped to `unavailable`; explicit adapter
+   `unavailable` outcomes continue through the normal outcome path. A locality of `—`
+   now raises a field-naming `TypeError`.
+6. **Cosmetic address edits keep verified pins.** One shared
+   `normalizeVenueAddress` helper trims and collapses whitespace for stored
+   `addressAtGeocode`, geocode comparisons, and record invalidation. The test for
+   `"101 Nebula Ave"` to `"101 Nebula Ave "` keeps the verified coordinate published.
+   Repeated invalidation is also idempotent and does not advance the coordinate version.
+7. **The rejection-code vocabulary is unambiguous.** The pure gate now exports
+   `CoordinateGateRejectionCode`; the sole root `CoordinateRejectionCode` is the
+   persisted ten-code row union. `packages/geo/src/verify.ts` is one re-export surface,
+   and `packages/geo/src/index.ts` re-exports that surface instead of duplicating its
+   list. The unused `resolveCoordinatePrecedence` production API and its dead types and
+   tests were removed.
+8. **The 30 m cross-check threshold covers both accepted precisions.** House and parcel
+   candidates whose cross-check distance exceeds `MAX_CROSS_CHECK_DISTANCE_M` enter
+   `needs-review / cross-check-distance`. A synthetic house result with a cross-check
+   approximately 3 km away covers the house branch.
+9. **Promotion rechecks the final address.** Placeholder promotion uses the resulting
+   promoted address to invalidate copied or retained coordinate state through the same
+   shared helper as `updateVenue`. Organizer verification now refuses an empty venue
+   address with a `RangeError` that identifies the venue. Both behaviors have regression
+   tests.
+10. **Overpass snapshots are bounded and expire.** Completed snapshots use a four-entry
+    LRU with a six-hour TTL. In-flight fetches live in a separate coalescing map so
+    capacity eviction cannot duplicate pending work. Tests cover fifth-box eviction,
+    read-time LRU promotion, TTL refetch, and concurrent in-flight reuse.
+11. **Coordinate persistence has one implementation.** `upsertCoordinate` and
+    `invalidateCoordinateForAddressChange` are exported from `geocoding.ts` for internal
+    core reuse. `updateVenue` and `promotePlaceholderVenue` both use them, removing the
+    duplicate SQL and invalidation behavior from `records.ts` without introducing an
+    import cycle.
+
+### Review and verification
+
+The follow-up local review covered correctness, tests, maintainability, data migration,
+reliability, deployment, adversarial sequences, and repository learnings. It found and
+fixed one valid cache-sentinel collision and added an LRU-promotion test that
+distinguishes LRU from FIFO behavior. The optional external cross-model route was not
+run because approval to disclose repository context externally was not granted; the
+local adversarial reviewer was used instead.
+
+All required commands used Node v24.13.0 and exited 0:
+
+```text
+npm run typecheck: exit 0
+npm run lint: exit 0 (0 errors; 2 pre-existing packages/core/src/access.ts warnings)
+npm run format:check: exit 0
+npm test: exit 0
+npm run check:boundaries: exit 0
+
+Test Files  41 passed (41)
+Tests       708 passed (708)
+Duration    23.77s
+
+OK: core boundary self-test refuses adapter imports
+OK: route boundary self-test refuses direct registration
+OK: core imports no adapter package
+OK: web routes are registered only through the central registry
+OK: clean-room self-test refuses participant-data artifacts and content
+OK: clean-room scan found no participant-data artifacts in working tree (including ignored paths) and Git history
+```
+
+The final explicit `npm run check:boundaries` repeated the two live boundary checks and
+exited 0. The first sandboxed suite attempt could not bind the existing SMTP test
+listener and therefore was not accepted as verification; the required full suite was
+rerun with local-loopback permission and passed. The existing two lint warnings and TLS
+ServerName/IP deprecation warning remain outside this unit.
+
+### Not performed and release gate
+
+Migration 0014 was not deployed as part of this branch-only task. Because it drops the
+legacy source columns, release must quiesce writes, retain a pre-migration SQLite backup,
+record the count of venues with any legacy coordinate and the complete-versus-partial
+split, then reconcile those counts against `venue_coordinates` immediately after the
+migration. The post-migration check must also require zero split point pairs and confirm
+that complete rows are `organizer-verified / legacy / pending` while partial rows are
+`organizer-verified / legacy / needs-review / invalid-coordinate`. Retain the backup
+until those counts and mappings reconcile; restore it for rollback rather than relying
+on a code-only rollback.
+
+### Review-fix commits
+
+- `ff5ea82` — `fix(geo): isolate locality caches and bound snapshots`
+- `b5c6874` — `refactor(geo): unify coordinate rejection exports`
+- `2a09139` — `fix(core): preserve legacy coordinate ownership`
+- `924d3e3` — `fix(core): keep coordinate review state visible`
+- `1f790bf` — `refactor(geo): harden coordinate cache transitions`
+- `4f2d739` — `fix(review): disambiguate locality cache namespaces`
+- This appended report is committed separately to keep the handoff durable and focused.
+- No commit was pushed, rebased, amended, or merged.
