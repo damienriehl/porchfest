@@ -20,6 +20,7 @@ const temporaryRoots: string[] = [];
 const runtimes: PorchfestRuntime[] = [];
 
 afterEach(async () => {
+  vi.useRealTimers();
   for (const runtime of runtimes.splice(0)) runtime.close();
   await Promise.all(
     temporaryRoots
@@ -488,6 +489,60 @@ describe("organizer coordinate review and map publication (U9)", () => {
     );
   });
 
+  it("continues after the last completed venue when a later locality is invalid", async () => {
+    const outcomes: Record<string, LocateOutcome | Error> = {
+      "50 First Way": {
+        kind: "unavailable",
+        reason: "Synthetic transient outage.",
+      },
+      "51 Invalid Way": new TypeError(
+        "localityName must contain a word or number.",
+      ),
+      "52 Last Way": located(10.2, 20.2),
+    };
+    const geo = new FakeGeoPort(outcomes);
+    const { runtime, cookie, season } = await boot(geo);
+    const firstVenue = createVenue(
+      runtime,
+      season.id,
+      "First Porch",
+      "50 First Way",
+    );
+    createVenue(runtime, season.id, "Invalid Porch", "51 Invalid Way");
+    createVenue(runtime, season.id, "Last Porch", "52 Last Way");
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const action = `/seasons/${season.id}/coordinates/geocode`;
+    const html = await (await page(runtime, cookie, season.id)).text();
+
+    const first = await runtime.request(`${PUBLIC_BASE_URL}${action}`, {
+      method: "POST",
+      headers: formHeaders(cookie),
+      body: new URLSearchParams({ _csrf: tokenFrom(html, action) }),
+    });
+    const firstHtml = await first.text();
+
+    expect(first.status).toBe(409);
+    expect(firstHtml).toContain(`name="after" value="${firstVenue.id}"`);
+    outcomes["51 Invalid Way"] = located(10.3, 20.3);
+
+    const second = await runtime.request(`${PUBLIC_BASE_URL}${action}`, {
+      method: "POST",
+      headers: formHeaders(cookie),
+      body: new URLSearchParams({
+        _csrf: tokenFrom(firstHtml, action),
+        after: String(firstVenue.id),
+      }),
+    });
+
+    expect(second.status).toBe(200);
+    expect(geo.requests.map((request) => request.address)).toEqual([
+      "50 First Way",
+      "51 Invalid Way",
+      "51 Invalid Way",
+      "52 Last Way",
+    ]);
+  });
+
   it("caps one season geocoding submission at 20 venues and reports the remainder", async () => {
     const outcomes: Record<string, LocateOutcome> = {};
     for (let index = 1; index <= 25; index += 1) {
@@ -508,7 +563,7 @@ describe("organizer coordinate review and map publication (U9)", () => {
       );
     }
     const action = `/seasons/${season.id}/coordinates/geocode`;
-    let html = await (await page(runtime, cookie, season.id)).text();
+    const html = await (await page(runtime, cookie, season.id)).text();
 
     const first = await runtime.request(`${PUBLIC_BASE_URL}${action}`, {
       method: "POST",
@@ -564,6 +619,36 @@ describe("organizer coordinate review and map publication (U9)", () => {
     expect(await second.text()).toContain("Geocoding is already running");
     geo.release();
     expect((await first).status).toBe(200);
+  });
+
+  it("returns within the request budget while keeping the season guard", async () => {
+    const geo = new BlockingGeoPort();
+    const { runtime, cookie, season } = await boot(geo);
+    createVenue(runtime, season.id, "Slow Porch", "53 Slow Way");
+    const action = `/seasons/${season.id}/coordinates/geocode`;
+    const html = await (await page(runtime, cookie, season.id)).text();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const first = runtime.request(`${PUBLIC_BASE_URL}${action}`, {
+      method: "POST",
+      headers: formHeaders(cookie),
+      body: new URLSearchParams({ _csrf: tokenFrom(html, action) }),
+    });
+    await geo.started;
+    await vi.advanceTimersByTimeAsync(45_000);
+
+    const response = await first;
+    expect(response.status).toBe(409);
+    expect(await response.text()).toContain(
+      "provider is still finishing the current venue",
+    );
+    const second = await runtime.request(`${PUBLIC_BASE_URL}${action}`, {
+      method: "POST",
+      headers: formHeaders(cookie),
+      body: new URLSearchParams({ _csrf: tokenFrom(html, action) }),
+    });
+    expect(second.status).toBe(409);
+    expect(await second.text()).toContain("Geocoding is already running");
+    geo.release();
   });
 
   it("requires an address before a review pin can be verified", async () => {

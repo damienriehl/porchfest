@@ -35,6 +35,13 @@ export const UNPUBLISH_MAP_PATH = "/seasons/:id/map/unpublish";
 // 20 × (the 1 s Nominatim interval + provider latency) stays comfortably
 // below common proxy timeouts while keeping organizer retries manageable.
 const GEOCODE_SEASON_BATCH_SIZE = 20;
+// Leave headroom below common request-proxy limits. If one provider call runs
+// longer, its work keeps the season guard until it settles, but the organizer
+// still receives a continuation response within this request budget.
+const GEOCODE_SEASON_REQUEST_BUDGET_MS = 45_000;
+const GEOCODE_REQUEST_BUDGET_EXCEEDED = Symbol(
+  "geocode-request-budget-exceeded",
+);
 const geocodingSeasonsInProgress = new Set<number>();
 
 interface CoordinateRouteOptions {
@@ -147,6 +154,7 @@ export function registerCoordinateRoutes(
         nextAfterVenueId: null,
       };
       geocodingSeasonsInProgress.add(season.id);
+      let releaseSeasonGuard = true;
       try {
         const fields = await readFields(context);
         const afterVenueId = positiveInteger(fields.after);
@@ -172,15 +180,41 @@ export function registerCoordinateRoutes(
           startIndex,
           startIndex + GEOCODE_SEASON_BATCH_SIZE,
         );
+        const requestDeadline = Date.now() + GEOCODE_SEASON_REQUEST_BUDGET_MS;
         // Deliberately sequential. Nominatim permits one request per second per
         // IP, and the shared adapter enforces that delay between these awaits.
         for (const [index, venue] of batch.entries()) {
           let result: GeocodeVenueResult;
           try {
-            result = await options.core.geocoding.geocodeVenue(
+            const operation = options.core.geocoding.geocodeVenue(
               venue.id,
               organizer.id,
             );
+            const budgeted = await withinGeocodeRequestBudget(
+              operation,
+              requestDeadline - Date.now(),
+            );
+            if (budgeted === GEOCODE_REQUEST_BUDGET_EXCEEDED) {
+              counts.remaining = eligible.length - (startIndex + index);
+              counts.nextAfterVenueId =
+                index === 0 ? afterVenueId : batch[index - 1]!.id;
+              releaseSeasonGuard = false;
+              void operation.then(
+                () => geocodingSeasonsInProgress.delete(season.id),
+                (error: unknown) => {
+                  console.error(
+                    `season ${season.id} geocoding failed after its request budget: ${errorMessage(error)}`,
+                  );
+                  geocodingSeasonsInProgress.delete(season.id);
+                },
+              );
+              return coordinatePage(options, season, 409, {
+                error:
+                  "The geocoding provider is still finishing the current venue. Wait for it to finish, then run again to continue.",
+                counts,
+              });
+            }
+            result = budgeted;
           } catch (error) {
             if (error instanceof TypeError || error instanceof RangeError) {
               const reason = error.message.trim() || error.name;
@@ -222,13 +256,40 @@ export function registerCoordinateRoutes(
           { counts },
         );
       } finally {
-        geocodingSeasonsInProgress.delete(season.id);
+        if (releaseSeasonGuard) {
+          geocodingSeasonsInProgress.delete(season.id);
+        }
       }
     },
   });
 
   registerPublicationAction(options, PUBLISH_MAP_PATH, "publish");
   registerPublicationAction(options, UNPUBLISH_MAP_PATH, "unpublish");
+}
+
+async function withinGeocodeRequestBudget<T>(
+  operation: Promise<T>,
+  remainingMs: number,
+): Promise<T | typeof GEOCODE_REQUEST_BUDGET_EXCEEDED> {
+  if (remainingMs <= 0) return GEOCODE_REQUEST_BUDGET_EXCEEDED;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<typeof GEOCODE_REQUEST_BUDGET_EXCEEDED>((resolve) => {
+        timeout = setTimeout(
+          () => resolve(GEOCODE_REQUEST_BUDGET_EXCEEDED),
+          remainingMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function registerPublicationAction(
