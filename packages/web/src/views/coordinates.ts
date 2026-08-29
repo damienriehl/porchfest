@@ -4,6 +4,7 @@ import {
   type Season,
   type VenueCoordinateReview,
 } from "@porchfest/core";
+import { currentYearIn } from "../timezone.js";
 import { escapeHtml, renderOrganizerPage } from "./signup-view.js";
 
 export const COORDINATE_REJECTION_MEANINGS = {
@@ -120,6 +121,13 @@ function renderPublicationSection(options: {
   const { season } = options;
   const published = season.mapPublishedAt;
   const status = published ? published.toISOString() : "Not published";
+  const futurePublication =
+    published !== null && season.year > currentYearIn(season.timezone)
+      ? ` Published; the public map will serve it from 1 January ${season.year} (${season.timezone}).`
+      : "";
+  const eventCity = season.eventCity === "Unconfigured" ? "" : season.eventCity;
+  const eventState =
+    season.eventState === "Unconfigured" ? "" : season.eventState;
   const controls =
     season.state !== "locked"
       ? '<p class="help">Publication controls appear only while the season is locked.</p>'
@@ -130,14 +138,14 @@ function renderPublicationSection(options: {
           ${
             published
               ? ""
-              : `<label>Event city <input name="event_city" required value="${escapeHtml(season.eventCity)}"></label>
-          <label>Event state or region <input name="event_state" required value="${escapeHtml(season.eventState)}"></label>`
+              : `<label>Event city <input name="event_city" required value="${escapeHtml(eventCity)}"></label>
+          <label>Event state or region <input name="event_state" required value="${escapeHtml(eventState)}"></label>`
           }
           <button class="${published ? "secondary-action" : "primary-action"}" type="submit">${published ? "Unpublish map" : "Publish map"}</button>
         </form>`;
   return `<section aria-labelledby="map-publication">
       <h2 id="map-publication">Public map</h2>
-      <dl class="submission-list"><div class="submission-row"><dt>Published at</dt><dd>${escapeHtml(status)}</dd></div></dl>
+      <dl class="submission-list"><div class="submission-row"><dt>Published at</dt><dd>${escapeHtml(status)}${escapeHtml(futurePublication)}</dd></div></dl>
       ${controls}
     </section>`;
 }

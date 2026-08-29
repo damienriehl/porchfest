@@ -648,6 +648,9 @@ describe("organizer coordinate review and map publication (U9)", () => {
     const unpublishAction = `/seasons/${season.id}/map/unpublish`;
     expect(html).toContain("Unpublish map");
     expect(html).toMatch(/Published at<\/dt><dd>\d{4}-\d{2}-\d{2}T/);
+    expect(html).toContain(
+      "Published; the public map will serve it from 1 January 2037 (UTC)",
+    );
     response = await runtime.request(`${PUBLIC_BASE_URL}${unpublishAction}`, {
       method: "POST",
       headers: formHeaders(cookie),
@@ -658,6 +661,43 @@ describe("organizer coordinate review and map publication (U9)", () => {
     });
     expect(response.status).toBe(303);
     expect(runtime.core.seasons.getSeason(season.id).mapPublishedAt).toBeNull();
+  });
+
+  it("renders migrated publication sentinels as empty fields and names the missing field", async () => {
+    const { runtime, cookie, season, dataDirectory } = await boot();
+    makePublishable(runtime, season.id);
+    const locked = runtime.core.seasons.transitionSeason(
+      season.id,
+      season.version,
+      "locked",
+    );
+    const sqlite = new Database(join(dataDirectory, CORE_DATABASE_FILENAME));
+    sqlite
+      .prepare(
+        "update seasons set event_city = 'Unconfigured', event_state = 'Unconfigured' where id = ?",
+      )
+      .run(season.id);
+    sqlite.close();
+    const action = `/seasons/${season.id}/map/publish`;
+    const html = await (await page(runtime, cookie, season.id)).text();
+
+    expect(html).toContain('name="event_city" required value=""');
+    expect(html).toContain('name="event_state" required value=""');
+    expect(html).not.toContain('value="Unconfigured"');
+
+    const response = await runtime.request(`${PUBLIC_BASE_URL}${action}`, {
+      method: "POST",
+      headers: formHeaders(cookie),
+      body: new URLSearchParams({
+        _csrf: tokenFrom(html, action),
+        version: String(locked.version),
+        event_city: "Exampleton",
+        event_state: "",
+      }),
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.text()).toContain("Event state");
   });
 
   it("refuses publication when no venue has both an assigned act and verified coordinate", async () => {

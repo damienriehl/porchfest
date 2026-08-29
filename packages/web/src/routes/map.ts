@@ -18,6 +18,7 @@ import {
 import type { Context } from "hono";
 import { readFileSync } from "node:fs";
 import type { RouteRegistry } from "../router/registry.js";
+import { currentYearIn } from "../timezone.js";
 import { normalizedHttpUrl, tokenizeLinks } from "./http-links.js";
 
 export const MAP_PAGE_PATH = "/map";
@@ -303,21 +304,11 @@ function publicationValidationError(
   if (venue !== undefined) {
     return `Venue "${venueTitle}": schema ${error.path} ${error.message}.`;
   }
-  if (error.path === "/event/date") {
-    return `Event date: schema ${error.path} ${error.message}.`;
+  const eventField = /^\/event\/(date|city|state)$/.exec(error.path)?.[1];
+  if (eventField !== undefined) {
+    return `Event ${eventField}: schema ${error.path} ${error.message}.`;
   }
   return `Map document: schema ${error.path} ${error.message}.`;
-}
-
-function currentYearIn(timezone: string): number {
-  const year = new Intl.DateTimeFormat("en", {
-    timeZone: timezone,
-    year: "numeric",
-  })
-    .formatToParts(new Date())
-    .find((part) => part.type === "year")?.value;
-  const parsed = Number(year);
-  return Number.isSafeInteger(parsed) ? parsed : new Date().getUTCFullYear();
 }
 
 function publishedAct(
