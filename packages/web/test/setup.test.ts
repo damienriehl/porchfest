@@ -239,6 +239,38 @@ describe("setup refuses what it cannot honour", () => {
     expect(await response.text()).toContain("valid IANA timezone");
   });
 
+  it.each([
+    ["event_city", "event city"],
+    ["event_state", "event state"],
+  ])("refuses blank required map metadata in %s", async (field, message) => {
+    const { runtime, cookie } = await bootAndSignIn();
+    const csrf = await setupCsrf(runtime, cookie);
+
+    const response = await submitSetup(
+      runtime,
+      cookie,
+      completeSetup(csrf, { [field]: "   " }),
+    );
+
+    expect(response.status).toBe(422);
+    expect(await response.text()).toContain(message);
+    expect(runtime.core.setup.seasonCount()).toBe(0);
+  });
+
+  it("refuses locality text without a word or number", async () => {
+    const { runtime, cookie } = await bootAndSignIn();
+    const csrf = await setupCsrf(runtime, cookie);
+
+    const response = await submitSetup(
+      runtime,
+      cookie,
+      completeSetup(csrf, { locality_name: "---" }),
+    );
+
+    expect(response.status).toBe(422);
+    expect(await response.text()).toContain("word or number");
+  });
+
   it("refuses a bounding box that is inside out", async () => {
     const { runtime, cookie } = await bootAndSignIn();
     const csrf = await setupCsrf(runtime, cookie);

@@ -1,5 +1,4 @@
 import {
-  coordinateRejectionCodes,
   type CoordinateRejectionCode,
   type Season,
   type VenueCoordinateReview,
@@ -23,18 +22,6 @@ export const COORDINATE_REJECTION_MEANINGS = {
   refused: "The provider refused this lookup.",
 } satisfies Record<CoordinateRejectionCode, string>;
 
-if (
-  coordinateRejectionCodes.some(
-    (code) => COORDINATE_REJECTION_MEANINGS[code] === undefined,
-  )
-) {
-  throw new Error("Every coordinate rejection code needs organizer wording.");
-}
-
-export interface CoordinateReviewRow extends VenueCoordinateReview {
-  readonly venueVersion: number;
-}
-
 export interface GeocodeSeasonCounts {
   stored: number;
   cached: number;
@@ -45,7 +32,7 @@ export interface GeocodeSeasonCounts {
 
 export function renderCoordinatesPage(options: {
   readonly season: Season;
-  readonly rows: readonly CoordinateReviewRow[];
+  readonly rows: readonly VenueCoordinateReview[];
   readonly geoConfigured: boolean;
   readonly csrf: {
     readonly verify: string;
@@ -132,6 +119,12 @@ function renderPublicationSection(options: {
         <form class="signup-form" method="post" action="/seasons/${season.id}/map/${published ? "unpublish" : "publish"}">
           <input type="hidden" name="_csrf" value="${escapeHtml(published ? options.csrf.unpublish : options.csrf.publish)}">
           <input type="hidden" name="version" value="${season.version}">
+          ${
+            published
+              ? ""
+              : `<label>Event city <input name="event_city" required value="${escapeHtml(season.eventCity)}"></label>
+          <label>Event state or region <input name="event_state" required value="${escapeHtml(season.eventState)}"></label>`
+          }
           <button class="${published ? "secondary-action" : "primary-action"}" type="submit">${published ? "Unpublish map" : "Publish map"}</button>
         </form>`;
   return `<section aria-labelledby="map-publication">
@@ -143,7 +136,7 @@ function renderPublicationSection(options: {
 
 function renderRows(options: {
   readonly season: Season;
-  readonly rows: readonly CoordinateReviewRow[];
+  readonly rows: readonly VenueCoordinateReview[];
   readonly csrf: { readonly verify: string };
 }): string {
   if (options.rows.length === 0) {
@@ -160,7 +153,7 @@ function renderRow(
     readonly season: Season;
     readonly csrf: { readonly verify: string };
   },
-  row: CoordinateReviewRow,
+  row: VenueCoordinateReview,
 ): string {
   const reason = row.rejectionCode
     ? COORDINATE_REJECTION_MEANINGS[row.rejectionCode]
@@ -169,19 +162,22 @@ function renderRow(
   const longitude = row.coordinate.longitude?.toString() ?? "";
   const candidate =
     latitude && longitude ? `${latitude}, ${longitude}` : "No candidate point";
+  const verification = row.address?.trim()
+    ? `<form method="post" action="/seasons/${options.season.id}/coordinates/${row.venueId}/verify">
+            <input type="hidden" name="_csrf" value="${escapeHtml(options.csrf.verify)}">
+            <input type="hidden" name="version" value="${row.venueVersion}">
+            <label>Latitude <input name="latitude" inputmode="decimal" required value="${escapeHtml(latitude)}"></label>
+            <label>Longitude <input name="longitude" inputmode="decimal" required value="${escapeHtml(longitude)}"></label>
+            <button class="secondary-action" type="submit">Verify pin</button>
+          </form>`
+    : '<p class="help">Add an address before verifying this pin.</p>';
   return `<tr>
           <td>${escapeHtml(row.title)}</td>
           <td>${escapeHtml(row.address ?? "No address")}</td>
           <td>${escapeHtml(row.status)}</td>
           <td>${escapeHtml(reason)}</td>
           <td>${escapeHtml(candidate)}</td>
-          <td><form method="post" action="/seasons/${options.season.id}/coordinates/${row.venueId}/verify">
-            <input type="hidden" name="_csrf" value="${escapeHtml(options.csrf.verify)}">
-            <input type="hidden" name="version" value="${row.venueVersion}">
-            <label>Latitude <input name="latitude" inputmode="decimal" required value="${escapeHtml(latitude)}"></label>
-            <label>Longitude <input name="longitude" inputmode="decimal" required value="${escapeHtml(longitude)}"></label>
-            <button class="secondary-action" type="submit">Verify pin</button>
-          </form></td>
+          <td>${verification}</td>
         </tr>`;
 }
 

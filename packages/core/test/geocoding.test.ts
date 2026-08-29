@@ -341,19 +341,9 @@ describe("core venue geocoding (U9 / KTD11)", () => {
     expect(stored(venue.id)).toBeUndefined();
   });
 
-  it("surfaces an invalid locality as a caller configuration fault", async () => {
-    const { venue } = fixture(2037, BOX, "—");
-    fake.locate.mockImplementation(async (request) => {
-      if (request.localityName === "—") {
-        throw new TypeError("localityName must contain a word or number.");
-      }
-      return located();
-    });
-
-    await expect(geocoding().geocodeVenue(venue.id, actor)).rejects.toThrow(
-      /localityName/,
-    );
-    expect(stored(venue.id)).toBeUndefined();
+  it("refuses an invalid locality during season setup", () => {
+    expect(() => fixture(2037, BOX, "—")).toThrow(/locality|word or number/i);
+    expect(fake.locate).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -607,6 +597,6 @@ describe("core venue geocoding (U9 / KTD11)", () => {
         actor,
         emptyAddressVenue.version,
       ),
-    ).toThrow(new RangeError(`Venue ${venue.id} has no address to verify.`));
+    ).toThrow(/Add an address before verifying its pin/);
   });
 });

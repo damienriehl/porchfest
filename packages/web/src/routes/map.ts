@@ -88,11 +88,20 @@ export function registerMapRoutes(options: {
 
 function mapData(core: CoreRuntime): Response {
   try {
-    const season = core.setup.listSeasons()[0];
-    const document =
-      season?.state === "locked" && season.mapPublishedAt !== null
-        ? publishedMapDocument(core, season)
-        : EMPTY_MAP_DOCUMENT;
+    // Publication remains authoritative until an organizer unpublishes or
+    // archives that season. A newer draft must not hide the live map. R16 also
+    // keeps a future season private until its calendar year begins.
+    const season = core.setup
+      .listSeasons()
+      .find(
+        (candidate) =>
+          candidate.state === "locked" &&
+          candidate.mapPublishedAt !== null &&
+          candidate.year <= currentYearIn(candidate.timezone),
+      );
+    const document = season
+      ? publishedMapDocument(core, season)
+      : EMPTY_MAP_DOCUMENT;
 
     // Five minutes limits the address-withdrawal window without turning every
     // attendee refresh into a database hit; explicit unpublication is visible
@@ -128,12 +137,31 @@ function publishedMapDocument(
 ): VenuesMapDocument {
   const templates = core.setup.listTimeSlots(season.id);
   const slots = core.seasons.listSeasonSlots(season.id);
-  const slotsById = new Map(slots.map((slot) => [slot.id, slot]));
-  const assignmentsBySlot = new Map(
-    core.seasons
-      .listAssignments(season.id)
-      .map((assignment) => [assignment.slotId, assignment] as const),
-  );
+  const slotIds = new Set(slots.map((slot) => slot.id));
+  const assignments = core.seasons.listAssignments(season.id);
+  const seasonActs = core.seasons.listSeasonActs(season.id);
+  const actsById: Record<number, (typeof seasonActs)[number] | undefined> =
+    Object.create(null) as Record<
+      number,
+      (typeof seasonActs)[number] | undefined
+    >;
+  for (const act of seasonActs) actsById[act.id] = act;
+  const assignmentsBySlot: Record<
+    number,
+    (typeof assignments)[number] | undefined
+  > = Object.create(null) as Record<
+    number,
+    (typeof assignments)[number] | undefined
+  >;
+  for (const assignment of assignments) {
+    assignmentsBySlot[assignment.slotId] = assignment;
+  }
+  const slotsByVenue: Record<number, Slot[] | undefined> = Object.create(
+    null,
+  ) as Record<number, Slot[] | undefined>;
+  for (const slot of slots) {
+    (slotsByVenue[slot.venueId] ??= []).push(slot);
+  }
 
   const venues = core.seasons
     .listSeasonVenues(season.id)
@@ -145,11 +173,14 @@ function publishedMapDocument(
       const coordinate = core.geocoding.publishableCoordinate(venue.id);
       if (coordinate === null) return [];
 
-      const acts = core.seasons.listVenueSlots(venue.id).flatMap((slot) => {
+      const acts = (slotsByVenue[venue.id] ?? []).flatMap((slot) => {
         if (slot.state !== "assigned") return [];
-        const assignment = assignmentsBySlot.get(slot.id);
+        const assignment = assignmentsBySlot[slot.id];
         if (assignment === undefined) return [];
-        const act = core.seasons.getAct(assignment.actId);
+        const act = actsById[assignment.actId];
+        if (act === undefined) {
+          throw new Error(`assignment ${assignment.id} has no current act`);
+        }
         if (act.status === "withdrawn" || act.canonicalActId !== null) {
           return [];
         }
@@ -172,8 +203,8 @@ function publishedMapDocument(
       ];
     });
 
-  for (const assignment of assignmentsBySlot.values()) {
-    if (!slotsById.has(assignment.slotId)) {
+  for (const assignment of assignments) {
+    if (!slotIds.has(assignment.slotId)) {
       throw new Error(
         `assignment ${assignment.id} does not belong to a current season slot`,
       );
@@ -201,6 +232,17 @@ function publishedMapDocument(
     },
     venues,
   };
+}
+
+function currentYearIn(timezone: string): number {
+  const year = new Intl.DateTimeFormat("en", {
+    timeZone: timezone,
+    year: "numeric",
+  })
+    .formatToParts(new Date())
+    .find((part) => part.type === "year")?.value;
+  const parsed = Number(year);
+  return Number.isSafeInteger(parsed) ? parsed : new Date().getUTCFullYear();
 }
 
 function publishedAct(
@@ -299,7 +341,7 @@ function mapPage(): Response {
   return new Response(html, {
     status: 200,
     headers: {
-      "cache-control": "public, max-age=300",
+      "cache-control": MAP_CACHE_CONTROL,
       "content-security-policy":
         "default-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; script-src 'self' https://unpkg.com; style-src 'self' https://unpkg.com; img-src 'self' data: https://tile.openstreetmap.org https://unpkg.com; connect-src 'self'",
       "content-type": "text/html; charset=utf-8",

@@ -48,6 +48,7 @@ export type GeocodeVenueResult =
 
 export interface VenueCoordinateReview {
   readonly venueId: number;
+  readonly venueVersion: number;
   readonly title: string;
   readonly address: string | null;
   readonly status: Exclude<CoordinateStatus, "verified">;
@@ -209,7 +210,9 @@ export function createGeocodingRepository(
         const context = venueContext(tx, venueId);
         const address = normalizeVenueAddress(context.address);
         if (address.length === 0) {
-          throw new RangeError(`Venue ${venueId} has no address to verify.`);
+          throw new GeocodingLifecycleError(
+            `Venue ${venueId} has no address to verify. Add an address before verifying its pin.`,
+          );
         }
         const boundingBox = boundsFor(context);
         if (boundingBox === null) {
@@ -272,6 +275,7 @@ export function createGeocodingRepository(
     return db
       .select({
         venueId: venues.id,
+        venueVersion: venues.version,
         title: venues.title,
         address: venues.address,
         coordinate: venueCoordinates,
@@ -286,8 +290,9 @@ export function createGeocodingRepository(
       )
       .orderBy(venues.id)
       .all()
-      .map(({ venueId, title, address, coordinate }) => ({
+      .map(({ venueId, venueVersion, title, address, coordinate }) => ({
         venueId,
+        venueVersion,
         title,
         address,
         status: coordinate.status as Exclude<CoordinateStatus, "verified">,

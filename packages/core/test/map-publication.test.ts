@@ -82,6 +82,35 @@ describe("season map publication", () => {
     expect(unpublished.version).toBe(published.version + 1);
   });
 
+  it("R16 requires repairable event metadata before publication", async () => {
+    const fixture = await seasonIn("locked");
+    fixture.database.sqlite
+      .prepare(
+        "update seasons set event_city = 'Unconfigured', event_state = 'Unconfigured' where id = ?",
+      )
+      .run(fixture.seasonId);
+    const locked = fixture.seasons.getSeason(fixture.seasonId);
+
+    expect(() =>
+      fixture.seasons.publishSeasonMap(locked.id, 7, locked.version),
+    ).toThrow(/city and state/i);
+    const configured = fixture.seasons.updateSeasonMapEvent(
+      locked.id,
+      { city: "Exampleton", state: "WI" },
+      7,
+      locked.version,
+    );
+    const published = fixture.seasons.publishSeasonMap(
+      configured.id,
+      7,
+      configured.version,
+    );
+
+    expect(published.eventCity).toBe("Exampleton");
+    expect(published.eventState).toBe("WI");
+    expect(published.mapPublishedAt).not.toBeNull();
+  });
+
   it("R16/R28 clears publication when a season is archived", async () => {
     const fixture = await seasonIn("locked");
     const locked = fixture.seasons.getSeason(fixture.seasonId);

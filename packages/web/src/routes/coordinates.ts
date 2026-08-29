@@ -5,6 +5,7 @@ import {
   SeasonConflictError,
   SeasonLifecycleError,
   type CoreRuntime,
+  type GeocodeVenueResult,
   type Season,
 } from "@porchfest/core";
 import type { Context } from "hono";
@@ -125,13 +126,28 @@ export function registerCoordinateRoutes(
       // Deliberately sequential. Nominatim permits one request per second per
       // IP, and the shared adapter enforces that delay between these awaits.
       for (const venue of options.core.seasons.listSeasonVenues(season.id)) {
+        if (venue.status === "withdrawn" || venue.canonicalVenueId !== null) {
+          continue;
+        }
         if (options.core.geocoding.publishableCoordinate(venue.id) !== null) {
           continue;
         }
-        const result = await options.core.geocoding.geocodeVenue(
-          venue.id,
-          organizer.id,
-        );
+        let result: GeocodeVenueResult;
+        try {
+          result = await options.core.geocoding.geocodeVenue(
+            venue.id,
+            organizer.id,
+          );
+        } catch (error) {
+          // Legacy/imported season locality text can predate setup validation.
+          // Treat adapter request validation as an unavailable lookup rather
+          // than turning the whole organizer batch into a 500.
+          if (error instanceof TypeError || error instanceof RangeError) {
+            counts.unavailable += 1;
+            continue;
+          }
+          throw error;
+        }
         if (result.kind === "unavailable") {
           counts.unavailable += 1;
         } else if (result.kind === "preserved") {
@@ -180,10 +196,18 @@ function registerPublicationAction(
       }
       try {
         if (action === "publish") {
+          const eventCity = fields.event_city?.trim() ?? "";
+          const eventState = fields.event_state?.trim() ?? "";
+          const configured = options.core.seasons.updateSeasonMapEvent(
+            season.id,
+            { city: eventCity, state: eventState },
+            organizer.id,
+            version,
+          );
           options.core.seasons.publishSeasonMap(
             season.id,
             organizer.id,
-            version,
+            configured.version,
           );
         } else {
           options.core.seasons.unpublishSeasonMap(
@@ -193,7 +217,10 @@ function registerPublicationAction(
           );
         }
       } catch (error) {
-        if (error instanceof SeasonActionError) {
+        if (
+          error instanceof SeasonActionError ||
+          error instanceof SeasonLifecycleError
+        ) {
           return coordinatePage(
             options,
             options.core.seasons.getSeason(season.id),
@@ -229,12 +256,9 @@ function coordinatePage(
     readonly counts?: GeocodeSeasonCounts;
   } = {},
 ): Response {
-  const rows = options.core.geocoding
-    .listVenuesNeedingCoordinateReview(season.id)
-    .map((row) => ({
-      ...row,
-      venueVersion: options.core.seasons.getVenue(row.venueId).version,
-    }));
+  const rows = options.core.geocoding.listVenuesNeedingCoordinateReview(
+    season.id,
+  );
   return new Response(
     renderCoordinatesPage({
       season,

@@ -14,6 +14,7 @@ import {
 } from "../src/composition.js";
 
 const PUBLIC_BASE_URL = "https://porchfest.example";
+const CURRENT_YEAR = new Date().getUTCFullYear();
 const temporaryRoots: string[] = [];
 const runtimes: PorchfestRuntime[] = [];
 
@@ -42,12 +43,16 @@ async function boot(): Promise<PorchfestTestingRuntime> {
   return runtime;
 }
 
-function createSeason(runtime: PorchfestTestingRuntime, openSignups = true) {
+function createSeason(
+  runtime: PorchfestTestingRuntime,
+  openSignups = true,
+  year = CURRENT_YEAR,
+) {
   return runtime.core.setup.createSeason({
-    year: 2036,
+    year,
     displayName: "Synthetic Map Season",
     timezone: "UTC",
-    eventDate: "2036-09-13",
+    eventDate: `${year}-09-13`,
     eventCity: "Exampleton",
     eventState: "WI",
     timeSlots: [
@@ -120,8 +125,11 @@ function createAct(
   });
 }
 
-function assignedPublishedFixture(runtime: PorchfestTestingRuntime) {
-  const season = createSeason(runtime);
+function assignedPublishedFixture(
+  runtime: PorchfestTestingRuntime,
+  year = CURRENT_YEAR,
+) {
+  const season = createSeason(runtime, true, year);
   const signup = createVenue(
     runtime,
     season.id,
@@ -227,6 +235,28 @@ describe("public map page and data (U9)", () => {
     expect(validateVenuesMapDocument(document).ok).toBe(true);
   });
 
+  it("R16 serves no venue data for a future published season", async () => {
+    const runtime = await boot();
+    assignedPublishedFixture(runtime, CURRENT_YEAR + 1);
+
+    const { document, text } = await mapDocument(runtime);
+
+    expect(document.venues).toEqual([]);
+    expect(text).not.toContain("101 Aurora Way");
+    expect(validateVenuesMapDocument(document).ok).toBe(true);
+  });
+
+  it("R16 keeps an explicitly published season live when a newer draft exists", async () => {
+    const runtime = await boot();
+    assignedPublishedFixture(runtime, CURRENT_YEAR - 1);
+    createSeason(runtime, false, CURRENT_YEAR);
+
+    const { document } = await mapDocument(runtime);
+
+    expect(document.season).toBe(CURRENT_YEAR - 1);
+    expect(document.venues).toMatchObject([{ address: "101 Aurora Way" }]);
+  });
+
   it("R16 validates and emits only assigned acts at verified venues", async () => {
     const runtime = await boot();
     assignedPublishedFixture(runtime);
@@ -237,10 +267,10 @@ describe("public map page and data (U9)", () => {
     expect(validateVenuesMapDocument(document)).toMatchObject({ ok: true });
     expect(document).toMatchObject({
       schema_version: VENUES_MAP_SCHEMA_VERSION,
-      season: 2036,
+      season: CURRENT_YEAR,
       generated_from: "packages/web/src/routes/map.ts",
       event: {
-        date: "2036-09-13",
+        date: `${CURRENT_YEAR}-09-13`,
         time: "6:00–8:00 PM",
         city: "Exampleton",
         state: "WI",

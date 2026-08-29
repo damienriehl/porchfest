@@ -1,5 +1,5 @@
 /* global document, L, window */
-// Accessible interactive map and lineup for SAP Porchfest 2026.
+// Accessible interactive map and lineup for Porchfest.
 (function () {
   "use strict";
 

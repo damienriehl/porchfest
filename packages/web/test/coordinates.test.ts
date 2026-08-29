@@ -30,7 +30,7 @@ class FakeGeoPort implements GeoPort {
   maxActive = 0;
 
   constructor(
-    private readonly outcomes: Readonly<Record<string, LocateOutcome>>,
+    private readonly outcomes: Readonly<Record<string, LocateOutcome | Error>>,
   ) {}
 
   async locate(request: LocateRequest): Promise<LocateOutcome> {
@@ -39,8 +39,10 @@ class FakeGeoPort implements GeoPort {
     this.maxActive = Math.max(this.maxActive, this.active);
     await Promise.resolve();
     this.active -= 1;
+    const configured = this.outcomes[request.address];
+    if (configured instanceof Error) throw configured;
     return (
-      this.outcomes[request.address] ?? {
+      configured ?? {
         kind: "unavailable",
         reason: "No synthetic outcome was configured.",
       }
@@ -309,6 +311,24 @@ describe("organizer coordinate review and map publication (U9)", () => {
     createVenue(runtime, season.id, "Stored Porch", "41 Stored Way");
     createVenue(runtime, season.id, "Review Porch", "42 Review Way");
     createVenue(runtime, season.id, "Unavailable Porch", "43 Unavailable Way");
+    const withdrawn = createVenue(
+      runtime,
+      season.id,
+      "Withdrawn Porch",
+      "46 Withdrawn Way",
+    );
+    const replacement = createVenue(
+      runtime,
+      season.id,
+      "Replacement Porch",
+      "47 Replacement Way",
+    );
+    const superseded = createVenue(
+      runtime,
+      season.id,
+      "Superseded Porch",
+      "48 Superseded Way",
+    );
     const preserved = createVenue(
       runtime,
       season.id,
@@ -331,6 +351,17 @@ describe("organizer coordinate review and map publication (U9)", () => {
     runtime.core.seasons.updateVenue(preserved.id, preservedCurrent.version, {
       address: "45 Preserved Edit Way",
     });
+    runtime.core.seasons.setRecordStatus(
+      "venue",
+      withdrawn.id,
+      withdrawn.version,
+      "withdrawn",
+    );
+    runtime.core.seasons.supersedeVenue(
+      superseded.id,
+      superseded.version,
+      replacement.id,
+    );
 
     const before = await page(runtime, cookie, season.id);
     const html = await before.text();
@@ -344,14 +375,79 @@ describe("organizer coordinate review and map publication (U9)", () => {
 
     expect(response.status).toBe(200);
     expect(resultHtml).toContain(
-      "stored 1; cached 0; preserved 1; needs review 1; unavailable 1",
+      "stored 1; cached 0; preserved 1; needs review 1; unavailable 2",
     );
     expect(geo.maxActive).toBe(1);
     expect(geo.requests.map((request) => request.address)).toEqual([
       "41 Stored Way",
       "42 Review Way",
       "43 Unavailable Way",
+      "47 Replacement Way",
     ]);
+  });
+
+  it("turns legacy invalid locality text into an unavailable count", async () => {
+    const geo = new FakeGeoPort({
+      "49 Legacy Way": new TypeError(
+        "localityName must contain a word or number.",
+      ),
+    });
+    const { runtime, cookie, season } = await boot(geo);
+    createVenue(runtime, season.id, "Legacy Locality Porch", "49 Legacy Way");
+    const before = await page(runtime, cookie, season.id);
+    const html = await before.text();
+    const action = `/seasons/${season.id}/coordinates/geocode`;
+
+    const response = await runtime.request(`${PUBLIC_BASE_URL}${action}`, {
+      method: "POST",
+      headers: formHeaders(cookie),
+      body: new URLSearchParams({ _csrf: tokenFrom(html, action) }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("unavailable 1");
+  });
+
+  it("requires an address before a review pin can be verified", async () => {
+    const geo = new FakeGeoPort({
+      "51 Candidate Way": located(10.3, 20.3, "street"),
+    });
+    const { runtime, cookie, season } = await boot(geo);
+    const venue = createVenue(
+      runtime,
+      season.id,
+      "Addressless Porch",
+      "51 Candidate Way",
+    );
+    await runtime.core.geocoding.geocodeVenue(venue.id, null);
+    const before = await page(runtime, cookie, season.id);
+    const beforeHtml = await before.text();
+    const action = `/seasons/${season.id}/coordinates/${venue.id}/verify`;
+    const token = tokenFrom(beforeHtml, action);
+    const current = runtime.core.seasons.getVenue(venue.id);
+    runtime.core.seasons.updateVenue(current.id, current.version, {
+      address: null,
+    });
+
+    const review = await page(runtime, cookie, season.id);
+    const reviewHtml = await review.text();
+    expect(reviewHtml).toContain("Add an address before verifying this pin");
+    expect(tokenFrom(reviewHtml, action)).toBe("");
+
+    const response = await runtime.request(`${PUBLIC_BASE_URL}${action}`, {
+      method: "POST",
+      headers: formHeaders(cookie),
+      body: new URLSearchParams({
+        _csrf: token,
+        latitude: "10.4",
+        longitude: "20.4",
+        version: String(runtime.core.seasons.getVenue(venue.id).version),
+      }),
+    });
+    expect(response.status).toBe(409);
+    expect(await response.text()).toContain(
+      "Add an address before verifying its pin",
+    );
   });
 
   it("names GEO_PROVIDER and disables season geocoding when unconfigured", async () => {
@@ -389,6 +485,8 @@ describe("organizer coordinate review and map publication (U9)", () => {
       body: new URLSearchParams({
         _csrf: tokenFrom(html, publishAction),
         version: String(locked.version),
+        event_city: "Exampleton",
+        event_state: "WI",
       }),
     });
     expect(response.status).toBe(303);

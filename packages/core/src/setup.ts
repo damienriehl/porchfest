@@ -36,8 +36,8 @@ export interface SeasonSetupInput {
   readonly timezone: string;
   /** "YYYY-MM-DD", read in the season's own timezone. */
   readonly eventDate: string;
-  readonly eventCity: string;
-  readonly eventState: string;
+  readonly eventCity?: string;
+  readonly eventState?: string;
   readonly signupOpensOn?: string | null;
   readonly signupClosesOn?: string | null;
   readonly timeSlots: readonly TimeSlotInput[];
@@ -195,11 +195,11 @@ function validate(input: SeasonSetupInput): ValidatedSetup {
   ) {
     throw new SeasonSetupError("year", "Enter a four-digit year.");
   }
-  const eventCity = input.eventCity.trim();
+  const eventCity = input.eventCity?.trim() ?? "Unconfigured";
   if (!eventCity) {
     throw new SeasonSetupError("eventCity", "Enter the event city.");
   }
-  const eventState = input.eventState.trim();
+  const eventState = input.eventState?.trim() ?? "Unconfigured";
   if (!eventState) {
     throw new SeasonSetupError(
       "eventState",
@@ -302,6 +302,14 @@ function validate(input: SeasonSetupInput): ValidatedSetup {
     }
   }
 
+  const localityName = trimmed(input.localityName);
+  if (localityName !== null && !/[A-Za-z0-9]/.test(localityName)) {
+    throw new SeasonSetupError(
+      "localityName",
+      "Enter a locality containing a word or number.",
+    );
+  }
+
   return {
     year: input.year,
     displayName,
@@ -312,7 +320,7 @@ function validate(input: SeasonSetupInput): ValidatedSetup {
     signupOpensAt,
     signupClosesAt,
     timeSlots,
-    localityName: trimmed(input.localityName),
+    localityName,
     bounds,
     publicSiteUrl: httpUrl(input.publicSiteUrl, "publicSiteUrl"),
     publicMapUrl: httpUrl(input.publicMapUrl, "publicMapUrl"),
