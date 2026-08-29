@@ -118,7 +118,7 @@ describe("core schema migration", () => {
         {
           latitude: 10.5,
           longitude: 20.5,
-          source: "geocoded",
+          source: "organizer-verified",
           provider: "legacy",
           status: "pending",
           rejection_code: null,
@@ -127,7 +127,7 @@ describe("core schema migration", () => {
         {
           latitude: null,
           longitude: null,
-          source: "geocoded",
+          source: "organizer-verified",
           provider: "legacy",
           status: "needs-review",
           rejection_code: "invalid-coordinate",
