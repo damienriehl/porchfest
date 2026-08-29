@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { NullEmailAdapter } from "../src/index.js";
+import { NullEmailAdapter } from "../src/none.js";
 import { emailPortContract } from "./contract.js";
 
 describe("NullEmailAdapter", () => {
@@ -18,5 +18,10 @@ describe("NullEmailAdapter", () => {
 
     expect(adapter.configured).toBe(false);
     expect(result.status).toBe("skipped");
+  });
+
+  it("is re-exported from the package entry point", async () => {
+    const entry = await import("../src/index.js");
+    expect(entry.NullEmailAdapter).toBe(NullEmailAdapter);
   });
 });

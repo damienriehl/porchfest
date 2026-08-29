@@ -16,10 +16,11 @@ import {
   createCoreTestingRepository,
   type CoreTestingRepository,
 } from "@porchfest/core/testing";
-import { NullEmailAdapter } from "@porchfest/email";
+import { NullEmailAdapter, SmtpEmailAdapter } from "@porchfest/email";
 import { NullGeoAdapter } from "@porchfest/geo";
 import type { Hono } from "hono";
 import type { Context } from "hono";
+import { readFileSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { createApp } from "./app.js";
@@ -60,7 +61,7 @@ export function createAdapterSet(
   env: Readonly<Record<string, string | undefined>> = {},
 ): AdapterPorts {
   return Object.freeze({
-    email: overrides.email ?? new NullEmailAdapter(),
+    email: overrides.email ?? createEmailAdapter(env),
     antibot: overrides.antibot ?? createAntibotAdapter(env),
     geo: overrides.geo ?? new NullGeoAdapter(),
   });
@@ -90,6 +91,138 @@ function createAntibotAdapter(
     );
   }
   return new TurnstileAntibotAdapter({ siteKey, secretKey: secret });
+}
+
+/** The default SMTP submission port. Implicit TLS lives on 465 instead. */
+const DEFAULT_SMTP_PORT = 587;
+
+/**
+ * KD5/R12: email is hybrid per deployment. Configure a provider and the outbox
+ * can send; configure none and it offers copy-paste/export (AE1).
+ *
+ * The refusal in the middle matters as much as either end. A deployment that
+ * set a host but no from address, or a username with no password, believes it
+ * turned sending on; booting it into copy-paste mode would look identical to
+ * "nobody pressed send" and the wave would silently never go out.
+ */
+function createEmailAdapter(
+  env: Readonly<Record<string, string | undefined>>,
+): AdapterPorts["email"] {
+  const host = env.PORCHFEST_SMTP_HOST?.trim() ?? "";
+  const from = env.PORCHFEST_SMTP_FROM?.trim() ?? "";
+  const port = env.PORCHFEST_SMTP_PORT?.trim() ?? "";
+  const username = env.PORCHFEST_SMTP_USERNAME?.trim() ?? "";
+  const password = env.PORCHFEST_SMTP_PASSWORD ?? "";
+  const passwordFile = env.PORCHFEST_SMTP_PASSWORD_FILE?.trim() ?? "";
+
+  const anySmtpVariable = [
+    host,
+    port,
+    username,
+    password.trim(),
+    passwordFile,
+    from,
+  ].some((value) => value.length > 0);
+  if (!anySmtpVariable) return new NullEmailAdapter();
+
+  const missing: string[] = [];
+  if (host.length === 0) missing.push("PORCHFEST_SMTP_HOST");
+  if (from.length === 0) missing.push("PORCHFEST_SMTP_FROM");
+  if (missing.length > 0) {
+    throw new TypeError(
+      `SMTP needs ${missing.join(" and ")}. Set PORCHFEST_SMTP_HOST and PORCHFEST_SMTP_FROM together, or none of the PORCHFEST_SMTP_* variables to run the outbox in copy-paste mode.`,
+    );
+  }
+
+  const hasSecret = password.length > 0 || passwordFile.length > 0;
+  const hasUsername = username.length > 0;
+  if (hasUsername !== hasSecret) {
+    throw new TypeError(
+      "SMTP credentials need PORCHFEST_SMTP_USERNAME alongside PORCHFEST_SMTP_PASSWORD or PORCHFEST_SMTP_PASSWORD_FILE. Set both, or neither to submit unauthenticated.",
+    );
+  }
+
+  return new SmtpEmailAdapter({
+    host,
+    port: parseSmtpPort(port),
+    secure: parseSmtpFlag(env.PORCHFEST_SMTP_SECURE, "PORCHFEST_SMTP_SECURE"),
+    starttls: parseSmtpFlag(
+      env.PORCHFEST_SMTP_STARTTLS,
+      "PORCHFEST_SMTP_STARTTLS",
+      true,
+    ),
+    username: hasUsername ? username : undefined,
+    password: hasUsername
+      ? readSmtpPassword(password, passwordFile)
+      : undefined,
+    from: requirePlausibleFrom(from),
+  });
+}
+
+function parseSmtpPort(value: string): number {
+  if (value.length === 0) return DEFAULT_SMTP_PORT;
+  const port = Number(value);
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) {
+    throw new TypeError(
+      "PORCHFEST_SMTP_PORT must be a TCP port number between 1 and 65535.",
+    );
+  }
+  return port;
+}
+
+function parseSmtpFlag(
+  value: string | undefined,
+  name: string,
+  fallback = false,
+): boolean {
+  const configured = value?.trim().toLowerCase() ?? "";
+  if (configured.length === 0) return fallback;
+  if (configured === "true" || configured === "1") return true;
+  if (configured === "false" || configured === "0") return false;
+  throw new TypeError(`${name} must be true or false.`);
+}
+
+/**
+ * KTD15: the password comes from the environment or a mounted file, is read
+ * once at boot, and never reaches a log line — including the failure paths,
+ * which name the variable rather than quoting what was found.
+ */
+function readSmtpPassword(password: string, passwordFile: string): string {
+  if (passwordFile.length === 0) return password;
+
+  let contents: string;
+  try {
+    contents = readFileSync(passwordFile, "utf8");
+  } catch {
+    throw new TypeError(
+      "PORCHFEST_SMTP_PASSWORD_FILE could not be read. Mount the credential file, or set PORCHFEST_SMTP_PASSWORD instead.",
+    );
+  }
+  // A mounted secret usually ends in a newline the file editor added.
+  const secret = contents.trimEnd();
+  if (secret.length === 0) {
+    throw new TypeError("PORCHFEST_SMTP_PASSWORD_FILE names an empty file.");
+  }
+  return secret;
+}
+
+function requirePlausibleFrom(value: string): string {
+  const open = value.lastIndexOf("<");
+  const close = value.lastIndexOf(">");
+  const address =
+    open !== -1 && close > open ? value.slice(open + 1, close).trim() : value;
+  const at = address.indexOf("@");
+  const plausible =
+    at > 0 &&
+    at === address.lastIndexOf("@") &&
+    at < address.length - 1 &&
+    !address.includes(" ");
+  if (!plausible) {
+    throw new TypeError(
+      'PORCHFEST_SMTP_FROM must be an email address, either "organizers@example.org" or "Name <organizers@example.org>".',
+    );
+  }
+  return value;
 }
 
 export async function createRuntime(
