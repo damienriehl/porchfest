@@ -39,11 +39,17 @@
     "@eslint/js": "^9.39.0",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^24.13.3",
+    "ajv": "^8.20.0",
     "drizzle-kit": "^0.31.10",
     "eslint": "^9.39.0",
     "prettier": "^3.9.5",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.63.0",
     "vitest": "^4.1.10"
+  },
+  "overrides": {
+    "ajv-formats": {
+      "ajv": "$ajv"
+    }
   }
 }

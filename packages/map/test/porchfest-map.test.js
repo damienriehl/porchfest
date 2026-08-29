@@ -28,6 +28,9 @@ const instrumentedScriptSource = scriptSource.replace(
     getMarkersByVenueKey: function () {
       return typeof markersByVenueKey === 'undefined' ? undefined : markersByVenueKey;
     },
+    getAllFilters: function () {
+      return typeof ALL_FILTERS === 'undefined' ? undefined : ALL_FILTERS;
+    },
     layoutVenueCards: typeof layoutVenueCards === 'function' ? layoutVenueCards : undefined,
     scheduleVenueLayout: typeof scheduleVenueLayout === 'function' ? scheduleVenueLayout : undefined
   };
@@ -49,6 +52,12 @@ const FALLBACK =
   "The interactive map could not be loaded. Please refresh the page and try again.";
 const EMPTY_STATE =
   "The 2026 lineup is not on the interactive map yet. Please check back soon.";
+const ALL_HOURS = "";
+const DEFAULT_SLOT_LABELS_BY_ID = {
+  "6-7": "6–7 pm",
+  "7-8": "7–8 pm",
+  "6-8": "6–8 pm",
+};
 
 class TestStyle {
   constructor() {
@@ -462,7 +471,7 @@ function response(payload, options = {}) {
 }
 
 function venue(overrides = {}) {
-  return Object.assign(
+  const result = Object.assign(
     {
       title: "Garden Stage",
       address: "100 Festival Ave",
@@ -483,6 +492,11 @@ function venue(overrides = {}) {
     },
     overrides,
   );
+  result.acts = result.acts.map((act) => ({
+    slot_label: DEFAULT_SLOT_LABELS_BY_ID[act.slot] || act.slot,
+    ...act,
+  }));
+  return result;
 }
 
 async function settlePromises() {
@@ -589,8 +603,8 @@ function assertFailure(nodes) {
 
 function applyFilters(run, venues, hour, genre) {
   const state = run.testApi.getViewState();
-  state.hour = hour;
-  state.genre = genre;
+  state.hour = hour === ALL_HOURS ? run.testApi.getAllFilters() : hour;
+  state.genre = genre === "all" ? run.testApi.getAllFilters() : genre;
   run.testApi.applyView(
     run.nodes.status,
     run.nodes.listSection,
@@ -1402,7 +1416,7 @@ test("a collapsed venue card still navigates to its marker without changing filt
     .querySelectorAll(".porchfest-venue-card")
     .find((card) => card.dataset.venueKey === run.testApi.venueKey(venues[1]));
 
-  applyFilters(run, venues, "6-7", "Folk");
+  applyFilters(run, venues, "6–7 pm", "Folk");
   assertViewClasses(rockCard, "collapsed");
 
   rockCard
@@ -1410,7 +1424,7 @@ test("a collapsed venue card still navigates to its marker without changing filt
     .dispatchEvent({ type: "click" });
 
   assertViewClasses(rockCard, "collapsed");
-  assert.equal(run.testApi.getViewState().hour, "6-7");
+  assert.equal(run.testApi.getViewState().hour, "6–7 pm");
   assert.equal(run.testApi.getViewState().genre, "Folk");
   assert.equal(run.leaflet.records.maps[0].flyToCalls.length, 1);
   assert.deepEqual(
@@ -1423,7 +1437,17 @@ test("a collapsed venue card still navigates to its marker without changing filt
 });
 
 test("renders a permanent one-line hour control with exactly one active button", async () => {
-  const run = await runScript();
+  const venues = [
+    venue({ title: "Early", acts: [{ slot: "6-7", name: "Early Act" }] }),
+    venue({
+      title: "Late",
+      lat: 44.99,
+      acts: [{ slot: "7-8", name: "Late Act" }],
+    }),
+  ];
+  const run = await runScript({
+    fetch: () => Promise.resolve(response({ venues })),
+  });
   const controls = run.nodes.mount.querySelector(".porchfest-map-controls");
   const hourControl = controls.querySelector(".porchfest-hour-control");
   const buttons = hourControl.querySelectorAll("button");
@@ -1457,6 +1481,179 @@ test("renders a permanent one-line hour control with exactly one active button",
   assert.match(hourControl.getAttribute("aria-label"), /hour/i);
 });
 
+test("orders hour filters by start-only times even when the first venue has the later slot", async () => {
+  const venues = [
+    venue({
+      title: "Second Afternoon Stage",
+      acts: [
+        {
+          slot: "slot-b",
+          slot_label: "afternoon-a",
+          slot_start: "14:00:00Z",
+          name: "Second Afternoon Act",
+        },
+      ],
+    }),
+    venue({
+      title: "First Afternoon Stage",
+      lat: 44.99,
+      acts: [
+        {
+          slot: "slot-a",
+          slot_label: "afternoon-z",
+          slot_start: "13:00:00Z",
+          name: "First Afternoon Act",
+        },
+      ],
+    }),
+  ];
+  const run = await runScript({
+    fetch: () => Promise.resolve(response({ venues })),
+  });
+  const buttons = run.nodes.mount
+    .querySelector(".porchfest-hour-control")
+    .querySelectorAll("button");
+
+  assert.deepEqual(
+    buttons.map((button) => button.textContent),
+    ["All", "afternoon-z", "afternoon-a"],
+  );
+
+  buttons[1].dispatchEvent({ type: "click" });
+  assert.equal(run.testApi.getViewState().hour, "afternoon-z");
+  assertViewClasses(run.nodes.list.children[0], "collapsed");
+  assertViewClasses(run.nodes.list.children[1], "match");
+});
+
+test("orders interval-free hour labels with numeric locale comparison", async () => {
+  const venues = [
+    venue({
+      title: "Tenth Afternoon Stage",
+      acts: [
+        {
+          slot: "slot-10",
+          slot_label: "afternoon-10",
+          name: "Tenth Afternoon Act",
+        },
+      ],
+    }),
+    venue({
+      title: "Second Afternoon Stage",
+      lat: 44.99,
+      acts: [
+        {
+          slot: "slot-2",
+          slot_label: "afternoon-2",
+          name: "Second Afternoon Act",
+        },
+      ],
+    }),
+  ];
+  const run = await runScript({
+    fetch: () => Promise.resolve(response({ venues })),
+  });
+  const buttons = run.nodes.mount
+    .querySelector(".porchfest-hour-control")
+    .querySelectorAll("button");
+
+  assert.deepEqual(
+    buttons.map((button) => button.textContent),
+    ["All", "afternoon-2", "afternoon-10"],
+  );
+});
+
+test('keeps a payload slot label named "all" distinct from the All option', async () => {
+  const venues = [
+    venue({
+      title: "Literal All Stage",
+      acts: [{ slot: "slot-all", slot_label: "all", name: "Literal All Act" }],
+    }),
+    venue({
+      title: "Evening Stage",
+      lat: 44.99,
+      acts: [
+        { slot: "slot-evening", slot_label: "evening", name: "Evening Act" },
+      ],
+    }),
+  ];
+  const run = await runScript({
+    fetch: () => Promise.resolve(response({ venues })),
+  });
+  const buttons = run.nodes.mount
+    .querySelector(".porchfest-hour-control")
+    .querySelectorAll("button");
+
+  assert.deepEqual(
+    buttons.map((button) => button.textContent),
+    ["All", "all", "evening"],
+  );
+
+  buttons[1].dispatchEvent({ type: "click" });
+  assert.equal(run.testApi.getViewState().hour, "all");
+  assertViewClasses(run.nodes.list.children[0], "match");
+  assertViewClasses(run.nodes.list.children[1], "collapsed");
+});
+
+test("de-duplicates exact hour labels before sorting them", async () => {
+  const venues = [
+    venue({
+      title: "Second Label Stage",
+      acts: [
+        {
+          slot: "slot-2",
+          slot_label: "afternoon-2",
+          name: "Second Label Act",
+        },
+      ],
+    }),
+    venue({
+      title: "Tenth Label Stage",
+      lat: 44.99,
+      acts: [
+        {
+          slot: "slot-10",
+          slot_label: "afternoon-10",
+          name: "Tenth Label Act",
+        },
+      ],
+    }),
+    venue({
+      title: "Duplicate Label Stage",
+      lat: 44.98,
+      acts: [
+        {
+          slot: "slot-duplicate",
+          slot_label: "afternoon-2",
+          name: "Duplicate Second Label Act",
+        },
+      ],
+    }),
+  ];
+  const run = await runScript({
+    fetch: () => Promise.resolve(response({ venues })),
+  });
+  const buttons = run.nodes.mount
+    .querySelector(".porchfest-hour-control")
+    .querySelectorAll("button");
+  const cardsByVenueKey = Object.fromEntries(
+    run.nodes.list.children.map((card) => [card.dataset.venueKey, card]),
+  );
+
+  assert.deepEqual(
+    buttons.map((button) => button.dataset.filterValue),
+    [ALL_HOURS, "afternoon-2", "afternoon-10"],
+  );
+
+  buttons[1].dispatchEvent({ type: "click" });
+  assert.equal(run.testApi.getViewState().hour, "afternoon-2");
+  assertViewClasses(cardsByVenueKey[run.testApi.venueKey(venues[0])], "match");
+  assertViewClasses(
+    cardsByVenueKey[run.testApi.venueKey(venues[1])],
+    "collapsed",
+  );
+  assertViewClasses(cardsByVenueKey[run.testApi.venueKey(venues[2])], "match");
+});
+
 test("hour buttons are accessible native buttons that update state and reapply the view", async () => {
   const venues = [
     venue({ title: "Early", acts: [{ slot: "6-7", name: "Early Act" }] }),
@@ -1480,7 +1677,7 @@ test("hour buttons are accessible native buttons that update state and reapply t
   });
 
   buttons[2].dispatchEvent({ type: "click" });
-  assert.equal(run.testApi.getViewState().hour, "7-8");
+  assert.equal(run.testApi.getViewState().hour, "7–8 pm");
   assert.equal(
     buttons.filter((button) => button.getAttribute("aria-pressed") === "true")
       .length,
@@ -1492,7 +1689,7 @@ test("hour buttons are accessible native buttons that update state and reapply t
 
   assert.equal(buttons[0].textContent, "All");
   buttons[0].dispatchEvent({ type: "click" });
-  assert.equal(run.testApi.getViewState().hour, "all");
+  assert.equal(run.testApi.getViewState().hour, run.testApi.getAllFilters());
   assert.equal(buttons[0].getAttribute("aria-pressed"), "true");
   run.nodes.list.children.forEach((card) => assertViewClasses(card, "neutral"));
 });
@@ -1575,6 +1772,40 @@ test("derives genre chips from loaded data and orders them by frequency then alp
   );
 });
 
+test('keeps a payload genre named "all" distinct from the shared All sentinel', async () => {
+  const venues = [
+    venue({
+      title: "Literal All Genre Stage",
+      acts: [{ slot: "6-7", name: "Literal All Genre Act", genre: "all" }],
+    }),
+    venue({
+      title: "Folk Stage",
+      lat: 44.99,
+      acts: [{ slot: "7-8", name: "Folk Act", genre: "Folk" }],
+    }),
+  ];
+  const run = await runScript({
+    fetch: () => Promise.resolve(response({ venues })),
+  });
+  const chips = run.nodes.mount
+    .querySelector(".porchfest-genre-chips")
+    .querySelectorAll("button");
+
+  assert.deepEqual(
+    chips.map((button) => button.textContent),
+    ["All", "all", "Folk"],
+  );
+
+  chips[1].dispatchEvent({ type: "click" });
+  assert.equal(run.testApi.getViewState().genre, "all");
+  assertViewClasses(run.nodes.list.children[0], "match");
+  assertViewClasses(run.nodes.list.children[1], "collapsed");
+
+  chips[0].dispatchEvent({ type: "click" });
+  assert.notEqual(run.testApi.getViewState().genre, "all");
+  run.nodes.list.children.forEach((card) => assertViewClasses(card, "neutral"));
+});
+
 test("genre disclosure uses the existing details pattern and All clears the genre facet", async () => {
   const venues = [
     venue({
@@ -1610,7 +1841,7 @@ test("genre disclosure uses the existing details pattern and All clears the genr
   assertViewClasses(run.nodes.list.children[1], "collapsed");
 
   allChip.dispatchEvent({ type: "click" });
-  assert.equal(run.testApi.getViewState().genre, "all");
+  assert.equal(run.testApi.getViewState().genre, run.testApi.getAllFilters());
   assert.equal(allChip.getAttribute("aria-pressed"), "true");
   assert.equal(
     chips.filter((button) => button.getAttribute("aria-pressed") === "true")
@@ -1740,7 +1971,7 @@ test("sort button shares the accessible 44px chip treatment", async () => {
   );
 });
 
-test("a full-evening act matches both hour filters", async () => {
+test("a full-evening act matches its payload-provided hour label", async () => {
   const venues = [venue({ acts: [{ slot: "6-8", name: "Full Evening" }] })];
   const run = await runScript({
     fetch: () => Promise.resolve(response({ venues })),
@@ -1748,11 +1979,7 @@ test("a full-evening act matches both hour filters", async () => {
   const card = run.nodes.list.children[0];
   const markerElement = run.leaflet.records.markers[0].element;
 
-  applyFilters(run, venues, "6-7", "all");
-  assertViewClasses(card, "match");
-  assertViewClasses(markerElement, "match");
-
-  applyFilters(run, venues, "7-8", "all");
+  applyFilters(run, venues, "6–8 pm", "all");
   assertViewClasses(card, "match");
   assertViewClasses(markerElement, "match");
 });
@@ -1771,7 +1998,7 @@ test("filtering keeps non-matching venues in the lineup and their markers on the
     fetch: () => Promise.resolve(response({ venues })),
   });
 
-  applyFilters(run, venues, "6-7", "all");
+  applyFilters(run, venues, "6–7 pm", "all");
 
   assert.equal(
     run.nodes.list.querySelectorAll(".porchfest-venue-card").length,
@@ -1802,7 +2029,7 @@ test("only non-matching cards collapse while matching and neutral cards stay ful
   assertViewClasses(earlyCard, "neutral");
   assertViewClasses(lateCard, "neutral");
 
-  applyFilters(run, venues, "6-7", "all");
+  applyFilters(run, venues, "6–7 pm", "all");
 
   assertViewClasses(earlyCard, "match");
   assertViewClasses(lateCard, "collapsed");
@@ -1822,7 +2049,7 @@ test("matching venues mark both the lineup card and marker element", async () =>
     fetch: () => Promise.resolve(response({ venues })),
   });
 
-  applyFilters(run, venues, "6-7", "all");
+  applyFilters(run, venues, "6–7 pm", "all");
 
   assertViewClasses(run.nodes.list.children[0], "match");
   assertViewClasses(run.leaflet.records.markers[0].element, "match");
@@ -1843,7 +2070,7 @@ test("a faded marker stays keyboard-focusable and opens its popup", async () => 
   });
   const fadedMarker = run.leaflet.records.markers[1];
 
-  applyFilters(run, venues, "6-7", "all");
+  applyFilters(run, venues, "6–7 pm", "all");
   fadedMarker.element.dispatchEvent({
     type: "keydown",
     key: " ",
@@ -1856,25 +2083,59 @@ test("a faded marker stays keyboard-focusable and opens its popup", async () => 
   assert.equal(fadedMarker.openedContent.className, "porchfest-map-popup");
 });
 
-test("hour filters resolve every slot value and a two-act venue", async () => {
+test("hour filters use intervals to fan a full-evening act across overlapping chips", async () => {
   const venues = [
-    venue({ title: "Early", acts: [{ slot: "6-7", name: "Early Act" }] }),
+    venue({
+      title: "Early",
+      acts: [
+        {
+          slot: "6-7",
+          name: "Early Act",
+          slot_start: "18:00:00Z",
+          slot_end: "19:00:00Z",
+        },
+      ],
+    }),
     venue({
       title: "Late",
       lat: 44.981,
-      acts: [{ slot: "7-8", name: "Late Act" }],
+      acts: [
+        {
+          slot: "7-8",
+          name: "Late Act",
+          slot_start: "19:00:00Z",
+          slot_end: "20:00:00Z",
+        },
+      ],
     }),
     venue({
       title: "Full",
       lat: 44.982,
-      acts: [{ slot: "6-8", name: "Full Act" }],
+      acts: [
+        {
+          slot: "6-8",
+          name: "Full Act",
+          slot_start: "18:00:00Z",
+          slot_end: "20:00:00Z",
+        },
+      ],
     }),
     venue({
       title: "Two Act",
       lat: 44.983,
       acts: [
-        { slot: "6-7", name: "First Act" },
-        { slot: "7-8", name: "Second Act" },
+        {
+          slot: "6-7",
+          name: "First Act",
+          slot_start: "18:00:00Z",
+          slot_end: "19:00:00Z",
+        },
+        {
+          slot: "7-8",
+          name: "Second Act",
+          slot_start: "19:00:00Z",
+          slot_end: "20:00:00Z",
+        },
       ],
     }),
   ];
@@ -1883,19 +2144,65 @@ test("hour filters resolve every slot value and a two-act venue", async () => {
   });
   const cards = run.nodes.list.children;
 
-  applyFilters(run, venues, "6-7", "all");
+  applyFilters(run, venues, "6–7 pm", "all");
   assert.deepEqual(
     cards.map((card) => card.classList.contains("is-match")),
     [true, false, true, true],
   );
   assertViewClasses(cards[1], "collapsed");
 
-  applyFilters(run, venues, "7-8", "all");
+  applyFilters(run, venues, "7–8 pm", "all");
   assert.deepEqual(
     cards.map((card) => card.classList.contains("is-match")),
     [false, true, true, true],
   );
   assertViewClasses(cards[0], "collapsed");
+
+  applyFilters(run, venues, "6–8 pm", "all");
+  assert.deepEqual(
+    cards.map((card) => card.classList.contains("is-match")),
+    [true, true, true, true],
+  );
+});
+
+test("hour interval overlap accepts RFC 3339 offsets with optional minutes", async () => {
+  const venues = [
+    venue({
+      title: "Selected Hour",
+      acts: [
+        {
+          slot: "6-7",
+          name: "Selected Act",
+          slot_start: "18:00:00+05",
+          slot_end: "19:00:00+05",
+        },
+      ],
+    }),
+    ...["+05", "+0500", "+05:00"].map((offset, index) =>
+      venue({
+        title: `Full Slot ${index + 1}`,
+        lat: 44.981 + index * 0.001,
+        acts: [
+          {
+            slot: "6-8",
+            name: `Full Act ${index + 1}`,
+            slot_start: `18:00:00${offset}`,
+            slot_end: `20:00:00${offset}`,
+          },
+        ],
+      }),
+    ),
+  ];
+  const run = await runScript({
+    fetch: () => Promise.resolve(response({ venues })),
+  });
+
+  applyFilters(run, venues, "6–7 pm", "all");
+
+  assert.deepEqual(
+    run.nodes.list.children.map((card) => card.classList.contains("is-match")),
+    [true, true, true, true],
+  );
 });
 
 test("a genre-less act is collapsed under an active genre filter", async () => {
@@ -1910,7 +2217,7 @@ test("a genre-less act is collapsed under an active genre filter", async () => {
   const card = run.nodes.list.children[0];
   const markerElement = run.leaflet.records.markers[0].element;
 
-  applyFilters(run, venues, "all", "Folk");
+  applyFilters(run, venues, ALL_HOURS, "Folk");
 
   assertViewClasses(card, "collapsed");
   assertViewClasses(markerElement, "dimmed");
@@ -1933,7 +2240,7 @@ test("facets combine with AND when hour matches but genre does not", async () =>
     fetch: () => Promise.resolve(response({ venues })),
   });
 
-  applyFilters(run, venues, "6-7", "Folk");
+  applyFilters(run, venues, "6–7 pm", "Folk");
 
   assertViewClasses(run.nodes.list.children[0], "collapsed");
   assertViewClasses(run.nodes.list.children[1], "match");
@@ -1952,7 +2259,7 @@ test("different acts can satisfy the venue hour and genre facets", async () => {
     fetch: () => Promise.resolve(response({ venues })),
   });
 
-  applyFilters(run, venues, "6-7", "Folk");
+  applyFilters(run, venues, "6–7 pm", "Folk");
 
   assertViewClasses(run.nodes.list.children[0], "match");
   assertViewClasses(run.leaflet.records.markers[0].element, "match");
@@ -1978,7 +2285,7 @@ test("filtering preserves sorted card and marker pairing by venue key", async ()
   const lateCard = run.nodes.list.children[1];
   [lateCard, earlyCard].forEach((card) => run.nodes.list.appendChild(card));
 
-  applyFilters(run, venues, "6-7", "Folk");
+  applyFilters(run, venues, "6–7 pm", "Folk");
 
   assert.equal(run.nodes.list.children[1], earlyCard);
   assertViewClasses(earlyCard, "match");
@@ -2019,8 +2326,8 @@ test("returning both facets to All removes every view class", async () => {
     fetch: () => Promise.resolve(response({ venues })),
   });
 
-  applyFilters(run, venues, "6-7", "Folk");
-  applyFilters(run, venues, "all", "all");
+  applyFilters(run, venues, "6–7 pm", "Folk");
+  applyFilters(run, venues, ALL_HOURS, "all");
 
   run.nodes.list.children.forEach((card) => assertViewClasses(card, "neutral"));
   run.leaflet.records.markers.forEach((marker) =>
@@ -2036,7 +2343,7 @@ test("a zero-match combination explains how to return to All without removing ve
     fetch: () => Promise.resolve(response({ venues })),
   });
 
-  applyFilters(run, venues, "7-8", "Rock");
+  applyFilters(run, venues, "7–8 pm", "Rock");
 
   assert.equal(run.nodes.status.hidden, false);
   assert.equal(run.nodes.status.className, "porchfest-map-status is-no-match");
@@ -2065,7 +2372,7 @@ test("a zero-match combination explains how to return to All without removing ve
   assertViewClasses(run.nodes.list.children[0], "collapsed");
   assertViewClasses(run.leaflet.records.markers[0].element, "dimmed");
 
-  applyFilters(run, venues, "6-7", "Folk");
+  applyFilters(run, venues, "6–7 pm", "Folk");
 
   assert.equal(run.nodes.status.hidden, true);
   assert.equal(run.nodes.status.className, "porchfest-map-status");
@@ -2110,7 +2417,7 @@ test("applyView preserves the existing card node identity", async () => {
     throw new Error("applyView must not detach or re-append cards");
   };
 
-  applyFilters(run, venues, "6-7", "Rock");
+  applyFilters(run, venues, "6–7 pm", "Rock");
 
   assert.equal(run.nodes.list.children[0], cardsBefore[0]);
   assert.equal(run.nodes.list.children[1], cardsBefore[1]);

@@ -1,9 +1,10 @@
 # `@porchfest/map`
 
-`@porchfest/map` packages the dependency-free browser module and styles for the
-interactive Porchfest venue map. Its TypeScript entry exports the
-`venues-map.v1` data contract and absolute paths to the browser assets; the
-browser module remains the implementation.
+`@porchfest/map` packages the browser module and styles for the interactive
+Porchfest venue map. Its TypeScript entry exports the `venues-map.v1` data
+contract, a runtime validator backed by `ajv` and `ajv-formats`, and absolute
+paths to the browser assets. The browser module remains the UI implementation
+and depends only on Leaflet at runtime.
 
 ## Venue data
 
@@ -15,7 +16,7 @@ The module fetches `/data/venues-2026.json`. That file follows the
   "venues": [
     {
       "title": "Willow Porch",
-      "address": "12 Example Lane",
+      "address": "Redacted fixture location",
       "lat": 44.98,
       "lng": -93.19,
       "schedule": "6–8 pm",
@@ -23,6 +24,8 @@ The module fetches `/data/venues-2026.json`. That file follows the
         {
           "slot": "6-7",
           "slot_label": "6–7 pm",
+          "slot_start": "18:00:00Z",
+          "slot_end": "19:00:00Z",
           "name": "Sample Quartet",
           "genre": "Jazz",
           "description": "An upbeat neighborhood set.",
@@ -40,10 +43,32 @@ The module fetches `/data/venues-2026.json`. That file follows the
 }
 ```
 
-Each act's `slot` is `"6-7"`, `"7-8"`, or `"6-8"`. All other text fields are
-strings, coordinates are numbers, and `links` and `acts` are arrays.
-The `schedule` field remains part of the `venues-map.v1` contract, although the
+Since v1.3.0, `slot`, `slot_label`, and `schedule` accept any non-empty string
+without surrounding whitespace. Optional `slot_start` and `slot_end` fields use
+JSON Schema's RFC 3339 `time` format. When both are present, the browser uses
+their interval to match overlapping hour chips; otherwise matching falls back
+to exact `slot_label` equality. Coordinates are numbers, and `links` and `acts`
+are arrays. The `schedule` field remains part of the contract, although the
 current venue band does not render a separate schedule line.
+
+## Validate venue data
+
+The TypeScript validator verifies the pinned schema digest, applies the draft
+2020-12 schema with `ajv` and `ajv-formats`, and enforces the supported v1
+minimum version:
+
+```ts
+import { validateVenuesMapDocument } from "@porchfest/map";
+
+const result = validateVenuesMapDocument(candidate);
+if (!result.ok) {
+  console.error(result.errors);
+}
+```
+
+Install the package's runtime dependencies when consuming this entry point;
+`ajv` and `ajv-formats` are not optional. Successful results contain the typed
+document, while failures contain stable JSON-pointer paths and messages.
 
 ## Mount the assets
 

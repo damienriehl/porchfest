@@ -1,7 +1,32 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 
-export const VENUES_MAP_SCHEMA_VERSION = "1.2.0";
+export const VENUES_MAP_SCHEMA_VERSION = "1.3.0";
+export const VENUES_MAP_MINIMUM_SCHEMA_VERSION = "1.1.0";
+
+export const venuesMapVersionPattern = /^1\.\d+\.\d+$/;
+const [minimumMajor, minimumMinor, minimumPatch] =
+  VENUES_MAP_MINIMUM_SCHEMA_VERSION.split(".").map(Number) as [
+    number,
+    number,
+    number,
+  ];
+
+export function isSupportedVenuesMapVersion(version: string): boolean {
+  if (!venuesMapVersionPattern.test(version)) return false;
+
+  const [major, minor, patch] = version.split(".").map(Number) as [
+    number,
+    number,
+    number,
+  ];
+
+  return (
+    major > minimumMajor ||
+    (major === minimumMajor && minor > minimumMinor) ||
+    (major === minimumMajor && minor === minimumMinor && patch >= minimumPatch)
+  );
+}
 
 export const VENUES_MAP_GENERATED_FROM = [
   "porchfest/tools/render.py",
@@ -10,7 +35,8 @@ export const VENUES_MAP_GENERATED_FROM = [
 
 export type VenuesMapGeneratedFrom = (typeof VENUES_MAP_GENERATED_FROM)[number];
 
-export type VenueMapActSlot = "6-7" | "7-8" | "6-8";
+/** Unconstrained deployment-defined slot identifier since venues-map v1.3.0. */
+export type VenueMapActSlot = string;
 
 export interface VenueMapLink {
   label?: string;
@@ -20,6 +46,8 @@ export interface VenueMapLink {
 export interface VenueMapAct {
   slot: VenueMapActSlot;
   slot_label: string;
+  slot_start?: string;
+  slot_end?: string;
   name: string;
   genre: string;
   description: string;
@@ -37,13 +65,12 @@ export interface VenueMapVenue {
 }
 
 /**
- * The complete venues-map document shape. Only `schema_version` and
- * `generated_from` are literal-typed on purpose; widening the season, event,
- * and schedule fields beyond the schema's Goal-1 consts remains a pending owner
- * decision.
+ * The complete deployment-neutral venues-map document shape. Deployment values
+ * such as the season, event details, coordinates, schedules, and slots are
+ * checked against the same general constraints in the JSON Schema.
  */
 export interface VenuesMapDocument {
-  schema_version: typeof VENUES_MAP_SCHEMA_VERSION;
+  schema_version: string;
   season: number;
   generated_from: VenuesMapGeneratedFrom;
   event: {

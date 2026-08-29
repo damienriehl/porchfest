@@ -2,19 +2,23 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   VENUES_MAP_GENERATED_FROM,
+  VENUES_MAP_MINIMUM_SCHEMA_VERSION,
   VENUES_MAP_SCHEMA_VERSION,
   assertVenuesMapSchemaDigest,
   computeVenuesMapSchemaDigest,
+  isSupportedVenuesMapVersion,
   loadVerifiedVenuesMapSchema,
   readPinnedVenuesMapSchemaDigest,
-  type VenuesMapDocument,
+  venuesMapVersionPattern,
 } from "../src/index.js";
+import { makeVenuesMapDocument } from "./fixtures.js";
 
 interface VenuesMapSchema {
   $schema: string;
   required: string[];
   properties: {
-    schema_version: { const: string };
+    schema_version: { type: string; pattern: string };
+    season: { type: string; minimum: number };
     generated_from: { enum: string[] };
   };
   $defs: Record<string, unknown>;
@@ -31,36 +35,7 @@ const pinSource = readFileSync(
 );
 
 // This fixture is compile-time coverage; `npm run typecheck` is the gate.
-const sparse = {
-  schema_version: VENUES_MAP_SCHEMA_VERSION,
-  season: 2026,
-  generated_from: "packages/web/src/routes/map.ts",
-  event: {
-    date: "2026-09-16",
-    time: "6-8 PM",
-    city: "Saint Paul",
-    state: "MN",
-  },
-  venues: [
-    {
-      title: "Synthetic venue",
-      address: "Redacted fixture location",
-      lat: 44.97,
-      lng: -93.19,
-      schedule: "6–7 pm",
-      acts: [
-        {
-          slot: "6-7",
-          slot_label: "6–7 pm",
-          name: "Synthetic act",
-          genre: "",
-          description: "",
-          links: [{ url: "https://example.invalid/act" }],
-        },
-      ],
-    },
-  ],
-} satisfies VenuesMapDocument;
+const sparse = makeVenuesMapDocument();
 void sparse;
 
 describe("venues-map schema contract", () => {
@@ -83,15 +58,34 @@ describe("venues-map schema contract", () => {
     );
   });
 
-  it("declares the 2020-12 draft and the widened v1.2.0 provenance", () => {
+  it("declares the 2020-12 draft and the deployment-neutral v1.3.0 fields", () => {
     expect(schema.$schema).toBe("https://json-schema.org/draft/2020-12/schema");
-    expect(schema.properties.schema_version.const).toBe(
-      VENUES_MAP_SCHEMA_VERSION,
+    expect(VENUES_MAP_SCHEMA_VERSION).toBe("1.3.0");
+    expect(schema.properties.schema_version).toEqual({
+      type: "string",
+      pattern: "^1\\.\\d+\\.\\d+$",
+    });
+    expect(schema.properties.schema_version.pattern).toBe(
+      venuesMapVersionPattern.source,
     );
+    expect(schema.properties.season).toEqual({
+      type: "integer",
+      minimum: 2000,
+    });
     expect(schema.properties.generated_from.enum).toEqual(
       VENUES_MAP_GENERATED_FROM,
     );
     expect(Object.keys(schema.properties.generated_from)).toEqual(["enum"]);
+  });
+
+  it("supports schema versions in the v1 family from the minimum onward", () => {
+    expect(VENUES_MAP_MINIMUM_SCHEMA_VERSION).toBe("1.1.0");
+    expect(isSupportedVenuesMapVersion("1.0.99")).toBe(false);
+    expect(isSupportedVenuesMapVersion("1.1.0")).toBe(true);
+    expect(isSupportedVenuesMapVersion("1.3.0")).toBe(true);
+    expect(isSupportedVenuesMapVersion("1.10.0")).toBe(true);
+    expect(isSupportedVenuesMapVersion("2.0.0")).toBe(false);
+    expect(isSupportedVenuesMapVersion("1.3")).toBe(false);
   });
 
   it("retains the required document keys and nested definitions", () => {
