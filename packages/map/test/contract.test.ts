@@ -48,7 +48,7 @@ describe("venues-map schema contract", () => {
 
   it("rejects schema source whose bytes do not match the pin", () => {
     const mutatedSource = source.replace(
-      '"title": "SAP Porchfest 2026 venues map"',
+      '"title": "SAP Porchfest venues map v1.3.1"',
       '"title": "Mutated venues map"',
     );
 
@@ -58,9 +58,9 @@ describe("venues-map schema contract", () => {
     );
   });
 
-  it("declares the 2020-12 draft and the deployment-neutral v1.3.0 fields", () => {
+  it("declares the 2020-12 draft and the deployment-neutral v1.3.1 fields", () => {
     expect(schema.$schema).toBe("https://json-schema.org/draft/2020-12/schema");
-    expect(VENUES_MAP_SCHEMA_VERSION).toBe("1.3.0");
+    expect(VENUES_MAP_SCHEMA_VERSION).toBe("1.3.1");
     expect(schema.properties.schema_version).toEqual({
       type: "string",
       pattern: "^1\\.\\d+\\.\\d+$",
@@ -83,6 +83,7 @@ describe("venues-map schema contract", () => {
     expect(isSupportedVenuesMapVersion("1.0.99")).toBe(false);
     expect(isSupportedVenuesMapVersion("1.1.0")).toBe(true);
     expect(isSupportedVenuesMapVersion("1.3.0")).toBe(true);
+    expect(isSupportedVenuesMapVersion("1.3.1")).toBe(true);
     expect(isSupportedVenuesMapVersion("1.10.0")).toBe(true);
     expect(isSupportedVenuesMapVersion("2.0.0")).toBe(false);
     expect(isSupportedVenuesMapVersion("1.3")).toBe(false);
