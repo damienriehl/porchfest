@@ -1481,16 +1481,15 @@ test("renders a permanent one-line hour control with exactly one active button",
   assert.match(hourControl.getAttribute("aria-label"), /hour/i);
 });
 
-test("orders hour filters chronologically even when the first venue has only the later slot", async () => {
+test("orders hour filters by start-only times even when the first venue has the later slot", async () => {
   const venues = [
     venue({
       title: "Second Afternoon Stage",
       acts: [
         {
           slot: "slot-b",
-          slot_label: "afternoon-2",
+          slot_label: "afternoon-a",
           slot_start: "14:00:00Z",
-          slot_end: "15:00:00Z",
           name: "Second Afternoon Act",
         },
       ],
@@ -1501,9 +1500,8 @@ test("orders hour filters chronologically even when the first venue has only the
       acts: [
         {
           slot: "slot-a",
-          slot_label: "afternoon-1",
+          slot_label: "afternoon-z",
           slot_start: "13:00:00Z",
-          slot_end: "14:00:00Z",
           name: "First Afternoon Act",
         },
       ],
@@ -1518,11 +1516,11 @@ test("orders hour filters chronologically even when the first venue has only the
 
   assert.deepEqual(
     buttons.map((button) => button.textContent),
-    ["All", "afternoon-1", "afternoon-2"],
+    ["All", "afternoon-z", "afternoon-a"],
   );
 
   buttons[1].dispatchEvent({ type: "click" });
-  assert.equal(run.testApi.getViewState().hour, "afternoon-1");
+  assert.equal(run.testApi.getViewState().hour, "afternoon-z");
   assertViewClasses(run.nodes.list.children[0], "collapsed");
   assertViewClasses(run.nodes.list.children[1], "match");
 });
@@ -2163,6 +2161,46 @@ test("hour filters use intervals to fan a full-evening act across overlapping ch
   applyFilters(run, venues, "6–8 pm", "all");
   assert.deepEqual(
     cards.map((card) => card.classList.contains("is-match")),
+    [true, true, true, true],
+  );
+});
+
+test("hour interval overlap accepts RFC 3339 offsets with optional minutes", async () => {
+  const venues = [
+    venue({
+      title: "Selected Hour",
+      acts: [
+        {
+          slot: "6-7",
+          name: "Selected Act",
+          slot_start: "18:00:00+05",
+          slot_end: "19:00:00+05",
+        },
+      ],
+    }),
+    ...["+05", "+0500", "+05:00"].map((offset, index) =>
+      venue({
+        title: `Full Slot ${index + 1}`,
+        lat: 44.981 + index * 0.001,
+        acts: [
+          {
+            slot: "6-8",
+            name: `Full Act ${index + 1}`,
+            slot_start: `18:00:00${offset}`,
+            slot_end: `20:00:00${offset}`,
+          },
+        ],
+      }),
+    ),
+  ];
+  const run = await runScript({
+    fetch: () => Promise.resolve(response({ venues })),
+  });
+
+  applyFilters(run, venues, "6–7 pm", "all");
+
+  assert.deepEqual(
+    run.nodes.list.children.map((card) => card.classList.contains("is-match")),
     [true, true, true, true],
   );
 });

@@ -159,7 +159,7 @@
   function timeInSeconds(value) {
     var match =
       typeof value === "string" &&
-      /^(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(?:Z|([+-])(\d{2}):?(\d{2}))?$/i.exec(
+      /^(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(?:Z|([+-])(\d{2})(?::?(\d{2}))?)?$/i.exec(
         value,
       );
     var seconds;
@@ -172,7 +172,7 @@
       Number(match[3]) +
       Number("0." + (match[4] || "0"));
     if (match[5]) {
-      offset = Number(match[6]) * 3600 + Number(match[7]) * 60;
+      offset = Number(match[6]) * 3600 + Number(match[7] || "0") * 60;
       seconds += match[5] === "+" ? -offset : offset;
     }
     return seconds;
@@ -335,20 +335,20 @@
     venues.forEach(function (venue) {
       venueActs(venue).forEach(function (act) {
         var label = act && act.slot_label;
-        var interval = actInterval(act);
+        var start = timeInSeconds(act && act.slot_start);
         var existing;
         if (typeof label !== "string" || label.length === 0) return;
         existing = optionsByLabel.get(label);
         if (
           !existing ||
-          (interval &&
-            (existing.start === null || interval.start < existing.start))
+          (start !== null &&
+            (existing.start === null || start < existing.start))
         ) {
           optionsByLabel.set(label, {
             label: cleanText(label),
             name: "Show performances for " + cleanText(label),
             value: label,
-            start: interval ? interval.start : null,
+            start: start,
           });
         }
       });
