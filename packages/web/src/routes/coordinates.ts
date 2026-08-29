@@ -144,9 +144,12 @@ export function registerCoordinateRoutes(
         needsReview: 0,
         unavailable: 0,
         remaining: 0,
+        nextAfterVenueId: null,
       };
       geocodingSeasonsInProgress.add(season.id);
       try {
+        const fields = await readFields(context);
+        const afterVenueId = positiveInteger(fields.after);
         const verified = options.core.geocoding.publishableCoordinatesForSeason(
           season.id,
         );
@@ -158,7 +161,17 @@ export function registerCoordinateRoutes(
               venue.canonicalVenueId === null &&
               !verified.has(venue.id),
           );
-        const batch = eligible.slice(0, GEOCODE_SEASON_BATCH_SIZE);
+        const nextIndex =
+          afterVenueId === null
+            ? 0
+            : eligible.findIndex((venue) => venue.id > afterVenueId);
+        // A completed pass restarts from the beginning so transient failures
+        // remain retryable without starving venues later in id order.
+        const startIndex = nextIndex < 0 ? 0 : nextIndex;
+        const batch = eligible.slice(
+          startIndex,
+          startIndex + GEOCODE_SEASON_BATCH_SIZE,
+        );
         // Deliberately sequential. Nominatim permits one request per second per
         // IP, and the shared adapter enforces that delay between these awaits.
         for (const [index, venue] of batch.entries()) {
@@ -171,7 +184,9 @@ export function registerCoordinateRoutes(
           } catch (error) {
             if (error instanceof TypeError || error instanceof RangeError) {
               const reason = error.message.trim() || error.name;
-              counts.remaining = eligible.length - index;
+              counts.remaining = eligible.length - (startIndex + index);
+              counts.nextAfterVenueId =
+                index === 0 ? afterVenueId : batch[index - 1]!.id;
               console.error(
                 `season ${season.id} geocoding configuration fault: ${reason}`,
               );
@@ -194,7 +209,12 @@ export function registerCoordinateRoutes(
             counts.needsReview += 1;
           }
         }
-        counts.remaining = eligible.length - batch.length;
+        counts.remaining = Math.max(
+          0,
+          eligible.length - (startIndex + batch.length),
+        );
+        counts.nextAfterVenueId =
+          counts.remaining > 0 ? (batch.at(-1)?.id ?? null) : null;
         return coordinatePage(
           options,
           options.core.seasons.getSeason(season.id),

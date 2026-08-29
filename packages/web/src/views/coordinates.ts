@@ -31,6 +31,7 @@ export interface GeocodeSeasonCounts {
   needsReview: number;
   unavailable: number;
   remaining: number;
+  nextAfterVenueId: number | null;
 }
 
 export function renderCoordinatesPage(options: {
@@ -102,13 +103,16 @@ function renderGeocodeSection(options: {
   readonly season: Season;
   readonly geoConfigured: boolean;
   readonly csrf: { readonly geocode: string };
+  readonly counts?: GeocodeSeasonCounts;
 }): string {
   const disabled = options.geoConfigured ? "" : " disabled";
+  const continuation = options.counts?.nextAfterVenueId;
   return `<section aria-labelledby="season-geocoding">
       <h2 id="season-geocoding">Geocode this season</h2>
       ${options.geoConfigured ? '<p class="help">Venues are processed one at a time to respect the provider policy.</p>' : '<p class="help">Geocoding is not configured. Set <code>GEO_PROVIDER</code> to enable it.</p>'}
       <form class="signup-form" method="post" action="/seasons/${options.season.id}/coordinates/geocode">
         <input type="hidden" name="_csrf" value="${escapeHtml(options.csrf.geocode)}">
+        ${continuation == null ? "" : `<input type="hidden" name="after" value="${continuation}">`}
         <button class="secondary-action" type="submit"${disabled}>Geocode this season</button>
       </form>
     </section>`;

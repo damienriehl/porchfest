@@ -492,7 +492,10 @@ describe("organizer coordinate review and map publication (U9)", () => {
     const outcomes: Record<string, LocateOutcome> = {};
     for (let index = 1; index <= 25; index += 1) {
       const address = `${index} Batch Way`;
-      outcomes[address] = located(10.2, 20.2);
+      outcomes[address] =
+        index <= 20
+          ? { kind: "unavailable", reason: "Synthetic transient outage." }
+          : located(10.2, 20.2);
     }
     const geo = new FakeGeoPort(outcomes);
     const { runtime, cookie, season } = await boot(geo);
@@ -514,17 +517,27 @@ describe("organizer coordinate review and map publication (U9)", () => {
     });
 
     expect(first.status).toBe(200);
-    expect(await first.text()).toContain("5 venues remain — run again");
+    const firstHtml = await first.text();
+    expect(firstHtml).toContain("5 venues remain — run again");
     expect(geo.requests).toHaveLength(20);
 
-    html = await (await page(runtime, cookie, season.id)).text();
     const second = await runtime.request(`${PUBLIC_BASE_URL}${action}`, {
       method: "POST",
       headers: formHeaders(cookie),
-      body: new URLSearchParams({ _csrf: tokenFrom(html, action) }),
+      body: new URLSearchParams({
+        _csrf: tokenFrom(firstHtml, action),
+        after: firstHtml.match(/name="after" value="(\d+)"/)?.[1] ?? "",
+      }),
     });
     expect(second.status).toBe(200);
     expect(geo.requests).toHaveLength(25);
+    expect(geo.requests.slice(20).map((request) => request.address)).toEqual([
+      "21 Batch Way",
+      "22 Batch Way",
+      "23 Batch Way",
+      "24 Batch Way",
+      "25 Batch Way",
+    ]);
   });
 
   it("refuses a concurrent geocoding submission for the same season", async () => {
