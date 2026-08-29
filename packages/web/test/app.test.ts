@@ -132,6 +132,27 @@ describe("application scaffold", () => {
         path: "/admin/seasons/:id/transition",
         tier: "organizer",
       },
+      { method: "GET", path: "/seasons/:id/coordinates", tier: "organizer" },
+      {
+        method: "POST",
+        path: "/seasons/:id/coordinates/:venueId/verify",
+        tier: "organizer",
+      },
+      {
+        method: "POST",
+        path: "/seasons/:id/coordinates/geocode",
+        tier: "organizer",
+      },
+      {
+        method: "POST",
+        path: "/seasons/:id/map/publish",
+        tier: "organizer",
+      },
+      {
+        method: "POST",
+        path: "/seasons/:id/map/unpublish",
+        tier: "organizer",
+      },
       { method: "GET", path: "/admin/venues/:id/assign", tier: "organizer" },
       { method: "GET", path: "/admin/acts/:id/assign", tier: "organizer" },
       { method: "POST", path: "/admin/slots/:id/assign", tier: "organizer" },

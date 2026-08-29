@@ -8,6 +8,7 @@ import { registerAdminRecordRoutes } from "./routes/admin-records.js";
 import { registerAdminRetentionRoutes } from "./routes/admin-retention.js";
 import { registerSeasonLifecycleRoutes } from "./routes/season-lifecycle.js";
 import { registerAssignmentRoutes } from "./routes/assign.js";
+import { registerCoordinateRoutes } from "./routes/coordinates.js";
 import { registerOutboxRoutes } from "./routes/outbox.js";
 import { registerMapRoutes } from "./routes/map.js";
 import {
@@ -102,6 +103,8 @@ export function createApp(options: AppOptions): PorchfestApp {
   registerAdminRecordRoutes({ core: options.core, routes, csrfTokenFor });
 
   registerSeasonLifecycleRoutes({ core: options.core, routes, csrfTokenFor });
+
+  registerCoordinateRoutes({ core: options.core, routes, csrfTokenFor });
 
   registerAssignmentRoutes({ core: options.core, routes, csrfTokenFor });
 
