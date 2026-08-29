@@ -16,7 +16,7 @@ import {
   createCoreTestingRepository,
   type CoreTestingRepository,
 } from "@porchfest/core/testing";
-import { NullEmailAdapter, SmtpEmailAdapter } from "@porchfest/email";
+import { NoneEmailAdapter, SmtpEmailAdapter } from "@porchfest/email";
 import { NullGeoAdapter } from "@porchfest/geo";
 import type { Hono } from "hono";
 import type { Context } from "hono";
@@ -123,7 +123,7 @@ function createEmailAdapter(
     passwordFile,
     from,
   ].some((value) => value.length > 0);
-  if (!anySmtpVariable) return new NullEmailAdapter();
+  if (!anySmtpVariable) return new NoneEmailAdapter();
 
   const missing: string[] = [];
   if (host.length === 0) missing.push("PORCHFEST_SMTP_HOST");
@@ -207,6 +207,19 @@ function readSmtpPassword(password: string, passwordFile: string): string {
 }
 
 function requirePlausibleFrom(value: string): string {
+  // The whole value is interpolated into a From header, so the display-name
+  // half needs checking too: a CR or LF there adds a header - a Bcc, say - to
+  // every message the deployment sends. Only the address inside <…> used to be
+  // validated, which left that half entirely unchecked.
+  const hasControlCharacter = [...value].some((character) => {
+    const code = character.codePointAt(0) ?? 0;
+    return code < 0x20 || code === 0x7f;
+  });
+  if (hasControlCharacter) {
+    throw new TypeError(
+      "PORCHFEST_SMTP_FROM must not contain control characters, including a line break.",
+    );
+  }
   const open = value.lastIndexOf("<");
   const close = value.lastIndexOf(">");
   const address =

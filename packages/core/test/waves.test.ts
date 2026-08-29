@@ -222,4 +222,45 @@ describe("renderEml", () => {
     expect(subjectLine).toContain("=?UTF-8?");
     expect(subjectLine).not.toContain("—");
   });
+
+  it("keeps every encoded word a whole number of characters", () => {
+    // Long enough that the header folds, with a multi-byte character sitting
+    // exactly where a fixed 45-byte cut would land mid-sequence.
+    const subject = "Porchfest thank you for hosting on Maple  🎸 café";
+    const folded = renderEml({
+      from: "Maple Ward Porchfest ☕ <organizers@example.invalid>",
+      to: ["wren@example.invalid"],
+      subject,
+      text: "Body",
+      html: "<p>Body</p>",
+    });
+    // Unfold: RFC 5322 continuation lines begin with whitespace.
+    const lines = folded.split("\r\n");
+    const start = lines.findIndex((line) => line.startsWith("Subject: "));
+    expect(start).toBeGreaterThanOrEqual(0);
+    let header = lines[start]!;
+    for (
+      let index = start + 1;
+      index < lines.length && /^[ \t]/.test(lines[index]!);
+      index += 1
+    ) {
+      header += lines[index]!;
+    }
+    const words = [...header.matchAll(/=\?UTF-8\?B\?([^?]+)\?=/g)].map(
+      (match) => match[1]!,
+    );
+
+    expect(words.length).toBeGreaterThan(1);
+    // RFC 2047 section 5: each encoded word must decode on its own. A reader
+    // that decodes word by word - which is what mail clients do - must not see
+    // a replacement character where a UTF-8 sequence was cut in half.
+    for (const word of words) {
+      expect(Buffer.from(word, "base64").toString("utf8")).not.toContain("�");
+    }
+    expect(
+      words
+        .map((word) => Buffer.from(word, "base64").toString("utf8"))
+        .join(""),
+    ).toBe(subject);
+  });
 });

@@ -1,6 +1,6 @@
 import { createServer, type Server, type Socket } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
-import { NullEmailAdapter } from "../src/none.js";
+import { NoneEmailAdapter } from "../src/none.js";
 import {
   SmtpEmailAdapter,
   buildMimeMessage,
@@ -32,11 +32,16 @@ interface CatcherOptions {
   readonly rcptReply?: string;
   readonly answerData?: boolean;
   readonly dropAfter?: string;
+  /** Empty advertises no AUTH mechanism at all. */
   readonly authAdvertisement?: string;
+  /** Advertise STARTTLS and answer 220 - then never speak TLS. */
+  readonly offerStarttls?: boolean;
 }
 
 interface Catcher {
   port: number;
+  /** Every byte the client sent, before any parsing. */
+  raw: string;
   commands: string[];
   rcptTo: string[];
   mailFrom: string | null;
@@ -68,6 +73,7 @@ afterEach(async () => {
 async function startCatcher(options: CatcherOptions = {}): Promise<Catcher> {
   const catcher: Catcher = {
     port: 0,
+    raw: "",
     commands: [],
     rcptTo: [],
     mailFrom: null,
@@ -79,6 +85,7 @@ async function startCatcher(options: CatcherOptions = {}): Promise<Catcher> {
   const rcptReply = options.rcptReply ?? "250 2.1.5 Ok";
   const answerData = options.answerData ?? true;
   const authAdvertisement = options.authAdvertisement ?? "AUTH PLAIN LOGIN";
+  const offerStarttls = options.offerStarttls ?? false;
 
   const server = createServer((socket) => {
     sockets.push(socket);
@@ -123,9 +130,24 @@ async function startCatcher(options: CatcherOptions = {}): Promise<Catcher> {
         return;
       }
       if (verb === "EHLO") {
+        const extensions = [
+          ...(offerStarttls ? ["STARTTLS"] : []),
+          ...(authAdvertisement.length > 0 ? [authAdvertisement] : []),
+        ];
         socket.write(
-          `250-catcher.example.invalid\r\n250-${authAdvertisement}\r\n250 SIZE 10485760\r\n`,
+          [
+            "250-catcher.example.invalid",
+            ...extensions.map((line) => `250-${line}`),
+            "250 SIZE 10485760",
+            "",
+          ].join("\r\n"),
         );
+        return;
+      }
+      if (verb === "STARTTLS") {
+        // Agrees to upgrade and then says nothing: the client's handshake can
+        // only time out, which is the case that used to crash the process.
+        socket.write("220 2.0.0 Ready to start TLS\r\n");
         return;
       }
       if (verb === "AUTH") {
@@ -169,6 +191,7 @@ async function startCatcher(options: CatcherOptions = {}): Promise<Catcher> {
     });
     socket.write("220 catcher.example.invalid ESMTP ready\r\n");
     socket.on("data", (chunk: Buffer) => {
+      catcher.raw += chunk.toString("utf8");
       buffer += chunk.toString("utf8");
       let index = buffer.indexOf("\r\n");
       while (index !== -1) {
@@ -192,19 +215,28 @@ async function startCatcher(options: CatcherOptions = {}): Promise<Catcher> {
   return catcher;
 }
 
+/**
+ * The catcher speaks cleartext, so the adapters these tests drive declare
+ * exactly that: `starttls: false` with authentication explicitly permitted in
+ * the clear. A deployment that leaves STARTTLS on - the default - gets the
+ * enforcement exercised in its own tests below.
+ */
 function createAdapter(
   port: number,
   overrides: Partial<{
     username: string | undefined;
     password: string | undefined;
     timeoutMs: number;
+    starttls: boolean;
+    allowUnencryptedAuth: boolean;
   }> = {},
 ): SmtpEmailAdapter {
   return new SmtpEmailAdapter({
     host: "127.0.0.1",
     port,
     secure: false,
-    starttls: true,
+    starttls: overrides.starttls ?? false,
+    allowUnencryptedAuth: overrides.allowUnencryptedAuth ?? true,
     username: "username" in overrides ? overrides.username : USERNAME,
     password: "password" in overrides ? overrides.password : PASSWORD,
     from: FROM,
@@ -282,7 +314,10 @@ describe("SmtpEmailAdapter", () => {
     expect(catcher.authPlain).toBe(
       Buffer.from(`\0${USERNAME}\0${PASSWORD}`, "utf8").toString("base64"),
     );
-    expect(catcher.commands.join("\n")).not.toContain(PASSWORD);
+    // Every byte the client sent, not just the parsed command words: a leak
+    // into a header, the body, or a stray line would be invisible otherwise.
+    expect(catcher.raw).toContain(catcher.authPlain!);
+    expect(catcher.raw).not.toContain(PASSWORD);
   });
 
   it("falls back to AUTH LOGIN when the server does not advertise PLAIN", async () => {
@@ -362,8 +397,155 @@ describe("SmtpEmailAdapter", () => {
 
   it("passes the shared email port contract alongside the null adapter", async () => {
     const catcher = await startCatcher();
-    await emailPortContract(() => createAdapter(catcher.port));
-    await emailPortContract(() => new NullEmailAdapter());
+    await emailPortContract(() => createAdapter(catcher.port), "sent");
+    await emailPortContract(() => new NoneEmailAdapter(), "skipped");
+  });
+});
+
+describe("SmtpEmailAdapter address handling", () => {
+  it("refuses a recipient carrying a second address in angle brackets", async () => {
+    const catcher = await startCatcher();
+    const result = await createAdapter(catcher.port).deliver({
+      ...MESSAGE,
+      // Passes the signup form's only email check, which allows one "@" and
+      // no whitespace. The envelope must not be taken from the inner pair.
+      recipients: ["a<b@evil.example.invalid>"],
+    });
+
+    expect(result.status).toBe("failed");
+    expect(catcher.rcptTo).toEqual([]);
+    expect(catcher.payload).toBeNull();
+    expect(catcher.raw).not.toContain("evil.example.invalid");
+  });
+
+  it("refuses a recipient carrying CRLF before the socket is opened", async () => {
+    const catcher = await startCatcher();
+    const result = await createAdapter(catcher.port).deliver({
+      ...MESSAGE,
+      recipients: [
+        "victim@porchfest.example.invalid\r\nRCPT TO:<attacker@evil.example.invalid>",
+      ],
+    });
+
+    expect(result.status).toBe("failed");
+    expect(catcher.commands).toEqual([]);
+    expect(catcher.raw).toBe("");
+  });
+
+  it("refuses to send at all when the configured from is not one address", async () => {
+    const catcher = await startCatcher();
+    const adapter = new SmtpEmailAdapter({
+      host: "127.0.0.1",
+      port: catcher.port,
+      secure: false,
+      starttls: false,
+      // No angle pair to unwrap, so the whole string is the envelope address -
+      // and it would end MAIL FROM early and start a command of its own.
+      from: "organizers@porchfest.example.invalid, attacker@evil.example.invalid",
+      timeoutMs: 2_000,
+      clientName: CLIENT_NAME,
+      now: () => FIXED_DATE,
+      createMessageId: () => FIXED_MESSAGE_ID,
+    });
+    const result = await adapter.deliver(MESSAGE);
+
+    expect(result.status).toBe("failed");
+    expect(catcher.mailFrom).toBeNull();
+  });
+
+  it("never lets a recipient become a header of its own", () => {
+    const payload = buildMimeMessage({
+      from: "Porchfest\r\nBcc: everyone@evil.example.invalid <a@b.invalid>",
+      to: [
+        "victim@porchfest.example.invalid\r\nBcc: attacker@evil.example.invalid",
+      ],
+      subject: "Subject",
+      text: "Body",
+      html: "<p>Body</p>",
+      date: FIXED_DATE,
+      messageId: FIXED_MESSAGE_ID,
+    });
+
+    const headers = payload.split(`${"\r\n"}${"\r\n"}`)[0]!.split("\r\n");
+    expect(headers.some((line) => line.startsWith("Bcc:"))).toBe(false);
+    expect(payload).not.toContain("\r\nBcc:");
+  });
+});
+
+describe("SmtpEmailAdapter transport security", () => {
+  it("fails rather than continuing in the clear when STARTTLS is not offered", async () => {
+    const catcher = await startCatcher();
+    const result = await createAdapter(catcher.port, {
+      starttls: true,
+      allowUnencryptedAuth: true,
+    }).deliver(MESSAGE);
+
+    expect(result.status).toBe("failed");
+    expect(result.reason).toContain("STARTTLS");
+    expect(catcher.authPlain).toBeNull();
+    expect(catcher.payload).toBeNull();
+    expect(catcher.raw).not.toContain(PASSWORD);
+  });
+
+  it("refuses to authenticate over a connection that was never encrypted", async () => {
+    const catcher = await startCatcher();
+    const result = await createAdapter(catcher.port, {
+      starttls: false,
+      allowUnencryptedAuth: false,
+    }).deliver(MESSAGE);
+
+    expect(result.status).toBe("failed");
+    expect(result.reason).toContain("unencrypted");
+    expect(catcher.authPlain).toBeNull();
+    expect(catcher.authLoginUsername).toBeNull();
+    expect(catcher.payload).toBeNull();
+  });
+
+  it("still sends unauthenticated over a cleartext relay it was told to use", async () => {
+    const catcher = await startCatcher();
+    const result = await createAdapter(catcher.port, {
+      starttls: false,
+      allowUnencryptedAuth: false,
+      username: undefined,
+      password: undefined,
+    }).deliver(MESSAGE);
+
+    expect(result.status).toBe("sent");
+    expect(catcher.commands.some((line) => line.startsWith("AUTH"))).toBe(
+      false,
+    );
+  });
+
+  it("fails instead of guessing when no AUTH mechanism is advertised", async () => {
+    const catcher = await startCatcher({ authAdvertisement: "" });
+    const result = await createAdapter(catcher.port).deliver(MESSAGE);
+
+    expect(result.status).toBe("failed");
+    expect(result.reason).toContain("AUTH");
+    expect(catcher.authPlain).toBeNull();
+    expect(catcher.raw).not.toContain(PASSWORD);
+  });
+
+  it("survives a STARTTLS upgrade that never completes", async () => {
+    const uncaught: unknown[] = [];
+    const capture = (error: unknown) => uncaught.push(error);
+    process.on("uncaughtException", capture);
+    try {
+      const catcher = await startCatcher({ offerStarttls: true });
+      const result = await createAdapter(catcher.port, {
+        starttls: true,
+        timeoutMs: 200,
+      }).deliver(MESSAGE);
+
+      expect(result.status).toBe("failed");
+      expect(catcher.payload).toBeNull();
+      // The TLS socket outlives the failed handshake; give its error a chance
+      // to land before deciding nothing went unhandled.
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      expect(uncaught).toEqual([]);
+    } finally {
+      process.removeListener("uncaughtException", capture);
+    }
   });
 });
 

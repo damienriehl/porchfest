@@ -693,4 +693,178 @@ describe("outbox", () => {
     // silently invalidate it.
     expect(outbox.getMessage(created.messages[0]!.id).state).toBe("generated");
   });
+
+  // --- U7D review findings -------------------------------------------------
+
+  it("keeps recipients that were already sent when a message leaves the wave", async () => {
+    const generated = matchWave();
+    const message = generated.messages[0]!;
+    expect(message.recipients).toHaveLength(3);
+    port.respond = (email) =>
+      email.recipients[0] === "alder@example.invalid"
+        ? { status: "failed", reason: "mailbox rejected the message" }
+        : { status: "sent", providerMessageId: "provider-1" };
+
+    const report = await outbox.sendSelection({
+      waveId: generated.wave.id,
+      messageIds: [message.id],
+      expectedVersions: { [message.id]: message.version },
+    });
+    expect(report.sent).toBe(2);
+    expect(outbox.getMessage(message.id).sentAt).toBeNull();
+
+    // The venue loses its acts, so it is no longer a matched venue and the
+    // next generation no longer has a target for this message.
+    for (const assignment of seasons.listAssignments(season.id)) {
+      seasons.unassignSlot(assignment.id, assignment.version);
+    }
+    matchWave();
+
+    const stamped = database.sqlite
+      .prepare(
+        "select count(*) as total from outbox_recipients where message_id = ? and sent_at is not null",
+      )
+      .get(message.id) as { total: number };
+    expect(stamped.total).toBe(2);
+    const survivor = outbox.getMessage(message.id);
+    expect(
+      survivor.recipients.filter((row) => row.sentAt !== null),
+    ).toHaveLength(2);
+    expect(outbox.listSendHistory(season.id)).toHaveLength(2);
+  });
+
+  it("refuses to send a message whose expected version the caller never supplied", async () => {
+    const generated = matchWave();
+    const message = generated.messages[0]!;
+
+    await expect(
+      outbox.sendSelection({
+        waveId: generated.wave.id,
+        messageIds: [message.id],
+        expectedVersions: {},
+      }),
+    ).rejects.toBeInstanceOf(OutboxLifecycleError);
+    expect(port.deliveries).toHaveLength(0);
+    expect(outbox.getMessage(message.id).state).toBe("generated");
+  });
+
+  it("refuses to stamp a message sent when an edit landed after the plan was built", async () => {
+    const generated = matchWave();
+    const message = generated.messages[0]!;
+    const transmitted: string[] = [];
+    let rewritten = false;
+    port.respond = (email) => {
+      transmitted.push(email.subject);
+      if (!rewritten) {
+        rewritten = true;
+        const current = outbox.getMessage(message.id);
+        outbox.editMessage(current.id, current.version, {
+          subject: "ORGANIZER REWROTE THIS",
+          text: "A different letter entirely.",
+        });
+      }
+      return { status: "sent", providerMessageId: "provider-1" };
+    };
+
+    const report = await outbox.sendSelection({
+      waveId: generated.wave.id,
+      messageIds: [message.id],
+      expectedVersions: { [message.id]: message.version },
+    });
+
+    // Every recipient got the reviewed bytes, so the stored row must not be
+    // frozen as `sent` around the organizer's newer text.
+    expect(report.sent).toBe(3);
+    expect(new Set(transmitted)).toEqual(new Set([message.subject]));
+    expect(report.completedMessageIds).toEqual([]);
+    const stored = outbox.getMessage(message.id);
+    expect(stored.state).not.toBe("sent");
+    expect(stored.sentAt).toBeNull();
+    expect(stored.subject).toBe("ORGANIZER REWROTE THIS");
+  });
+
+  it("reports a failed outcome it could not record against the recipient", async () => {
+    const generated = matchWave();
+    const message = generated.messages[0]!;
+    const target = message.recipients[0]!;
+    port.respond = (email) => {
+      if (email.recipients[0] !== target.address) {
+        return { status: "sent", providerMessageId: "provider-1" };
+      }
+      // Something else moved this row on between the plan and the stamp.
+      database.sqlite
+        .prepare(
+          "update outbox_recipients set version = version + 1 where id = ?",
+        )
+        .run(target.id);
+      return { status: "failed", reason: "mailbox rejected the message" };
+    };
+
+    const report = await outbox.sendSelection({
+      waveId: generated.wave.id,
+      messageIds: [message.id],
+      expectedVersions: { [message.id]: message.version },
+    });
+
+    const outcome = report.recipients.find(
+      (row) => row.recipientId === target.id,
+    )!;
+    expect(outcome.status).toBe("failed");
+    expect(outcome.recorded).toBe(false);
+    expect(report.recipients.filter((row) => row.recorded)).toHaveLength(2);
+  });
+
+  it("renders without consulting the host's default collation", () => {
+    const original = String.prototype.localeCompare;
+    // A container whose ICU default differs must not reorder a message and
+    // stale a whole season through the fingerprint.
+    String.prototype.localeCompare = function (
+      this: string,
+      that: string,
+      locales?: Intl.LocalesArgument,
+      options?: Intl.CollatorOptions,
+    ): number {
+      if (locales === undefined) {
+        throw new Error("the host's default collation was consulted");
+      }
+      return original.call(this, that, locales, options);
+    };
+    try {
+      const generated = matchWave();
+      const text = generated.messages[0]!.textBody!;
+      const order = ["Alder Quill", "Ash Reedy", "Wren Hostwood"].map((name) =>
+        text.indexOf(name),
+      );
+      expect(order.every((position) => position >= 0)).toBe(true);
+      expect([...order].sort((a, b) => a - b)).toEqual(order);
+    } finally {
+      String.prototype.localeCompare = original;
+    }
+  });
+
+  it("refuses to reuse a wave label under a different recipient rule", () => {
+    const thankYou = outbox.generateWave({
+      seasonId: season.id,
+      kind: "thank_you",
+    });
+    expect(thankYou.wave.recipientRule).toBe("unmatched_venues");
+
+    expect(() =>
+      outbox.generateWave({
+        seasonId: season.id,
+        kind: "thank_you",
+        label: "thank_you",
+        recipientRule: "unmatched_acts",
+      }),
+    ).toThrow(OutboxLifecycleError);
+    expect(
+      outbox.listWaves(season.id).find((row) => row.id === thankYou.wave.id)!
+        .recipientRule,
+    ).toBe("unmatched_venues");
+    expect(
+      outbox
+        .listMessages(thankYou.wave.id)
+        .every((message) => message.recordType === "venue"),
+    ).toBe(true);
+  });
 });

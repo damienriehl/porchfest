@@ -64,6 +64,13 @@ export {
   type SendSelectionInput,
 } from "./outbox.js";
 export {
+  CRLF,
+  encodeHeaderValue,
+  encodeQuotedPrintable,
+  formatRfc5322Date,
+  isPrintableAscii,
+} from "./mime.js";
+export {
   renderEml,
   renderWave,
   textToHtml,

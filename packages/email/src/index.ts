@@ -4,7 +4,7 @@ export type {
   EmailPort,
 } from "@porchfest/core";
 
-export { NullEmailAdapter } from "./none.js";
+export { NoneEmailAdapter } from "./none.js";
 export {
   DEFAULT_SMTP_TIMEOUT_MS,
   SmtpEmailAdapter,

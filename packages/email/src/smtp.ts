@@ -2,35 +2,22 @@ import { createHash, randomUUID } from "node:crypto";
 import { connect as connectPlain, type Socket } from "node:net";
 import { hostname } from "node:os";
 import { connect as connectSecure, type TLSSocket } from "node:tls";
-import type {
-  EmailDeliveryResult,
-  EmailMessage,
-  EmailPort,
+import {
+  CRLF,
+  encodeHeaderValue,
+  encodeQuotedPrintable,
+  formatRfc5322Date,
+  isPrintableAscii,
+  type EmailDeliveryResult,
+  type EmailMessage,
+  type EmailPort,
 } from "@porchfest/core";
+
+export { encodeQuotedPrintable };
 
 export const DEFAULT_SMTP_TIMEOUT_MS = 20_000;
 
-const CRLF = "\r\n";
 const NUL = String.fromCharCode(0);
-const TAB = String.fromCharCode(9);
-const MAX_QP_LINE_LENGTH = 76;
-/** =?UTF-8?B?…?= must stay inside 75 characters; 45 bytes of base64 fits. */
-const MAX_ENCODED_WORD_BYTES = 45;
-const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const MONTHS = [
-  "Jan",
-  "Feb",
-  "Mar",
-  "Apr",
-  "May",
-  "Jun",
-  "Jul",
-  "Aug",
-  "Sep",
-  "Oct",
-  "Nov",
-  "Dec",
-];
 
 export interface MimeMessageInput {
   readonly from: string;
@@ -47,8 +34,19 @@ export interface SmtpEmailAdapterOptions {
   readonly port: number;
   /** Implicit TLS: wrap the socket in TLS before the greeting (port 465). */
   readonly secure: boolean;
-  /** Opportunistic upgrade after EHLO when the server advertises STARTTLS. */
+  /**
+   * Upgrade after EHLO. The provider must advertise STARTTLS; one that does
+   * not is a failure, not a quiet fallback to cleartext.
+   */
   readonly starttls: boolean;
+  /**
+   * Permit AUTH on a connection that is neither implicit TLS nor upgraded.
+   * Off by default - base64 is not encryption, and an on-path attacker who
+   * strips the STARTTLS advertisement would otherwise be handed the password.
+   * Only a deployment that has deliberately pointed the platform at a
+   * plaintext relay it trusts should turn this on.
+   */
+  readonly allowUnencryptedAuth?: boolean;
   readonly username?: string;
   readonly password?: string;
   readonly from: string;
@@ -78,6 +76,7 @@ export class SmtpEmailAdapter implements EmailPort {
   readonly #port: number;
   readonly #secure: boolean;
   readonly #starttls: boolean;
+  readonly #allowUnencryptedAuth: boolean;
   readonly #username: string | undefined;
   readonly #password: string | undefined;
   readonly #from: string;
@@ -120,6 +119,7 @@ export class SmtpEmailAdapter implements EmailPort {
     this.#port = options.port;
     this.#secure = options.secure;
     this.#starttls = options.starttls;
+    this.#allowUnencryptedAuth = options.allowUnencryptedAuth ?? false;
     this.#username = options.username;
     this.#password = options.password;
     this.#from = from;
@@ -139,6 +139,26 @@ export class SmtpEmailAdapter implements EmailPort {
       return {
         status: "failed",
         reason: "No recipient address was supplied.",
+      };
+    }
+    // Every address is checked before the socket exists, so a value that would
+    // have injected an SMTP command or rerouted the envelope never reaches the
+    // wire at all. The reasons name the field, never the offending bytes: they
+    // are recorded against the recipient row, which already holds its address,
+    // and echoing a CRLF-bearing string is how a log line becomes forgeable.
+    const envelopeFrom = envelopeAddress(this.#from);
+    if (!isPlainAddress(envelopeFrom)) {
+      return {
+        status: "failed",
+        reason:
+          "The configured SMTP from address is not a single plain email address.",
+      };
+    }
+    if (!recipients.every(isPlainAddress)) {
+      return {
+        status: "failed",
+        reason:
+          "A recipient address is not a single plain email address; correct it before sending.",
       };
     }
 
@@ -170,27 +190,40 @@ export class SmtpEmailAdapter implements EmailPort {
         250,
       );
 
-      if (this.#starttls && !this.#secure && advertises(greeting, "STARTTLS")) {
+      let encrypted = this.#secure;
+      if (this.#starttls && !this.#secure) {
+        // An on-path attacker only has to delete one line from the EHLO reply
+        // to keep the session in cleartext. Treating a missing advertisement
+        // as "no TLS today" is what makes that free, so it fails instead.
+        if (!advertises(greeting, "STARTTLS")) {
+          throw new SmtpFailure(
+            "The SMTP provider did not offer STARTTLS; refusing to continue in the clear.",
+          );
+        }
         requireCode(await session.command("STARTTLS"), 220);
         await session.upgrade(this.#host);
         greeting = requireCode(
           await session.command(`EHLO ${this.#clientName}`),
           250,
         );
+        encrypted = true;
       }
 
       if (this.#username !== undefined && this.#password !== undefined) {
+        // KTD15: base64 is not encryption. AUTH on a connection that is
+        // neither implicit TLS nor upgraded hands the password to anyone on
+        // the path, so it takes a deliberate deployment opt-in.
+        if (!encrypted && !this.#allowUnencryptedAuth) {
+          throw new SmtpFailure(
+            "Refusing to send SMTP credentials over an unencrypted connection.",
+          );
+        }
         await authenticate(session, greeting, this.#username, this.#password);
       }
 
-      requireCode(
-        await session.command(`MAIL FROM:<${envelopeAddress(this.#from)}>`),
-        250,
-      );
+      requireCode(await session.command(`MAIL FROM:<${envelopeFrom}>`), 250);
       for (const recipient of recipients) {
-        const reply = await session.command(
-          `RCPT TO:<${envelopeAddress(recipient)}>`,
-        );
+        const reply = await session.command(`RCPT TO:<${recipient}>`);
         // A rejected recipient aborts before DATA: half-delivering a wave is
         // worse than delivering none, because the outbox would record a send.
         if (reply.code !== 250 && reply.code !== 251) throw failureFor(reply);
@@ -221,10 +254,13 @@ export function buildMimeMessage(input: MimeMessageInput): string {
   const messageId = normalizeMessageId(input.messageId);
   const boundary = deriveBoundary(messageId);
   return [
-    `From: ${input.from}`,
-    `To: ${input.to.join(", ")}`,
+    // Every header value goes through the RFC 2047 encoder, not just the
+    // subject: a CR or LF anywhere in a name or an address would otherwise
+    // start a header of the sender's choosing - a Bcc, most usefully.
+    `From: ${encodeHeaderValue(input.from)}`,
+    `To: ${input.to.map((address) => encodeHeaderValue(address)).join(", ")}`,
     `Subject: ${encodeHeaderValue(input.subject)}`,
-    `Date: ${formatDate(input.date)}`,
+    `Date: ${formatRfc5322Date(input.date)}`,
     `Message-ID: ${messageId}`,
     "MIME-Version: 1.0",
     `Content-Type: multipart/alternative; boundary="${boundary}"`,
@@ -241,83 +277,6 @@ export function buildMimeMessage(input: MimeMessageInput): string {
     encodeQuotedPrintable(input.html),
     `--${boundary}--`,
   ].join(CRLF);
-}
-
-/** RFC 2045 section 6.7. Lines stay within 76 characters including the "=". */
-export function encodeQuotedPrintable(input: string): string {
-  const normalized = input.split(CRLF).join("\n").split("\r").join("\n");
-  const bytes = Buffer.from(normalized, "utf8");
-  const lines: string[] = [];
-  let line = "";
-
-  for (const byte of bytes) {
-    if (byte === 0x0a) {
-      lines.push(...closeLine(line));
-      line = "";
-      continue;
-    }
-    const token = encodeByte(byte);
-    if (line.length + token.length > MAX_QP_LINE_LENGTH - 1) {
-      lines.push(`${line}=`);
-      line = "";
-    }
-    line += token;
-  }
-  lines.push(...closeLine(line));
-  return lines.join(CRLF);
-}
-
-function encodeByte(byte: number): string {
-  if (byte === 0x3d) return "=3D";
-  if (byte === 0x09 || byte === 0x20) return String.fromCharCode(byte);
-  if (byte >= 0x21 && byte <= 0x7e) return String.fromCharCode(byte);
-  return `=${byte.toString(16).toUpperCase().padStart(2, "0")}`;
-}
-
-/**
- * Whitespace at end of line is stripped by many relays, which would silently
- * change the body. Encode the last one so the run survives transport.
- */
-function closeLine(line: string): string[] {
-  const last = line.slice(-1);
-  if (last !== " " && last !== TAB) return [line];
-  const encoded = last === " " ? "=20" : "=09";
-  const head = line.slice(0, -1);
-  if (head.length + encoded.length <= MAX_QP_LINE_LENGTH) {
-    return [`${head}${encoded}`];
-  }
-  return [`${head}=`, encoded];
-}
-
-function encodeHeaderValue(value: string): string {
-  if (isPrintableAscii(value)) return value;
-  const bytes = Buffer.from(value, "utf8");
-  const words: string[] = [];
-  let start = 0;
-  while (start < bytes.length) {
-    let end = Math.min(start + MAX_ENCODED_WORD_BYTES, bytes.length);
-    // Never split a UTF-8 sequence across two encoded words.
-    while (end < bytes.length && ((bytes[end] ?? 0) & 0xc0) === 0x80) end -= 1;
-    words.push(`=?UTF-8?B?${bytes.subarray(start, end).toString("base64")}?=`);
-    start = end;
-  }
-  return words.join(`${CRLF} `);
-}
-
-function isPrintableAscii(value: string): boolean {
-  for (const character of value) {
-    const code = character.codePointAt(0) ?? 0;
-    if (code < 0x20 || code > 0x7e) return false;
-  }
-  return true;
-}
-
-function formatDate(date: Date): string {
-  const pad = (value: number) => String(value).padStart(2, "0");
-  const weekday = WEEKDAYS[date.getUTCDay()] ?? "Sun";
-  const month = MONTHS[date.getUTCMonth()] ?? "Jan";
-  const time = `${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}`;
-  return `${weekday}, ${pad(date.getUTCDate())} ${month} ${date.getUTCFullYear()} ${time} +0000`;
 }
 
 function normalizeMessageId(value: string): string {
@@ -338,12 +297,39 @@ function addressDomain(from: string): string {
   return at === -1 ? "porchfest.invalid" : address.slice(at + 1);
 }
 
+/**
+ * The address inside a configured `Name <addr>` value.
+ *
+ * Only ever applied to the deployment's own `from`: taking the last angle pair
+ * out of a *recipient* would let `a<b@evil.invalid>` - a string the signup
+ * form's one-@-no-whitespace check accepts - reroute the envelope while the
+ * outbox recorded the address it thought it sent to.
+ */
 function envelopeAddress(value: string): string {
   const trimmed = value.trim();
   const open = trimmed.lastIndexOf("<");
   const close = trimmed.lastIndexOf(">");
   if (open !== -1 && close > open) return trimmed.slice(open + 1, close).trim();
   return trimmed;
+}
+
+/**
+ * A single plain addr-spec, safe to place between the angle brackets of a
+ * MAIL FROM or RCPT TO without ending the command.
+ *
+ * Rejects CR, LF, NUL and every other control character (SMTP command
+ * injection), angle brackets (a second address hiding inside the first),
+ * whitespace and the RFC 5322 specials that only appear in a display name.
+ */
+function isPlainAddress(value: string): boolean {
+  if (value.length === 0 || value.length > 254) return false;
+  // Printable US-ASCII only: that rules out CR, LF, NUL and every other
+  // control character in one check, and this adapter never negotiates
+  // SMTPUTF8, so a non-ASCII envelope address could not be delivered anyway.
+  if (!isPrintableAscii(value)) return false;
+  if (/[\s<>,;:"\\()[\]]/.test(value)) return false;
+  const at = value.indexOf("@");
+  return at > 0 && at === value.lastIndexOf("@") && at < value.length - 1;
 }
 
 /** RFC 5321 transparency: a body line starting with "." gets a second one. */
@@ -402,15 +388,23 @@ async function authenticate(
         .map((mechanism) => mechanism.toUpperCase()),
     );
 
-  if (!mechanisms.includes("PLAIN") && mechanisms.includes("LOGIN")) {
+  // Chosen from what the server said it supports. Falling through to AUTH
+  // PLAIN when nothing was advertised sent the credentials to a server that
+  // never claimed to want them.
+  if (mechanisms.includes("PLAIN")) {
+    const token = base64(`${NUL}${username}${NUL}${password}`);
+    requireCode(await session.command(`AUTH PLAIN ${token}`), 235);
+    return;
+  }
+  if (mechanisms.includes("LOGIN")) {
     requireCode(await session.command("AUTH LOGIN"), 334);
     requireCode(await session.command(base64(username)), 334);
     requireCode(await session.command(base64(password)), 235);
     return;
   }
-
-  const token = base64(`${NUL}${username}${NUL}${password}`);
-  requireCode(await session.command(`AUTH PLAIN ${token}`), 235);
+  throw new SmtpFailure(
+    "The SMTP provider advertised no AUTH mechanism this adapter supports.",
+  );
 }
 
 function base64(value: string): string {
@@ -523,12 +517,26 @@ class SmtpSession {
       socket: plain,
       servername: host,
     });
-    await waitForEvent(secure, "secureConnect", this.#timeoutMs);
+    // Attached before the await, and the socket adopted before it too.
+    // `waitForEvent` removes its own error listener when it settles, so a
+    // handshake that fails after that - a rejected certificate, or an RST once
+    // the plain socket is torn down underneath - would emit `error` on a socket
+    // with no listener, which Node escalates into an uncaught exception that
+    // takes the whole web process with it. `open` already guards this shape.
+    const guard = (error: Error) => this.#abort(error);
+    secure.on("error", guard);
+    this.#socket = secure;
+    try {
+      await waitForEvent(secure, "secureConnect", this.#timeoutMs);
+    } catch (error) {
+      secure.destroy();
+      throw error;
+    }
+    secure.removeListener("error", guard);
     // Anything buffered before the upgrade belongs to the cleartext session and
     // must never be trusted as part of the protected conversation.
     this.#buffer = "";
     this.#failure = null;
-    this.#socket = secure;
     this.#listen(secure);
   }
 

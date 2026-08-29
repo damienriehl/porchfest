@@ -8,6 +8,12 @@
 // the same waves. A sixth post-event template covers R24's follow-up.
 
 import { createHash } from "node:crypto";
+import {
+  CRLF,
+  encodeHeaderValue,
+  encodeQuotedPrintable,
+  formatRfc5322Date,
+} from "./mime.js";
 
 export class WaveTemplateError extends Error {
   override readonly name = "WaveTemplateError";
@@ -318,85 +324,6 @@ export interface EmlInput {
   readonly messageId?: string;
 }
 
-const CRLF = "\r\n";
-
-/**
- * Quoted-printable per RFC 2045. Chosen over base64 because an exported .eml is
- * something an organizer may open in a text editor, and a quoted-printable body
- * is still readable there.
- */
-function encodeQuotedPrintable(text: string): string {
-  const encoded: string[] = [];
-  for (const line of text.replaceAll("\r\n", "\n").split("\n")) {
-    let current = "";
-    const emit = () => {
-      encoded.push(current);
-      current = "";
-    };
-    for (const byte of Buffer.from(line, "utf8")) {
-      const printable =
-        (byte >= 33 && byte <= 60) ||
-        (byte >= 62 && byte <= 126) ||
-        byte === 32;
-      const chunk = printable
-        ? String.fromCharCode(byte)
-        : `=${byte.toString(16).toUpperCase().padStart(2, "0")}`;
-      // 75 leaves room for the soft-break "=" that closes a wrapped line.
-      if (current.length + chunk.length > 75) {
-        current += "=";
-        emit();
-      }
-      current += chunk;
-    }
-    // A trailing space would be stripped by a transport, so encode it.
-    if (current.endsWith(" ")) current = `${current.slice(0, -1)}=20`;
-    emit();
-  }
-  return encoded.join(CRLF);
-}
-
-const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
-const MONTHS = [
-  "Jan",
-  "Feb",
-  "Mar",
-  "Apr",
-  "May",
-  "Jun",
-  "Jul",
-  "Aug",
-  "Sep",
-  "Oct",
-  "Nov",
-  "Dec",
-] as const;
-
-function rfc5322Date(date: Date): string {
-  const pad = (value: number) => String(value).padStart(2, "0");
-  return [
-    `${WEEKDAYS[date.getUTCDay()]},`,
-    pad(date.getUTCDate()),
-    MONTHS[date.getUTCMonth()],
-    date.getUTCFullYear(),
-    `${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}`,
-    "+0000",
-  ].join(" ");
-}
-
-/** RFC 2047 encoded words, folded so no header line runs long. */
-function encodeHeaderValue(value: string): string {
-  // Anything outside printable US-ASCII must travel as an RFC 2047 encoded word.
-  if (!/[^\x20-\x7E]/.test(value)) return value;
-  const bytes = Buffer.from(value, "utf8");
-  const words: string[] = [];
-  for (let offset = 0; offset < bytes.length; offset += 45) {
-    words.push(
-      `=?UTF-8?B?${bytes.subarray(offset, offset + 45).toString("base64")}?=`,
-    );
-  }
-  return words.join(`${CRLF} `);
-}
-
 /**
  * A complete RFC 5322 message. Core never transmits, but an organizer with no
  * configured provider still needs something they can import or forward (R12),
@@ -412,7 +339,7 @@ export function renderEml(input: EmlInput): string {
     `To: ${input.to.map((address) => encodeHeaderValue(address)).join(", ")}`,
     `Subject: ${encodeHeaderValue(input.subject)}`,
   ];
-  if (input.date) headers.push(`Date: ${rfc5322Date(input.date)}`);
+  if (input.date) headers.push(`Date: ${formatRfc5322Date(input.date)}`);
   if (input.messageId) headers.push(`Message-ID: <${input.messageId}>`);
   headers.push(
     "MIME-Version: 1.0",

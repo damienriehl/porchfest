@@ -126,6 +126,12 @@ export interface SendRecipientOutcome {
   readonly status: EmailDeliveryResult["status"];
   readonly reason: string | null;
   readonly providerMessageId: string | null;
+  /**
+   * Whether this outcome reached the recipient row. False when the row moved
+   * on under the send - the outcome happened, but nothing recorded it, and a
+   * sweep must treat the recipient as still needing attention.
+   */
+  readonly recorded: boolean;
 }
 
 export interface SendReport {
@@ -238,6 +244,11 @@ function rainLine(value: boolean | null): string {
 
 function label(table: Readonly<Record<string, string>>, value: string): string {
   return table[value] ?? value.replaceAll("_", " ");
+}
+
+/** Ordering that is the same on every host, unlike a default-locale collation. */
+function compareCodePoints(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 interface SeasonSource {
@@ -406,10 +417,13 @@ export function createOutboxRepository(
 
   function sortContacts(list: readonly Contact[]): Contact[] {
     // Name then id, so the order a message lists people in never depends on the
-    // order they happened to sign up in.
+    // order they happened to sign up in - and by code point, so it never
+    // depends on the container's ICU default either. A host whose collation
+    // ordered two accented names differently would otherwise change the
+    // rendered bytes, and with them the fingerprint that decides staleness.
     return [...list].sort(
       (left, right) =>
-        left.name.localeCompare(right.name) || left.id - right.id,
+        compareCodePoints(left.name, right.name) || left.id - right.id,
     );
   }
 
@@ -670,7 +684,7 @@ export function createOutboxRepository(
 
   function fingerprint(templateKey: string, context: RenderContext): string {
     const canonical = Object.entries(context as Record<string, string>).sort(
-      ([left], [right]) => left.localeCompare(right),
+      ([left], [right]) => compareCodePoints(left, right),
     );
     return createHash("sha256")
       .update(JSON.stringify([templateKey, canonical]))
@@ -716,6 +730,25 @@ export function createOutboxRepository(
       fingerprint: fingerprint(templateKey, built.context),
       contacts: built.contacts,
     };
+  }
+
+  /** The record a stored message was rendered from, if it still qualifies. */
+  function targetFor(
+    source: SeasonSource,
+    recordType: OutboxRecordType,
+    recordId: number,
+  ): Target | null {
+    if (recordType === "venue") {
+      const venue = source.venues.find((row) => row.id === recordId);
+      return venue === undefined
+        ? null
+        : { recordType: "venue", record: venue };
+    }
+    if (recordType === "act") {
+      const act = source.acts.find((row) => row.id === recordId);
+      return act === undefined ? null : { recordType: "act", record: act };
+    }
+    return null;
   }
 
   function targetsFor(
@@ -829,7 +862,9 @@ export function createOutboxRepository(
       const complete =
         rows.length > 0 &&
         rows.every((row) => row.state === "sent" && row.sentAt !== null);
-
+      // A wave that completed at any point has bodies to purge, even if a
+      // regeneration has since reopened it: those bodies belong to rows that
+      // are already terminal, and their lifetime ended when the wave finished.
       if (complete || wave.status === "complete") {
         // Narrowed to terminal rows on purpose: a regeneration that landed in
         // this wave between the completion check and this statement is not
@@ -850,13 +885,11 @@ export function createOutboxRepository(
           )
           .run();
       }
-
-      const status = complete ? "complete" : "open";
-      if (status === wave.status) continue;
+      if (complete === (wave.status === "complete")) continue;
       executor
         .update(outboxWaves)
         .set({
-          status,
+          status: complete ? "complete" : "open",
           version: sql`${outboxWaves.version} + 1`,
           updatedAt: stamp,
         })
@@ -894,22 +927,7 @@ export function createOutboxRepository(
         )
         .all();
       for (const message of rows) {
-        const target: Target | null =
-          message.recordType === "venue"
-            ? (source.venues
-                .filter((venue) => venue.id === message.recordId)
-                .map((venue) => ({
-                  recordType: "venue" as const,
-                  record: venue,
-                }))[0] ?? null)
-            : message.recordType === "act"
-              ? (source.acts
-                  .filter((act) => act.id === message.recordId)
-                  .map((act) => ({
-                    recordType: "act" as const,
-                    record: act,
-                  }))[0] ?? null)
-              : null;
+        const target = targetFor(source, message.recordType, message.recordId);
         if (target === null) continue;
         const fresh = renderTarget(
           source,
@@ -965,6 +983,7 @@ export function createOutboxRepository(
       subjectTemplate: string;
       bodyTemplate: string;
     },
+    stamp: Date,
   ): OutboxWave {
     const existing = executor
       .select()
@@ -982,9 +1001,17 @@ export function createOutboxRepository(
           `wave ${input.label} already exists as a ${existing.kind} wave`,
         );
       }
+      // The caller builds its targets from the rule it passed in; returning a
+      // row that names a different one would leave the wave describing an
+      // audience its own messages were never generated for, and `refreshIn`
+      // would then check them against that wrong rule.
+      if (existing.recipientRule !== input.recipientRule) {
+        throw new OutboxLifecycleError(
+          `wave ${input.label} already exists for ${existing.recipientRule}, not ${input.recipientRule}`,
+        );
+      }
       return existing;
     }
-    const stamp = now();
     return executor
       .insert(outboxWaves)
       .values({
@@ -1018,8 +1045,8 @@ export function createOutboxRepository(
     executor: CoreExecutor,
     message: Pick<OutboxMessage, "id" | "seasonId">,
     people: readonly Contact[],
+    stamp: Date,
   ): void {
-    const stamp = now();
     const wanted = new Map(
       people
         .filter((contact) => (contact.email ?? "").trim().length > 0)
@@ -1093,13 +1120,20 @@ export function createOutboxRepository(
             : `${input.kind}_${rule}`);
         const primaryRecordType: OutboxRecordType =
           rule === "unmatched_acts" ? "act" : "venue";
-        const wave = ensureWave(tx, {
-          seasonId: input.seasonId,
-          kind: input.kind,
-          label: waveLabel,
-          recipientRule: rule,
-          ...splitTemplate(templateKeyFor(input.kind, primaryRecordType)),
-        });
+        // One stamp for the whole generation: every row it writes carries the
+        // same `updatedAt`, so a single call cannot look like several.
+        const stamp = now();
+        const wave = ensureWave(
+          tx,
+          {
+            seasonId: input.seasonId,
+            kind: input.kind,
+            label: waveLabel,
+            recipientRule: rule,
+            ...splitTemplate(templateKeyFor(input.kind, primaryRecordType)),
+          },
+          stamp,
+        );
 
         const source = loadSource(tx, input.seasonId);
         const targets = targetsFor(source, rule);
@@ -1109,7 +1143,6 @@ export function createOutboxRepository(
           .where(eq(outboxMessages.waveId, wave.id))
           .all();
         const keep = new Set<string>();
-        const stamp = now();
 
         for (const target of targets) {
           keep.add(`${target.recordType}:${target.record.id}`);
@@ -1184,7 +1217,7 @@ export function createOutboxRepository(
           }
           const stored = messageRow(tx, messageId);
           if (stored.sentAt === null) {
-            syncRecipients(tx, stored, payload.contacts);
+            syncRecipients(tx, stored, payload.contacts, stamp);
           }
         }
 
@@ -1196,14 +1229,38 @@ export function createOutboxRepository(
           ) {
             continue;
           }
+          // KTD6/R13: a message stays unsent while any one recipient failed, so
+          // an unsent message can still own stamped recipient rows. Dropping it
+          // out of the wave must never take that send history with it - the
+          // people who were written to would be re-mailed on the next send.
+          const current = messageRow(tx, row.id);
+          if (current.sentAt !== null) continue;
+          const recipients = recipientRows(tx, row.id);
+          if (recipients.some((recipient) => recipient.sentAt !== null)) {
+            continue;
+          }
+          // The child rows go first because they hold the foreign key, and the
+          // parent delete's own guard is checked: a message the guard refuses
+          // would otherwise outlive the recipients that were already removed.
+          // Raising here rolls the whole generation back rather than leaving
+          // that orphan behind.
           tx.delete(outboxRecipients)
-            .where(eq(outboxRecipients.messageId, row.id))
+            .where(
+              and(
+                eq(outboxRecipients.messageId, row.id),
+                isNull(outboxRecipients.sentAt),
+              ),
+            )
             .run();
-          tx.delete(outboxMessages)
+          const removed = tx
+            .delete(outboxMessages)
             .where(
               and(eq(outboxMessages.id, row.id), isNull(outboxMessages.sentAt)),
             )
             .run();
+          if (removed.changes !== 1) {
+            conflict("outbox_message", row.id, ["sentAt"]);
+          }
         }
 
         purgeIn(tx, input.seasonId);
@@ -1221,15 +1278,19 @@ export function createOutboxRepository(
       (tx) => {
         settle(tx, input.seasonId);
         const source = loadSource(tx, input.seasonId);
-        const wave = ensureWave(tx, {
-          seasonId: input.seasonId,
-          kind: "ad_hoc",
-          label: input.label,
-          recipientRule: "manual",
-          subjectTemplate: input.subject,
-          bodyTemplate: input.text,
-        });
         const stamp = now();
+        const wave = ensureWave(
+          tx,
+          {
+            seasonId: input.seasonId,
+            kind: "ad_hoc",
+            label: input.label,
+            recipientRule: "manual",
+            subjectTemplate: input.subject,
+            bodyTemplate: input.text,
+          },
+          stamp,
+        );
         const html = textToHtml(input.text);
         const stored = createHash("sha256")
           .update(JSON.stringify(["ad_hoc", input.subject, input.text]))
@@ -1273,7 +1334,9 @@ export function createOutboxRepository(
               .returning({ id: outboxMessages.id })
               .get().id;
           const message = messageRow(tx, messageId);
-          if (message.sentAt === null) syncRecipients(tx, message, [contact]);
+          if (message.sentAt === null) {
+            syncRecipients(tx, message, [contact], stamp);
+          }
         }
 
         purgeIn(tx, input.seasonId);
@@ -1364,8 +1427,17 @@ export function createOutboxRepository(
               `outbox message ${messageId} does not belong to wave ${wave.id}`,
             );
           }
+          // KTD7: sending is a mutation of the message, so the organizer must
+          // name the version they reviewed. An absent entry used to mean "no
+          // check at all", which let a selection built from a stale screen
+          // transmit bytes nobody approved.
           const expected = input.expectedVersions[messageId];
-          if (expected !== undefined && expected !== message.version) {
+          if (expected === undefined) {
+            throw new OutboxLifecycleError(
+              `outbox message ${messageId} was selected without the version it was reviewed at`,
+            );
+          }
+          if (expected !== message.version) {
             conflict("outbox_message", messageId, ["send"]);
           }
           if (message.sentAt !== null) continue;
@@ -1407,7 +1479,7 @@ export function createOutboxRepository(
           };
         }
 
-        db.transaction(
+        const recorded = db.transaction(
           (tx) => {
             const stamp = now();
             if (result.status === "sent") {
@@ -1447,9 +1519,10 @@ export function createOutboxRepository(
                   messageId: item.message.id,
                 })
                 .run();
-              return;
+              return true;
             }
-            tx.update(outboxRecipients)
+            const noted = tx
+              .update(outboxRecipients)
               .set({
                 outcome: result.status,
                 reason: result.reason ?? null,
@@ -1464,6 +1537,10 @@ export function createOutboxRepository(
                 ),
               )
               .run();
+            // The row moved on under us - stamped or corrected elsewhere. The
+            // outcome is real and belongs in the report, but claiming it was
+            // written down when it was not is how a skipped person disappears.
+            return noted.changes === 1;
           },
           { behavior: "immediate" },
         );
@@ -1476,6 +1553,7 @@ export function createOutboxRepository(
           status: result.status,
           reason: result.reason ?? null,
           providerMessageId: result.providerMessageId ?? null,
+          recorded,
         });
       }
 
@@ -1501,7 +1579,10 @@ export function createOutboxRepository(
             .where(
               and(
                 eq(outboxMessages.id, message.id),
-                eq(outboxMessages.version, message.version),
+                // KTD5: the version the transmitted bytes came from, not the
+                // one just read - an edit that landed mid-send would otherwise
+                // be frozen as `sent` around text nobody received.
+                eq(outboxMessages.version, item.message.version),
                 isNull(outboxMessages.sentAt),
               ),
             )
