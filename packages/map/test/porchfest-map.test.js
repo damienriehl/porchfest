@@ -3,7 +3,10 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
-import { test } from "vitest";
+
+const { test } = process.env.VITEST
+  ? await import("vitest")
+  : await import("node:test");
 
 const scriptPath = path.join(
   import.meta.dirname,
