@@ -42,13 +42,26 @@ export {
   type VerifiedCoordinate,
 } from "./verify.js";
 
-import type { GeocodeRequest, GeoPort } from "@porchfest/core";
+import type {
+  GeocodeRequest,
+  GeoPort,
+  LocateOutcome,
+  LocateRequest,
+} from "@porchfest/core";
 
 export class NullGeoAdapter implements GeoPort {
   readonly name = "none";
   readonly configured = false;
 
-  async geocode(_request: GeocodeRequest) {
-    return null;
+  async locate(_request: LocateRequest): Promise<LocateOutcome> {
+    return {
+      kind: "unavailable" as const,
+      reason: "no geocoding provider configured",
+    };
+  }
+
+  async geocode(request: GeocodeRequest) {
+    const outcome = await this.locate(request);
+    return outcome.kind === "located" ? outcome.candidate : null;
   }
 }

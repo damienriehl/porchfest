@@ -131,12 +131,66 @@ describe("OpenStreetMapGeoAdapter", () => {
         ref: "way/42",
       },
       crossCheck: { latitude: 10.1235, longitude: 20.7655 },
+      reason: "Located a parcel-level address point.",
     });
     await expect(adapter.geocode({ address: ADDRESS })).resolves.toEqual({
       latitude: 10.123456,
       longitude: 20.765433,
     });
     expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses per-call season bounds and locality and keys Overpass snapshots by box", async () => {
+    const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+      if (String(input).includes("overpass-api.de")) {
+        const query = new URLSearchParams(String(init?.body)).get("data") ?? "";
+        return jsonResponse({
+          elements: [
+            query.includes("(30,40,31,41)")
+              ? overpassElement("way", 41, 30.5, 40.5)
+              : overpassElement("way", 21, 10.5, 20.5),
+          ],
+        });
+      }
+      return jsonResponse([]);
+    });
+    const adapter = new OpenStreetMapGeoAdapter({
+      userAgent: "porchfest-geocoder-tests/1.0 (example.invalid)",
+      fetcher,
+      wait: async () => undefined,
+    });
+
+    const first = await adapter.locate({
+      address: ADDRESS,
+      boundingBox: BOUNDS,
+      localityName: LOCALITY,
+    });
+    const second = await adapter.locate({
+      address: ADDRESS,
+      boundingBox: { south: 30, north: 31, west: 40, east: 41 },
+      localityName: "Second Borough, ZZ",
+    });
+
+    expect(first).toMatchObject({
+      kind: "located",
+      candidate: { latitude: 10.5, longitude: 20.5 },
+    });
+    expect(second).toMatchObject({
+      kind: "located",
+      candidate: { latitude: 30.5, longitude: 40.5 },
+    });
+    const requestedUrls = fetcher.mock.calls.map(([input]) => String(input));
+    expect(requestedUrls.filter((url) => url.includes("overpass"))).toHaveLength(
+      2,
+    );
+    expect(requestedUrls).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("viewbox=20%2C10%2C21%2C11"),
+        expect.stringContaining("viewbox=40%2C30%2C41%2C31"),
+        expect.stringContaining("Example+Borough%2C+ZZ"),
+        expect.stringContaining("Second+Borough%2C+ZZ"),
+      ]),
+    );
   });
 
   it("prefers ways over nodes, then the lowest id within the same kind", async () => {
