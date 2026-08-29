@@ -198,6 +198,28 @@ describe("core venue geocoding (U9 / KTD11)", () => {
     expect(geocoding().publishableCoordinate(venue.id)).toBeNull();
   });
 
+  it("keeps a verified pin published after a whitespace-only address edit", async () => {
+    const { venue } = fixture();
+    await geocoding().geocodeVenue(venue.id, actor);
+    const before = stored(venue.id);
+
+    seasons.updateVenue(venue.id, venue.version, {
+      address: `${ADDRESS} `,
+    });
+
+    expect(stored(venue.id)).toMatchObject({
+      id: before?.id,
+      version: before?.version,
+      status: "verified",
+      rejectionCode: null,
+      addressAtGeocode: ADDRESS,
+    });
+    expect(geocoding().publishableCoordinate(venue.id)).toEqual({
+      latitude: 10.5,
+      longitude: 20.5,
+    });
+  });
+
   it("R17: an out-of-bounds result is stored for review and never published", async () => {
     const { season, venue } = fixture();
     fake.locate.mockResolvedValue(located({ latitude: 12 }));
@@ -229,6 +251,11 @@ describe("core venue geocoding (U9 / KTD11)", () => {
       "parcel with cross-check <= 30 m -> verified",
       located({}, { latitude: 10.5001, longitude: 20.5 }),
       null,
+    ],
+    [
+      "house with a distant cross-check -> needs-review cross-check-distance",
+      located({ precision: "house" }, { latitude: 10.527, longitude: 20.5 }),
+      "cross-check-distance",
     ],
   ] as const)("%s", async (_label, outcome, rejectionCode) => {
     const { venue } = fixture();
@@ -300,8 +327,24 @@ describe("core venue geocoding (U9 / KTD11)", () => {
 
     await expect(geocoding().geocodeVenue(venue.id, actor)).resolves.toEqual({
       kind: "unavailable",
-      reason: "fake-geo failed before returning a geocoding outcome.",
+      reason:
+        "fake-geo failed before returning a geocoding outcome: synthetic provider failure",
     });
+    expect(stored(venue.id)).toBeUndefined();
+  });
+
+  it("surfaces an invalid locality as a caller configuration fault", async () => {
+    const { venue } = fixture(2037, BOX, "—");
+    fake.locate.mockImplementation(async (request) => {
+      if (request.localityName === "—") {
+        throw new TypeError("localityName must contain a word or number.");
+      }
+      return located();
+    });
+
+    await expect(geocoding().geocodeVenue(venue.id, actor)).rejects.toThrow(
+      /localityName/,
+    );
     expect(stored(venue.id)).toBeUndefined();
   });
 
@@ -335,6 +378,82 @@ describe("core venue geocoding (U9 / KTD11)", () => {
       updatedBy: actor,
     });
     expect(geocoding().publishableCoordinate(venue.id)).toBeNull();
+  });
+
+  it("lists pending legacy, not-found, and refused rows for organizer review", async () => {
+    const { season, venue: legacyVenue } = fixture();
+    const createVenue = (suffix: string) =>
+      seasons.createHostSignup({
+        seasonId: season.id,
+        contact: {
+          name: `Synthetic Host ${suffix}`,
+          email: `host-${suffix.toLowerCase()}@example.invalid`,
+        },
+        venue: {
+          title: `Synthetic Porch ${suffix}`,
+          address: `${suffix} Nebula Avenue`,
+          spaceDescription: "A synthetic porch",
+          hasPower: true,
+          rainBackup: false,
+          notes: null,
+        },
+        gear: [],
+        drinks: [],
+        amenities: [],
+      }).venue;
+    const notFoundVenue = createVenue("202");
+    const refusedVenue = createVenue("303");
+    database.db
+      .insert(venueCoordinates)
+      .values({
+        venueId: legacyVenue.id,
+        latitude: 10.5,
+        longitude: 20.5,
+        source: "organizer-verified",
+        precision: null,
+        provider: "legacy",
+        ref: null,
+        crossCheckDistanceM: null,
+        status: "pending",
+        rejectionCode: null,
+        addressAtGeocode: ADDRESS,
+        updatedAt: NOW,
+        updatedBy: null,
+      })
+      .run();
+
+    fake.locate.mockResolvedValueOnce({
+      kind: "not-found",
+      reason: "Synthetic address miss.",
+    });
+    await geocoding().geocodeVenue(notFoundVenue.id, actor);
+    fake.locate.mockResolvedValueOnce({
+      kind: "refused",
+      reason: "Synthetic street-only match.",
+    });
+    await geocoding().geocodeVenue(refusedVenue.id, actor);
+
+    expect(
+      geocoding()
+        .listVenuesNeedingCoordinateReview(season.id)
+        .map(({ venueId, status, rejectionCode }) => ({
+          venueId,
+          status,
+          rejectionCode,
+        })),
+    ).toEqual([
+      { venueId: legacyVenue.id, status: "pending", rejectionCode: null },
+      {
+        venueId: notFoundVenue.id,
+        status: "pending",
+        rejectionCode: "not-found",
+      },
+      {
+        venueId: refusedVenue.id,
+        status: "rejected",
+        rejectionCode: "refused",
+      },
+    ]);
   });
 
   it("an address edit while locate is pending prevents a stale provider write", async () => {
@@ -465,5 +584,21 @@ describe("core venue geocoding (U9 / KTD11)", () => {
       latitude: 10.8,
       longitude: 20.8,
     });
+  });
+
+  it("refuses organizer verification when the venue address is empty", () => {
+    const { venue } = fixture();
+    const emptyAddressVenue = seasons.updateVenue(venue.id, venue.version, {
+      address: "   ",
+    });
+
+    expect(() =>
+      geocoding().verifyVenueCoordinate(
+        venue.id,
+        { latitude: 10.8, longitude: 20.8 },
+        actor,
+        emptyAddressVenue.version,
+      ),
+    ).toThrow(new RangeError(`Venue ${venue.id} has no address to verify.`));
   });
 });

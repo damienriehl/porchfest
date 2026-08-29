@@ -821,7 +821,7 @@ describe("record lifecycle", () => {
         "organizer",
         "organizer/1",
         "verified",
-        "Submitted address",
+        "Earlier submitted address",
       );
     const gear = sqlite
       .prepare(
@@ -1047,13 +1047,15 @@ describe("record lifecycle", () => {
     expect(
       sqlite
         .prepare(
-          "select latitude, longitude, source from venue_coordinates where venue_id = ?",
+          "select latitude, longitude, source, status, rejection_code from venue_coordinates where venue_id = ?",
         )
         .get(placeholder.id),
     ).toEqual({
       latitude: 44.95,
       longitude: -93.09,
       source: "organizer-verified",
+      status: "needs-review",
+      rejection_code: "address-changed",
     });
     expect(
       sqlite

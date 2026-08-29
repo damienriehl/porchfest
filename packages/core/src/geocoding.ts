@@ -1,4 +1,4 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, ne, sql } from "drizzle-orm";
 import {
   haversineDistanceMeters,
   isValidCoordinate,
@@ -11,6 +11,7 @@ import {
   venueCoordinates,
   venues,
   type CoordinateRejectionCode,
+  type CoordinateStatus,
   type VenueCoordinate,
 } from "./storage/schema.js";
 import {
@@ -23,10 +24,11 @@ import {
 
 /**
  * Goal-1's independent parcel/house check treats a divergence above 30 metres
- * as suspicious. The pure gate carries the distance; core owns this publishing
- * policy because it decides whether a stored point is map-ready.
+ * as suspicious for either accepted precision. The pure gate carries the
+ * distance; core owns this publishing policy because it decides whether a
+ * stored point is map-ready.
  */
-export const MAX_PARCEL_CROSS_CHECK_DISTANCE_M = 30;
+export const MAX_CROSS_CHECK_DISTANCE_M = 30;
 
 export type GeocodingActor = number | null;
 
@@ -48,6 +50,8 @@ export interface VenueCoordinateReview {
   readonly venueId: number;
   readonly title: string;
   readonly address: string | null;
+  readonly status: Exclude<CoordinateStatus, "verified">;
+  readonly rejectionCode: CoordinateRejectionCode | null;
   readonly coordinate: VenueCoordinate;
 }
 
@@ -89,7 +93,7 @@ export function createGeocodingRepository(
     actor: GeocodingActor,
   ): Promise<GeocodeVenueResult> {
     const context = venueContext(db, venueId);
-    const address = context.address?.trim() ?? "";
+    const address = normalizeVenueAddress(context.address);
     if (address.length === 0) {
       return {
         kind: "unavailable",
@@ -135,10 +139,17 @@ export function createGeocodingRepository(
         boundingBox,
         localityName: context.localityName ?? undefined,
       });
-    } catch {
+    } catch (error) {
+      if (error instanceof TypeError || error instanceof RangeError) {
+        throw error;
+      }
+      const detail =
+        error instanceof Error && error.message.trim().length > 0
+          ? `: ${error.message}`
+          : "";
       return {
         kind: "unavailable",
-        reason: `${ports.geo.name} failed before returning a geocoding outcome.`,
+        reason: `${ports.geo.name} failed before returning a geocoding outcome${detail}`,
       };
     }
     if (outcome.kind === "unavailable") {
@@ -150,7 +161,7 @@ export function createGeocodingRepository(
         const current = venueContext(tx, venueId);
         if (
           current.venueVersion !== context.venueVersion ||
-          current.address?.trim() !== address
+          normalizeVenueAddress(current.address) !== address
         ) {
           return {
             kind: "unavailable" as const,
@@ -196,6 +207,10 @@ export function createGeocodingRepository(
     return db.transaction(
       (tx) => {
         const context = venueContext(tx, venueId);
+        const address = normalizeVenueAddress(context.address);
+        if (address.length === 0) {
+          throw new RangeError(`Venue ${venueId} has no address to verify.`);
+        }
         const boundingBox = boundsFor(context);
         if (boundingBox === null) {
           throw new GeocodingLifecycleError(
@@ -242,7 +257,7 @@ export function createGeocodingRepository(
           crossCheckDistanceM: null,
           status: "verified",
           rejectionCode: null,
-          addressAtGeocode: context.address?.trim() ?? "",
+          addressAtGeocode: address,
           updatedAt: stamp,
           updatedBy: actor,
         });
@@ -261,7 +276,7 @@ export function createGeocodingRepository(
       .where(
         and(
           eq(venues.seasonId, seasonId),
-          eq(venueCoordinates.status, "needs-review"),
+          ne(venueCoordinates.status, "verified"),
         ),
       )
       .orderBy(venues.id)
@@ -270,6 +285,8 @@ export function createGeocodingRepository(
         venueId: venue.id,
         title: venue.title,
         address: venue.address,
+        status: coordinate.status as Exclude<CoordinateStatus, "verified">,
+        rejectionCode: coordinate.rejectionCode,
         coordinate,
       }));
   }
@@ -402,9 +419,10 @@ function storeOutcome(
     verdict.status === "rejected" ? verdict.code : null;
   if (
     rejectionCode === null &&
-    outcome.candidate.precision === "parcel" &&
+    (outcome.candidate.precision === "parcel" ||
+      outcome.candidate.precision === "house") &&
     distance !== null &&
-    distance > MAX_PARCEL_CROSS_CHECK_DISTANCE_M
+    distance > MAX_CROSS_CHECK_DISTANCE_M
   ) {
     rejectionCode = "cross-check-distance";
   }
@@ -439,9 +457,9 @@ function crossCheckDistance(
   return haversineDistanceMeters(outcome.candidate, outcome.crossCheck);
 }
 
-type CoordinateWrite = Omit<VenueCoordinate, "id" | "version">;
+export type CoordinateWrite = Omit<VenueCoordinate, "id" | "version">;
 
-function upsertCoordinate(
+export function upsertCoordinate(
   db: CoreExecutor,
   values: CoordinateWrite,
 ): VenueCoordinate {
@@ -468,4 +486,46 @@ function upsertCoordinate(
     })
     .returning()
     .get();
+}
+
+export function normalizeVenueAddress(
+  address: string | null | undefined,
+): string {
+  return address?.trim().replace(/\s+/g, " ") ?? "";
+}
+
+export function invalidateCoordinateForAddressChange(
+  db: CoreExecutor,
+  venueId: number,
+  updatedAt: Date = new Date(),
+): boolean {
+  const state = db
+    .select({
+      address: venues.address,
+      addressAtGeocode: venueCoordinates.addressAtGeocode,
+    })
+    .from(venueCoordinates)
+    .innerJoin(venues, eq(venues.id, venueCoordinates.venueId))
+    .where(eq(venueCoordinates.venueId, venueId))
+    .get();
+  if (
+    state === undefined ||
+    normalizeVenueAddress(state.address) ===
+      normalizeVenueAddress(state.addressAtGeocode)
+  ) {
+    return false;
+  }
+
+  const result = db
+    .update(venueCoordinates)
+    .set({
+      status: "needs-review",
+      rejectionCode: "address-changed",
+      updatedAt,
+      updatedBy: null,
+      version: sql`${venueCoordinates.version} + 1`,
+    })
+    .where(eq(venueCoordinates.venueId, venueId))
+    .run();
+  return result.changes === 1;
 }
