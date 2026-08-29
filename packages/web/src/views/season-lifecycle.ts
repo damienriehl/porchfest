@@ -30,6 +30,7 @@ export function stoppedActions(
 
 export function renderSeasonLifecyclePage(options: {
   readonly season: Season;
+  readonly heldSlotCount: number;
   readonly csrfToken: string;
   readonly error?: string;
   readonly transitioned?: boolean;
@@ -82,7 +83,11 @@ function renderNotice(options: {
 }
 
 function transitionForm(
-  options: { readonly season: Season; readonly csrfToken: string },
+  options: {
+    readonly season: Season;
+    readonly csrfToken: string;
+    readonly heldSlotCount: number;
+  },
   target: SeasonState,
 ): string {
   const stopped = stoppedActions(options.season.state, target).map(
@@ -93,6 +98,7 @@ function transitionForm(
     <div class="queue-item-body">
       <h3>Move to ${escapeHtml(target)}</h3>
       <p>Moving to ${escapeHtml(target)} stops allowing: ${stopped.length ? escapeHtml(stopped.join(", ")) : "nothing new"}.</p>
+      ${target === "archived" && options.heldSlotCount > 0 ? `<p class="help">${options.heldSlotCount === 1 ? "1 slot is still held; release it before archiving." : `${options.heldSlotCount} slots are still held; release them before archiving.`}</p>` : ""}
     </div>
     <form class="signup-form" method="post" action="/admin/seasons/${options.season.id}/transition">
       <input type="hidden" name="_csrf" value="${escapeHtml(options.csrfToken)}">

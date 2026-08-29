@@ -1,8 +1,7 @@
 import { and, asc, desc, eq, isNull, lt, lte, ne, sql } from "drizzle-orm";
 import {
   formatZonedWindow,
-  rankPairings,
-  suggestionsForAct,
+  overlaps,
   suggestionsForVenue,
   type MatchingInput,
   type RankedPairing,
@@ -126,44 +125,19 @@ export class SeasonLifecycleError extends RepositoryLifecycleError {
 }
 
 export type AssignmentConflictKind =
-  "slot_filled" | "slot_held" | "act_already_assigned" | "shared_member";
+  | "slot_filled"
+  | "slot_held"
+  | "act_already_assigned"
+  | "act_withdrawn"
+  | "shared_member";
 
 export class AssignmentConflictError extends SeasonLifecycleError {
   readonly kind: AssignmentConflictKind;
-  readonly slotId: number;
-  readonly actId: number | null;
-  readonly actName: string | null;
-  readonly conflictingActId: number | null;
-  readonly conflictingActName: string | null;
-  readonly conflictingSlotId: number | null;
-  readonly conflictingVenueId: number | null;
-  readonly conflictingVenueName: string | null;
 
-  constructor(
-    kind: AssignmentConflictKind,
-    message: string,
-    details: {
-      slotId: number;
-      actId?: number | null;
-      actName?: string | null;
-      conflictingActId?: number | null;
-      conflictingActName?: string | null;
-      conflictingSlotId?: number | null;
-      conflictingVenueId?: number | null;
-      conflictingVenueName?: string | null;
-    },
-  ) {
+  constructor(kind: AssignmentConflictKind, message: string) {
     super(message);
     this.name = "AssignmentConflictError";
     this.kind = kind;
-    this.slotId = details.slotId;
-    this.actId = details.actId ?? null;
-    this.actName = details.actName ?? null;
-    this.conflictingActId = details.conflictingActId ?? null;
-    this.conflictingActName = details.conflictingActName ?? null;
-    this.conflictingSlotId = details.conflictingSlotId ?? null;
-    this.conflictingVenueId = details.conflictingVenueId ?? null;
-    this.conflictingVenueName = details.conflictingVenueName ?? null;
   }
 }
 
@@ -179,8 +153,6 @@ export interface ReleasedSlotHold {
   slot: Slot;
   assignmentTargetVenueId: number | null;
 }
-
-export type AssignmentSuggestion = RankedPairing;
 
 export interface PriorSeasonContact {
   contact: Contact;
@@ -229,6 +201,33 @@ export function createSeasonRepository(
     const venue = executor.select().from(venues).where(eq(venues.id, id)).get();
     if (!venue) throw new SeasonLifecycleError(`venue ${id} does not exist`);
     return venue;
+  }
+
+  function getSlot(id: number, executor: CoreExecutor = db): Slot {
+    const slot = executor.select().from(slots).where(eq(slots.id, id)).get();
+    if (!slot) throw new SeasonLifecycleError(`slot ${id} does not exist`);
+    return slot;
+  }
+
+  function getAssignment(id: number, executor: CoreExecutor = db): Assignment {
+    const assignment = executor
+      .select()
+      .from(assignments)
+      .where(eq(assignments.id, id))
+      .get();
+    if (!assignment)
+      throw new SeasonLifecycleError(`assignment ${id} does not exist`);
+    return assignment;
+  }
+
+  function getActLink(id: number, executor: CoreExecutor = db): ActLink {
+    const link = executor
+      .select()
+      .from(actLinks)
+      .where(eq(actLinks.id, id))
+      .get();
+    if (!link) throw new SeasonLifecycleError(`act link ${id} does not exist`);
+    return link;
   }
 
   function getContact(id: number, executor: CoreExecutor = db): Contact {
@@ -396,11 +395,34 @@ export function createSeasonRepository(
 
         const affected =
           recordType === "act"
-            ? tx
-                .select()
-                .from(assignments)
-                .where(eq(assignments.actId, id))
-                .all()
+            ? (() => {
+                const seasonActs = tx
+                  .select({ id: acts.id, canonicalActId: acts.canonicalActId })
+                  .from(acts)
+                  .where(eq(acts.seasonId, record.seasonId))
+                  .all();
+                const seasonActsById = new Map(
+                  seasonActs.map((seasonAct) => [seasonAct.id, seasonAct]),
+                );
+                const canonicalId = resolveCanonicalSeasonAct(
+                  id,
+                  seasonActsById,
+                  tx,
+                ).id;
+                return tx
+                  .select()
+                  .from(assignments)
+                  .where(eq(assignments.seasonId, record.seasonId))
+                  .all()
+                  .filter(
+                    (assignment) =>
+                      resolveCanonicalSeasonAct(
+                        assignment.actId,
+                        seasonActsById,
+                        tx,
+                      ).id === canonicalId,
+                  );
+              })()
             : tx
                 .select({
                   id: assignments.id,
@@ -771,27 +793,43 @@ export function createSeasonRepository(
     expectedVersion: number,
     targetState: SeasonState,
   ): Season {
-    const season = getSeason(seasonId);
-    const currentIndex = stateOrder.indexOf(season.state);
-    const targetIndex = stateOrder.indexOf(targetState);
-    const action = `transition_to_${targetState}`;
-    if (targetIndex <= currentIndex) {
-      throw new SeasonActionError(season.state, action);
-    }
+    return db.transaction((tx) => {
+      const season = getSeason(seasonId, tx);
+      const currentIndex = stateOrder.indexOf(season.state);
+      const targetIndex = stateOrder.indexOf(targetState);
+      const action = `transition_to_${targetState}`;
+      if (targetIndex <= currentIndex) {
+        throw new SeasonActionError(season.state, action);
+      }
+      if (targetState === "archived") {
+        const heldCount = tx
+          .select({ id: slots.id })
+          .from(slots)
+          .where(and(eq(slots.seasonId, seasonId), eq(slots.state, "held")))
+          .all().length;
+        if (heldCount > 0) {
+          throw new SeasonLifecycleError(
+            heldCount === 1
+              ? "1 slot is still held; release it before archiving"
+              : `${heldCount} slots are still held; release them before archiving`,
+          );
+        }
+      }
 
-    const result = db
-      .update(seasons)
-      .set({
-        state: targetState,
-        version: sql`${seasons.version} + 1`,
-        updatedAt: now(),
-      })
-      .where(
-        and(eq(seasons.id, seasonId), eq(seasons.version, expectedVersion)),
-      )
-      .run();
-    if (result.changes !== 1) conflict("season", seasonId, ["state"]);
-    return getSeason(seasonId);
+      const result = tx
+        .update(seasons)
+        .set({
+          state: targetState,
+          version: sql`${seasons.version} + 1`,
+          updatedAt: now(),
+        })
+        .where(
+          and(eq(seasons.id, seasonId), eq(seasons.version, expectedVersion)),
+        )
+        .run();
+      if (result.changes !== 1) conflict("season", seasonId, ["state"]);
+      return getSeason(seasonId, tx);
+    });
   }
 
   function ensureVenueSlots(venueId: number): Slot[] {
@@ -803,6 +841,28 @@ export function createSeasonRepository(
       },
       { behavior: "immediate" },
     );
+  }
+
+  function listVenueSlots(venueId: number): Slot[] {
+    const venue = getVenue(venueId);
+    return db
+      .select()
+      .from(slots)
+      .where(
+        and(eq(slots.seasonId, venue.seasonId), eq(slots.venueId, venueId)),
+      )
+      .orderBy(asc(slots.startsAt), asc(slots.id))
+      .all();
+  }
+
+  function listSeasonSlots(seasonId: number): Slot[] {
+    getSeason(seasonId);
+    return db
+      .select()
+      .from(slots)
+      .where(eq(slots.seasonId, seasonId))
+      .orderBy(asc(slots.startsAt), asc(slots.id))
+      .all();
   }
 
   function linkActs(input: {
@@ -1086,20 +1146,18 @@ export function createSeasonRepository(
             "act and slot belong to different seasons",
           );
         }
+        if (act.status === "withdrawn") {
+          throw new AssignmentConflictError(
+            "act_withdrawn",
+            `${act.name} have withdrawn and cannot be assigned`,
+          );
+        }
 
         const slotVenue = getVenue(slot.venueId, tx);
         if (slot.state === "held") {
           throw new AssignmentConflictError(
             "slot_held",
             `Slot is held for ${slot.heldForName ?? "an unnamed act"} until ${slot.heldDecideBy?.toISOString().slice(0, 10) ?? "an unspecified date"}`,
-            {
-              slotId,
-              actId,
-              actName: act.name,
-              conflictingActName: slot.heldForName,
-              conflictingVenueId: slotVenue.id,
-              conflictingVenueName: slotVenue.title,
-            },
           );
         }
         if (slot.state === "assigned") {
@@ -1113,16 +1171,6 @@ export function createSeasonRepository(
           throw new AssignmentConflictError(
             "slot_filled",
             `Slot at ${slotVenue.title}, ${formatZonedWindow(slot, season.timezone)} is already filled${occupyingAct === null ? "" : ` by ${occupyingAct.name}`}`,
-            {
-              slotId,
-              actId,
-              actName: act.name,
-              conflictingActId: occupyingAct?.id,
-              conflictingActName: occupyingAct?.name,
-              conflictingSlotId: slot.id,
-              conflictingVenueId: slotVenue.id,
-              conflictingVenueName: slotVenue.title,
-            },
           );
         }
 
@@ -1139,15 +1187,27 @@ export function createSeasonRepository(
           seasonActsById,
           tx,
         );
+        const canonicalRecord = getAct(canonicalAct.id, tx);
+        if (canonicalRecord.status === "withdrawn") {
+          throw new AssignmentConflictError(
+            "act_withdrawn",
+            `${canonicalRecord.name} have withdrawn and cannot be assigned`,
+          );
+        }
         const seasonAssignments = tx
           .select()
           .from(assignments)
           .where(eq(assignments.seasonId, season.id))
           .all();
+        const canonicalAssignmentActIds = new Map(
+          seasonAssignments.map((assignment) => [
+            assignment.id,
+            resolveCanonicalSeasonAct(assignment.actId, seasonActsById, tx).id,
+          ]),
+        );
         const assignedConflict = seasonAssignments.find(
           (assignment) =>
-            resolveCanonicalSeasonAct(assignment.actId, seasonActsById, tx)
-              .id === canonicalAct.id,
+            canonicalAssignmentActIds.get(assignment.id) === canonicalAct.id,
         );
         if (assignedConflict !== undefined) {
           const conflictingSlot = tx
@@ -1161,20 +1221,9 @@ export function createSeasonRepository(
             );
           }
           const conflictingVenue = getVenue(conflictingSlot.venueId, tx);
-          const canonicalRecord = getAct(canonicalAct.id, tx);
           throw new AssignmentConflictError(
             "act_already_assigned",
             `${canonicalRecord.name} are already assigned to ${conflictingVenue.title}, ${formatZonedWindow(conflictingSlot, season.timezone)}`,
-            {
-              slotId,
-              actId: canonicalAct.id,
-              actName: canonicalRecord.name,
-              conflictingActId: canonicalAct.id,
-              conflictingActName: canonicalRecord.name,
-              conflictingSlotId: conflictingSlot.id,
-              conflictingVenueId: conflictingVenue.id,
-              conflictingVenueName: conflictingVenue.title,
-            },
           );
         }
 
@@ -1197,56 +1246,46 @@ export function createSeasonRepository(
           if (first === canonicalAct.id) linkedCanonicalIds.add(second);
           if (second === canonicalAct.id) linkedCanonicalIds.add(first);
         }
-        const sharedMemberConflict = seasonAssignments.find((assignment) => {
-          const assignedCanonical = resolveCanonicalSeasonAct(
-            assignment.actId,
-            seasonActsById,
-            tx,
-          ).id;
-          if (!linkedCanonicalIds.has(assignedCanonical)) return false;
-          const assignedSlot = tx
+        const seasonSlotsById = new Map(
+          tx
             .select()
             .from(slots)
-            .where(eq(slots.id, assignment.slotId))
-            .get();
-          return (
-            assignedSlot !== undefined &&
-            assignedSlot.startsAt < slot.endsAt &&
-            slot.startsAt < assignedSlot.endsAt
+            .where(eq(slots.seasonId, season.id))
+            .all()
+            .map((seasonSlot) => [seasonSlot.id, seasonSlot]),
+        );
+        const sharedMemberConflict = seasonAssignments.find((assignment) => {
+          const assignedCanonical = canonicalAssignmentActIds.get(
+            assignment.id,
           );
+          if (assignedCanonical === undefined) return false;
+          if (!linkedCanonicalIds.has(assignedCanonical)) return false;
+          const assignedSlot = seasonSlotsById.get(assignment.slotId);
+          return assignedSlot !== undefined && overlaps(assignedSlot, slot);
         });
         const override = options.sharedMemberOverride?.trim() ?? "";
         if (sharedMemberConflict !== undefined && override.length === 0) {
-          const conflictingSlot = tx
-            .select()
-            .from(slots)
-            .where(eq(slots.id, sharedMemberConflict.slotId))
-            .get();
+          const conflictingSlot = seasonSlotsById.get(
+            sharedMemberConflict.slotId,
+          );
           if (!conflictingSlot) {
             throw new SeasonLifecycleError(
               `slot ${sharedMemberConflict.slotId} does not exist`,
             );
           }
-          const conflictingCanonical = resolveCanonicalSeasonAct(
-            sharedMemberConflict.actId,
-            seasonActsById,
-            tx,
+          const conflictingCanonicalId = canonicalAssignmentActIds.get(
+            sharedMemberConflict.id,
           );
-          const conflictingAct = getAct(conflictingCanonical.id, tx);
+          if (conflictingCanonicalId === undefined) {
+            throw new SeasonLifecycleError(
+              `act ${sharedMemberConflict.actId} does not exist`,
+            );
+          }
+          const conflictingAct = getAct(conflictingCanonicalId, tx);
           const conflictingVenue = getVenue(conflictingSlot.venueId, tx);
           throw new AssignmentConflictError(
             "shared_member",
             `${conflictingAct.name} shares a member and is already assigned to ${conflictingVenue.title}, ${formatZonedWindow(conflictingSlot, season.timezone)}; record an organizer override to continue`,
-            {
-              slotId,
-              actId: canonicalAct.id,
-              actName: getAct(canonicalAct.id, tx).name,
-              conflictingActId: conflictingAct.id,
-              conflictingActName: conflictingAct.name,
-              conflictingSlotId: conflictingSlot.id,
-              conflictingVenueId: conflictingVenue.id,
-              conflictingVenueName: conflictingVenue.title,
-            },
           );
         }
 
@@ -1302,6 +1341,7 @@ export function createSeasonRepository(
           `season ${assignment.seasonId} does not exist`,
         );
       assertLegal(season, "correction");
+      let canonicalActId: number | undefined;
       if (changes.actId !== undefined) {
         const act = tx
           .select()
@@ -1315,12 +1355,46 @@ export function createSeasonRepository(
             "corrected act and assignment belong to different seasons",
           );
         }
+        const seasonActs = tx
+          .select({ id: acts.id, canonicalActId: acts.canonicalActId })
+          .from(acts)
+          .where(eq(acts.seasonId, season.id))
+          .all();
+        const seasonActsById = new Map(
+          seasonActs.map((seasonAct) => [seasonAct.id, seasonAct]),
+        );
+        canonicalActId = resolveCanonicalSeasonAct(
+          changes.actId,
+          seasonActsById,
+          tx,
+        ).id;
+        const assignedActs = tx
+          .select({ actId: assignments.actId })
+          .from(assignments)
+          .where(
+            and(
+              eq(assignments.seasonId, assignment.seasonId),
+              ne(assignments.id, assignmentId),
+            ),
+          )
+          .all();
+        assertCanonicalActUnassigned(
+          season.id,
+          canonicalActId,
+          assignedActs,
+          seasonActsById,
+          tx,
+        );
       }
       const fields = Object.keys(changes);
+      const correctedChanges =
+        canonicalActId === undefined
+          ? changes
+          : { ...changes, actId: canonicalActId };
       const result = tx
         .update(assignments)
         .set({
-          ...changes,
+          ...correctedChanges,
           version: sql`${assignments.version} + 1`,
           updatedAt: now(),
         })
@@ -1332,33 +1406,6 @@ export function createSeasonRepository(
         )
         .run();
       if (result.changes !== 1) conflict("assignment", assignmentId, fields);
-      if (changes.actId !== undefined) {
-        const assignedActs = tx
-          .select({ actId: assignments.actId })
-          .from(assignments)
-          .where(
-            and(
-              eq(assignments.seasonId, assignment.seasonId),
-              ne(assignments.id, assignmentId),
-            ),
-          )
-          .all();
-        const seasonActs = tx
-          .select({ id: acts.id, canonicalActId: acts.canonicalActId })
-          .from(acts)
-          .where(eq(acts.seasonId, season.id))
-          .all();
-        const seasonActsById = new Map(
-          seasonActs.map((seasonAct) => [seasonAct.id, seasonAct]),
-        );
-        assertCanonicalActUnassigned(
-          season.id,
-          changes.actId,
-          assignedActs,
-          seasonActsById,
-          tx,
-        );
-      }
       const corrected = tx
         .select()
         .from(assignments)
@@ -1385,7 +1432,7 @@ export function createSeasonRepository(
             `assignment ${assignmentId} does not exist`,
           );
         }
-        assertCorrectionLegal(assignment.seasonId, tx);
+        assertLegal(getSeason(assignment.seasonId, tx), "assignment");
         const slot = tx
           .select()
           .from(slots)
@@ -1448,28 +1495,8 @@ export function createSeasonRepository(
       .where(eq(acts.seasonId, seasonId))
       .all();
     const actsById = new Map(seasonActs.map((act) => [act.id, act]));
-    const canonicalId = (actId: number): number => {
-      let current = actsById.get(actId);
-      const seen = new Set<number>();
-      if (!current)
-        throw new SeasonLifecycleError(`act ${actId} does not exist`);
-      while (current.canonicalActId !== null) {
-        if (seen.has(current.id)) {
-          throw new SeasonLifecycleError(
-            `act ${actId} has a supersession cycle`,
-          );
-        }
-        seen.add(current.id);
-        const next = actsById.get(current.canonicalActId);
-        if (!next) {
-          throw new SeasonLifecycleError(
-            `act ${current.canonicalActId} does not exist`,
-          );
-        }
-        current = next;
-      }
-      return current.id;
-    };
+    const canonicalId = (actId: number): number =>
+      resolveCanonicalSeasonAct(actId, actsById, db).id;
     const candidateActs = seasonActs.filter(
       (act) => act.canonicalActId === null && act.status !== "withdrawn",
     );
@@ -1554,28 +1581,9 @@ export function createSeasonRepository(
     };
   }
 
-  function listAssignmentSuggestions(seasonId: number): AssignmentSuggestion[] {
-    return rankPairings(buildMatchingInput(seasonId));
-  }
-
   function suggestForVenue(venueId: number): RankedPairing[] {
     const venue = getVenue(venueId);
     return suggestionsForVenue(buildMatchingInput(venue.seasonId), venueId);
-  }
-
-  function suggestForAct(actId: number): RankedPairing[] {
-    const act = getAct(actId);
-    const seasonActs = db
-      .select({ id: acts.id, canonicalActId: acts.canonicalActId })
-      .from(acts)
-      .where(eq(acts.seasonId, act.seasonId))
-      .all();
-    const canonical = resolveCanonicalSeasonAct(
-      act.id,
-      new Map(seasonActs.map((item) => [item.id, item])),
-      db,
-    );
-    return suggestionsForAct(buildMatchingInput(act.seasonId), canonical.id);
   }
 
   function listEmailWaves(seasonId: number): EmailLogEntry[] {
@@ -1622,6 +1630,10 @@ export function createSeasonRepository(
 
   return Object.freeze({
     getSeason,
+    getVenue,
+    getSlot,
+    getAssignment,
+    getActLink,
     setRecordStatus,
     createHostSignup,
     createPerformerSignup,
@@ -1637,6 +1649,8 @@ export function createSeasonRepository(
     supersedeContact,
     transitionSeason,
     ensureVenueSlots,
+    listVenueSlots,
+    listSeasonSlots,
     linkActs,
     unlinkActs,
     listActLinks,
@@ -1649,10 +1663,8 @@ export function createSeasonRepository(
     unassignSlot,
     listActivityQueue: records.listActivityQueue,
     listAssignments,
-    listAssignmentSuggestions,
     buildMatchingInput,
     suggestForVenue,
-    suggestForAct,
     listEmailWaves,
     listEmailWave,
     findPriorSeasonContact,

@@ -56,38 +56,100 @@ function normalize(value: string): string {
   return value.toLocaleLowerCase("en").trim().replace(/\s+/g, " ");
 }
 
-function names(haystack: string | null, candidate: string | null): boolean {
-  if (haystack === null || candidate === null) return false;
-  const normalizedHaystack = normalize(haystack);
-  const normalizedCandidate = normalize(candidate);
-  return (
-    Math.min(normalizedHaystack.length, normalizedCandidate.length) >= 3 &&
-    (normalizedHaystack.includes(normalizedCandidate) ||
-      normalizedCandidate.includes(normalizedHaystack))
-  );
+function escaped(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function overlaps(
+function containsWholeWords(value: string, words: string): boolean {
+  return new RegExp(
+    `(?:^|[^\\p{L}\\p{N}])${escaped(words)}(?:$|[^\\p{L}\\p{N}])`,
+    "u",
+  ).test(value);
+}
+
+function names(haystack: string | null, candidate: string | null): boolean {
+  if (haystack === null || candidate === null) return false;
+  const normalizedCandidate = normalize(candidate);
+  return haystack
+    .split(/[,;\n]|\s+and\s+/i)
+    .map(normalize)
+    .filter(Boolean)
+    .some((entry) => {
+      if (entry === normalizedCandidate) return true;
+      const entryCanAbbreviate = entry.length >= 4 || entry.includes(" ");
+      return (
+        (entryCanAbbreviate &&
+          containsWholeWords(normalizedCandidate, entry)) ||
+        containsWholeWords(entry, normalizedCandidate)
+      );
+    });
+}
+
+export function overlaps(
   left: { startsAt: Date; endsAt: Date },
   right: { startsAt: Date; endsAt: Date },
 ): boolean {
   return left.startsAt < right.endsAt && right.startsAt < left.endsAt;
 }
 
-export function formatZonedWindow(
-  window: { startsAt: Date; endsAt: Date },
-  timezone: string,
-): string {
+const zonedFormatters = new Map<string, Intl.DateTimeFormat>();
+const PERIOD_PATTERN = /\s([AP]M)$/;
+const STRIP_PERIOD_PATTERN = /\s[AP]M$/;
+
+function zonedFormatter(timezone: string): Intl.DateTimeFormat {
+  const cached = zonedFormatters.get(timezone);
+  if (cached) return cached;
   const formatter = new Intl.DateTimeFormat("en-US", {
     timeZone: timezone,
     hour: "numeric",
     minute: "2-digit",
   });
+  zonedFormatters.set(timezone, formatter);
+  return formatter;
+}
+
+export function formatZonedWindow(
+  window: { startsAt: Date; endsAt: Date },
+  timezone: string,
+): string {
+  const formatter = zonedFormatter(timezone);
   const start = formatter.format(window.startsAt);
   const end = formatter.format(window.endsAt);
-  const startPeriod = start.match(/\s([AP]M)$/)?.[1];
-  const endPeriod = end.match(/\s([AP]M)$/)?.[1];
-  return `${startPeriod === endPeriod ? start.replace(/\s[AP]M$/, "") : start}–${end}`;
+  const startPeriod = start.match(PERIOD_PATTERN)?.[1];
+  const endPeriod = end.match(PERIOD_PATTERN)?.[1];
+  return `${startPeriod === endPeriod ? start.replace(STRIP_PERIOD_PATTERN, "") : start}–${end}`;
+}
+
+function genreMatch(
+  preferences: string | null,
+  genre: string | null,
+): string | null {
+  const tokens = normalize(genre ?? "")
+    .split(/[,/]+|\s+/)
+    .filter((token) => token.length >= 3);
+  const clauses = normalize(preferences ?? "")
+    .split(/[,;\n]+/)
+    .filter(Boolean);
+  for (const token of tokens) {
+    for (const clause of clauses) {
+      const match = new RegExp(
+        `(?:^|[^\\p{L}\\p{N}])${escaped(token)}(?:$|[^\\p{L}\\p{N}])`,
+        "u",
+      ).exec(clause);
+      if (!match) continue;
+      const prefix = clause.slice(
+        0,
+        match.index + (match[0].startsWith(token) ? 0 : 1),
+      );
+      if (
+        /\b(?:no|not|except|avoid|without)\b|\banything\s+but\b/.test(prefix)
+      ) {
+        continue;
+      }
+      return token;
+    }
+  }
+  return null;
 }
 
 function comparePairings(left: RankedPairing, right: RankedPairing): number {
@@ -126,14 +188,19 @@ export function rankPairings(input: MatchingInput): RankedPairing[] {
     }
   }
   const pairings: RankedPairing[] = [];
+  const formattedSlots = new Map<number, string>();
+  for (const slot of slotsById.values()) {
+    formattedSlots.set(slot.id, formatZonedWindow(slot, input.timezone));
+  }
 
   for (const venue of input.venues) {
     for (const slot of venue.slots) {
       if (slot.state !== "open" || assignedSlotIds.has(slot.id)) continue;
       for (const act of input.acts) {
         if (assignedActIds.has(act.id)) continue;
-        const availability = act.availabilities.find((window) =>
-          overlaps(window, slot),
+        const availability = act.availabilities.find(
+          (window) =>
+            window.startsAt <= slot.startsAt && window.endsAt >= slot.endsAt,
         );
         if (act.availabilities.length > 0 && availability === undefined) {
           continue;
@@ -169,12 +236,8 @@ export function rankPairings(input: MatchingInput): RankedPairing[] {
           }
         }
 
-        const preferences = normalize(venue.genrePreferences ?? "");
-        const genreToken = (act.genre ?? "")
-          .toLocaleLowerCase("en")
-          .split(/[,/\s]+/)
-          .find((token) => token.length >= 3 && preferences.includes(token));
-        if (genreToken !== undefined) {
+        const genreToken = genreMatch(venue.genrePreferences, act.genre);
+        if (genreToken !== null) {
           score += 50;
           reasons.push({
             code: "genre_fit",
@@ -208,11 +271,11 @@ export function rankPairings(input: MatchingInput): RankedPairing[] {
           score += 5;
           reasons.push({
             code: "available",
-            text: `Available ${formatZonedWindow(slot, input.timezone)}`,
+            text: `Available ${formattedSlots.get(slot.id)}`,
           });
         }
 
-        for (const linkedActId of [...act.linkedActIds].sort((a, b) => a - b)) {
+        for (const linkedActId of act.linkedActIds) {
           const linkedAssignment = assignmentByActId.get(linkedActId);
           if (linkedAssignment === undefined) continue;
           const linkedSlot = slotsById.get(linkedAssignment.slotId);
@@ -227,7 +290,7 @@ export function rankPairings(input: MatchingInput): RankedPairing[] {
             score -= 200;
             warnings.push({
               code: "shared_member",
-              text: `${linkedAct.name} shares a member and plays at ${linkedVenue.title}, ${formatZonedWindow(linkedSlot, input.timezone)}`,
+              text: `${linkedAct.name} shares a member and plays at ${linkedVenue.title}, ${formattedSlots.get(linkedSlot.id)}`,
             });
           }
         }

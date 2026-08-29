@@ -56,6 +56,7 @@ describe("deterministic matching", () => {
     const ranked = rankPairings(fixture());
     expect(ranked.some(({ slot }) => slot.state !== "open")).toBe(false);
     expect(ranked.some(({ act }) => act.name === "Already Booked")).toBe(false);
+    expect(ranked.some(({ act }) => act.name === "Partial Window")).toBe(false);
     const oak = ranked.filter(({ venue }) => venue.id === 2);
     expect(oak.findIndex(({ act }) => act.name === "Solo Folk")).toBeLessThan(
       oak.findIndex(({ act }) => act.name === "Amped Friends"),
@@ -139,5 +140,90 @@ describe("deterministic matching", () => {
     expect(
       available?.reasons.find(({ code }) => code === "available")?.text,
     ).toBe("Available 1:00–2:00 PM");
+  });
+
+  it("matches requested-name entries without short substring false positives", () => {
+    const input = fixture();
+    input.venues[0] = {
+      ...input.venues[0]!,
+      requestedActNames: "Joe",
+    };
+    input.venues[1] = {
+      ...input.venues[1]!,
+      requestedActNames: "Sam",
+    };
+    input.acts.push(
+      {
+        id: 107,
+        name: "Banjoe Boys",
+        genre: null,
+        requiresAmplification: false,
+        housePreference: null,
+        availabilities: [],
+        linkedActIds: [],
+      },
+      {
+        id: 108,
+        name: "Samantha Lee",
+        genre: null,
+        requiresAmplification: false,
+        housePreference: null,
+        availabilities: [],
+        linkedActIds: [],
+      },
+    );
+
+    const ranked = rankPairings(input);
+    expect(
+      ranked
+        .find(({ act, venue }) => act.id === 107 && venue.id === 1)
+        ?.reasons.map(({ code }) => code),
+    ).not.toContain("host_request");
+    expect(
+      ranked
+        .find(({ act, venue }) => act.id === 108 && venue.id === 2)
+        ?.reasons.map(({ code }) => code),
+    ).not.toContain("host_request");
+
+    input.venues[0] = {
+      ...input.venues[0]!,
+      requestedActNames: "Unrelated, The Porch Cats and Solo Folk\nAnother Act",
+    };
+    const multiEntry = rankPairings(input);
+    expect(
+      multiEntry
+        .find(({ act, venue }) => act.id === 101 && venue.id === 1)
+        ?.reasons.map(({ code }) => code),
+    ).toContain("mutual_request");
+    expect(
+      multiEntry
+        .find(({ act, venue }) => act.id === 102 && venue.id === 1)
+        ?.reasons.map(({ code }) => code),
+    ).toContain("host_request");
+  });
+
+  it("uses whole-word, non-negated genre preferences", () => {
+    const input = fixture();
+    input.venues[0] = {
+      ...input.venues[0]!,
+      genrePreferences: "anything but country; no folk; norfolk sound; jazz",
+    };
+    input.acts.push({
+      id: 109,
+      name: "Country Fixture",
+      genre: "Country",
+      requiresAmplification: false,
+      housePreference: null,
+      availabilities: [],
+      linkedActIds: [],
+    });
+
+    const codesFor = (actId: number) =>
+      rankPairings(input)
+        .find(({ act, venue }) => act.id === actId && venue.id === 1)
+        ?.reasons.map(({ code }) => code);
+    expect(codesFor(109)).not.toContain("genre_fit");
+    expect(codesFor(102)).not.toContain("genre_fit");
+    expect(codesFor(101)).toContain("genre_fit");
   });
 });

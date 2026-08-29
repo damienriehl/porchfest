@@ -37,7 +37,6 @@ export {
   SeasonLifecycleError,
   type AssignmentConflictKind,
   type AssignmentCorrection,
-  type AssignmentSuggestion,
   type PriorSeasonContact,
   type ReleasedSlotHold,
   type SeasonAction,
@@ -47,6 +46,7 @@ export {
 } from "./season.js";
 export {
   formatZonedWindow,
+  overlaps,
   rankPairings,
   suggestionsForAct,
   suggestionsForVenue,

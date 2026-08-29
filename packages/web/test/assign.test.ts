@@ -263,7 +263,7 @@ describe("organizer assignment screens", () => {
     expect(runtime.core.seasons.ensureVenueSlots(maple.venue.id)).toHaveLength(
       2,
     );
-    expect(venueHtml).toContain("18:00–19:00");
+    expect(venueHtml).toContain("6:00–7:00 PM");
     expect(venueHtml).toContain("Why this match:");
     expect(venueHtml).toContain(
       "The host and act requested each other by name",
@@ -556,6 +556,192 @@ describe("organizer assignment screens", () => {
     expect(body).toContain(cats.act.name);
     expect(body).toMatch(/withdrawn.*cannot be assigned/i);
     expect(body).not.toMatch(/action="\/admin\/slots\/\d+\/assign"/);
+  });
+
+  it("refuses a crafted assignment POST for a withdrawn act", async () => {
+    const { runtime, cookie, maple, cats } = await boot();
+    const slot = slotFor(runtime, maple.venue.id);
+    const token = await assignmentCsrf(
+      runtime,
+      cookie,
+      maple.venue.id,
+      slot.id,
+    );
+    runtime.core.seasons.setRecordStatus(
+      "act",
+      cats.act.id,
+      cats.act.version,
+      "withdrawn",
+    );
+
+    const response = await post(
+      runtime,
+      `/admin/slots/${slot.id}/assign`,
+      cookie,
+      new URLSearchParams({
+        _csrf: token,
+        act: String(cats.act.id),
+        version: String(slot.version),
+        return_to: "venue",
+      }),
+    );
+    expect(response.status).toBe(409);
+    expect(await response.text()).toContain(
+      "The Porch Cats have withdrawn and cannot be assigned",
+    );
+  });
+
+  it("stores a hold through the end of its Chicago calendar day", async () => {
+    const { runtime, cookie, maple } = await boot();
+    const slot = slotFor(runtime, maple.venue.id);
+    const page = await get(
+      runtime,
+      `/admin/venues/${maple.venue.id}/assign`,
+      cookie,
+    );
+    const token = csrf(await page.text(), `/admin/slots/${slot.id}/hold`);
+
+    const response = await post(
+      runtime,
+      `/admin/slots/${slot.id}/hold`,
+      cookie,
+      new URLSearchParams({
+        _csrf: token,
+        version: String(slot.version),
+        held_for: "Calendar Day Hold",
+        decide_by: "2031-09-01",
+      }),
+    );
+    expect(response.status).toBe(303);
+    expect(slotFor(runtime, maple.venue.id).heldDecideBy?.toISOString()).toBe(
+      "2031-09-02T04:59:59.000Z",
+    );
+    expect(
+      await (
+        await get(runtime, `/admin/venues/${maple.venue.id}/assign`, cookie)
+      ).text(),
+    ).toContain("until 2031-09-01");
+  });
+
+  it("renders unknown amplification as unknown", async () => {
+    const { runtime, cookie, cats } = await boot();
+    runtime.core.seasons.updateAct(cats.act.id, cats.act.version, {
+      requiresAmplification: null,
+    });
+
+    const body = await (
+      await get(runtime, `/admin/acts/${cats.act.id}/assign`, cookie)
+    ).text();
+    expect(body).toContain("Amplification unknown");
+    expect(body).not.toContain("Acoustic / no amplification required");
+  });
+
+  it("keeps archived assignments visible in both read-only views", async () => {
+    const { runtime, cookie, season, maple, cats } = await boot();
+    const slot = slotFor(runtime, maple.venue.id);
+    runtime.core.seasons.assignSlot(slot.id, slot.version, cats.act.id);
+    const current = runtime.core.seasons.getSeason(season.id);
+    runtime.core.seasons.transitionSeason(
+      season.id,
+      current.version,
+      "archived",
+    );
+
+    const venueBody = await (
+      await get(runtime, `/admin/venues/${maple.venue.id}/assign`, cookie)
+    ).text();
+    const actBody = await (
+      await get(runtime, `/admin/acts/${cats.act.id}/assign`, cookie)
+    ).text();
+    expect(venueBody).toContain(cats.act.name);
+    expect(actBody).toContain(maple.venue.title);
+    expect(venueBody).not.toContain(
+      `/admin/assignments/${runtime.core.seasons.listAssignments(season.id)[0]!.id}/unassign`,
+    );
+    expect(actBody).not.toContain("Unassign</button>");
+  });
+
+  it("refuses locked unassignment and hides both unassign forms", async () => {
+    const { runtime, cookie, season, maple, cats } = await boot();
+    const slot = slotFor(runtime, maple.venue.id);
+    const assignment = runtime.core.seasons.assignSlot(
+      slot.id,
+      slot.version,
+      cats.act.id,
+    );
+    const venuePage = await get(
+      runtime,
+      `/admin/venues/${maple.venue.id}/assign`,
+      cookie,
+    );
+    const token = csrf(
+      await venuePage.text(),
+      `/admin/assignments/${assignment.id}/unassign`,
+    );
+    const current = runtime.core.seasons.getSeason(season.id);
+    runtime.core.seasons.transitionSeason(season.id, current.version, "locked");
+
+    const lockedVenue = await (
+      await get(runtime, `/admin/venues/${maple.venue.id}/assign`, cookie)
+    ).text();
+    const lockedAct = await (
+      await get(runtime, `/admin/acts/${cats.act.id}/assign`, cookie)
+    ).text();
+    expect(lockedVenue).not.toContain(
+      `/admin/assignments/${assignment.id}/unassign`,
+    );
+    expect(lockedAct).not.toContain("Unassign</button>");
+
+    const response = await post(
+      runtime,
+      `/admin/assignments/${assignment.id}/unassign`,
+      cookie,
+      new URLSearchParams({
+        _csrf: token,
+        version: String(assignment.version),
+        return_to: "venue",
+      }),
+    );
+    expect(response.status).toBe(409);
+    expect(await response.text()).toContain("season state is locked");
+  });
+
+  it("unassigns an act from a superseded venue through direct lookup", async () => {
+    const { runtime, cookie, season, maple, oak, cats } = await boot();
+    const slot = slotFor(runtime, maple.venue.id);
+    const assignment = runtime.core.seasons.assignSlot(
+      slot.id,
+      slot.version,
+      cats.act.id,
+    );
+    const page = await get(
+      runtime,
+      `/admin/venues/${maple.venue.id}/assign`,
+      cookie,
+    );
+    const token = csrf(
+      await page.text(),
+      `/admin/assignments/${assignment.id}/unassign`,
+    );
+    runtime.core.seasons.supersedeVenue(
+      maple.venue.id,
+      maple.venue.version,
+      oak.venue.id,
+    );
+
+    const response = await post(
+      runtime,
+      `/admin/assignments/${assignment.id}/unassign`,
+      cookie,
+      new URLSearchParams({
+        _csrf: token,
+        version: String(assignment.version),
+        return_to: "act",
+      }),
+    );
+    expect(response.status).toBe(303);
+    expect(runtime.core.seasons.getSlot(slot.id).state).toBe("open");
+    expect(runtime.core.seasons.listAssignments(season.id)).toEqual([]);
   });
 
   it("names locked-state and stale-slot refusals and keeps unknown ids at 404", async () => {

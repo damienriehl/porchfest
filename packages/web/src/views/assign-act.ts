@@ -1,4 +1,5 @@
 import {
+  formatZonedWindow,
   isSeasonActionLegal,
   type Act,
   type ActLink,
@@ -9,7 +10,6 @@ import {
   type Slot,
   type Venue,
 } from "@porchfest/core";
-import { formatSlot } from "./assign-venue.js";
 import { escapeHtml, renderOrganizerPage } from "./signup-view.js";
 
 export interface ActAssignmentPageOptions {
@@ -53,7 +53,7 @@ export function renderAssignActPage(options: ActAssignmentPageOptions): string {
     `<header class="signup-header">
       <p class="eyebrow">${escapeHtml(options.season.displayName)} · Act matching</p>
       <h1>${escapeHtml(options.act.name)}</h1>
-      <p class="lede">${escapeHtml(options.act.genre ?? "Genre not provided")} · ${options.act.requiresAmplification ? "Amplification required" : "Acoustic / no amplification required"}</p>
+      <p class="lede">${escapeHtml(options.act.genre ?? "Genre not provided")} · ${options.act.requiresAmplification === true ? "Amplification required" : options.act.requiresAmplification === false ? "Acoustic / no amplification required" : "Amplification unknown"}</p>
       <p class="lede"><a href="/admin/records/act/${options.act.id}?season=${options.season.id}">View act record</a> · <a href="/admin?season=${options.season.id}">Back to activity queue</a></p>
     </header>
     ${notice}
@@ -65,7 +65,7 @@ export function renderAssignActPage(options: ActAssignmentPageOptions): string {
       </dl>
     </section>
     <section aria-labelledby="current-assignment-title"><h2 id="current-assignment-title">Current assignment</h2>
-      ${current && currentSlot && currentVenue ? `<p><a href="/admin/venues/${currentVenue.id}/assign">${escapeHtml(currentVenue.title)}</a>, ${escapeHtml(formatSlot(currentSlot, options.season.timezone))}</p><form class="signup-form compact-form" method="post" action="/admin/assignments/${current.id}/unassign"><input type="hidden" name="_csrf" value="${escapeHtml(options.csrf.unassign)}"><input type="hidden" name="version" value="${current.version}"><input type="hidden" name="return_to" value="act"><button class="secondary-action" type="submit">Unassign</button></form>` : '<p class="help">Not assigned yet.</p>'}
+      ${current && currentSlot && currentVenue ? `<p><a href="/admin/venues/${currentVenue.id}/assign">${escapeHtml(currentVenue.title)}</a>, ${escapeHtml(formatZonedWindow(currentSlot, options.season.timezone))}</p>${assignmentLegal ? `<form class="signup-form compact-form" method="post" action="/admin/assignments/${current.id}/unassign"><input type="hidden" name="_csrf" value="${escapeHtml(options.csrf.unassign)}"><input type="hidden" name="version" value="${current.version}"><input type="hidden" name="return_to" value="act"><button class="secondary-action" type="submit">Unassign</button></form>` : ""}` : '<p class="help">Not assigned yet.</p>'}
     </section>
     <section aria-labelledby="candidate-slots-title"><h2 id="candidate-slots-title">Ranked porch slots</h2>
       ${renderCandidateSummary(options, assignmentLegal, current !== undefined)}
@@ -148,7 +148,7 @@ function actCandidate(
   const sharedMember = pairing.warnings.some(
     (warning) => warning.code === "shared_member",
   );
-  return `<li class="matching-candidate"><h4>${escapeHtml(formatSlot(slot, options.season.timezone))}</h4>
+  return `<li class="matching-candidate"><h4>${escapeHtml(formatZonedWindow(slot, options.season.timezone))}</h4>
     <div class="matching-explanation"><p class="help">Why this match:</p><ul>${pairing.reasons.map((reason) => `<li>${escapeHtml(reason.text)}</li>`).join("")}</ul>${pairing.warnings.length ? `<p class="help">Warnings:</p><ul class="matching-warnings">${pairing.warnings.map((warning) => `<li>${escapeHtml(warning.text)}</li>`).join("")}</ul>` : ""}</div>
     <form class="signup-form compact-form" method="post" action="/admin/slots/${slot.id}/assign"><input type="hidden" name="_csrf" value="${escapeHtml(options.csrf.assign)}"><input type="hidden" name="slot" value="${slot.id}"><input type="hidden" name="act" value="${options.act.id}"><input type="hidden" name="version" value="${slot.version}"><input type="hidden" name="return_to" value="act">${sharedMember ? `<div class="field"><label for="override-${slot.id}-${options.act.id}">Shared-member override reason</label><input id="override-${slot.id}-${options.act.id}" name="override_reason" type="text" required></div>` : ""}<button class="primary-action" type="submit">Assign to ${escapeHtml(pairing.venue.title)}</button></form>
   </li>`;
@@ -183,6 +183,6 @@ function renderLinks(options: ActAssignmentPageOptions): string {
 function availability(act: MatchingAct, timezone: string): string {
   if (act.availabilities.length === 0) return "Not stated";
   return act.availabilities
-    .map((window) => formatSlot(window, timezone))
+    .map((window) => formatZonedWindow(window, timezone))
     .join(", ");
 }

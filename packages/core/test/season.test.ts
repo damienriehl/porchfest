@@ -11,6 +11,7 @@ import {
   type SeasonState,
 } from "../src/season.js";
 import { seasonStates } from "../src/storage/schema.js";
+import { rankPairings } from "../src/matching.js";
 import { openTestDatabase, type TestDatabase } from "./support/db.js";
 
 describe("season domain", () => {
@@ -185,6 +186,26 @@ describe("season domain", () => {
     expect(assignment.sharedMemberOverride).toBe(
       "Organizer confirmed separate player",
     );
+  });
+
+  it("refuses to assign a withdrawn act by name", () => {
+    const season = insertSeason(2105, "assigning");
+    const venueId = insertVenue(season.id, "Withdrawal Porch");
+    const slot = insertSlot(season.id, venueId);
+    const act = insertVersionedAct(season.id, "The Porch Cats");
+    seasonRepository.setRecordStatus("act", act.id, act.version, "withdrawn");
+
+    let thrown: unknown;
+    try {
+      seasonRepository.assignSlot(slot.id, slot.version, act.id);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(AssignmentConflictError);
+    expect(thrown).toMatchObject({
+      kind: "act_withdrawn",
+      message: "The Porch Cats have withdrawn and cannot be assigned",
+    });
   });
 
   it("normalizes and guards act links and unassigns with a version guard", () => {
@@ -848,6 +869,24 @@ describe("season domain", () => {
     ).toThrowError("season state locked refuses action assignment");
   });
 
+  it("refuses unassignment in a locked season and names the state", () => {
+    const season = insertSeason(2105, "assigning");
+    const venueId = insertVenue(season.id, "Locked Unassign Venue");
+    const slot = insertSlot(season.id, venueId);
+    const actId = insertAct(season.id, "Locked Unassign Act");
+    const assignment = seasonRepository.assignSlot(
+      slot.id,
+      slot.version,
+      actId,
+    );
+    const current = seasonRepository.getSeason(season.id);
+    seasonRepository.transitionSeason(season.id, current.version, "locked");
+
+    expect(() =>
+      seasonRepository.unassignSlot(assignment.id, assignment.version),
+    ).toThrowError("season state locked refuses action assignment");
+  });
+
   it("allows a version-guarded assignment correction after lock", () => {
     const season = insertSeason(2105, "locked");
     const venueId = insertVenue(season.id, "Correction Venue");
@@ -1387,7 +1426,9 @@ describe("season domain", () => {
       canonical.id,
     );
 
-    expect(seasonRepository.listAssignmentSuggestions(season.id)).toEqual([]);
+    expect(
+      rankPairings(seasonRepository.buildMatchingInput(season.id)),
+    ).toEqual([]);
     expect(() =>
       seasonRepository.assignSlot(openSlot.id, openSlot.version, canonical.id),
     ).toThrowError(/Canonical Band.*Supersession Venue.*12:00–1:00 PM/);
@@ -1472,6 +1513,37 @@ describe("season domain", () => {
     });
   });
 
+  it("stores canonical identity on assignment correction and withdrawal reopens the slot", () => {
+    const season = insertSeason(2105, "assigning");
+    const venueId = insertVenue(season.id, "Canonical Correction Venue");
+    const slot = insertSlot(season.id, venueId);
+    const original = insertVersionedAct(season.id, "Original Assignment");
+    const canonical = insertVersionedAct(season.id, "Canonical Replacement");
+    const alias = insertVersionedAct(season.id, "Replacement Alias");
+    const assignment = seasonRepository.assignSlot(
+      slot.id,
+      slot.version,
+      original.id,
+    );
+    seasonRepository.supersedeAct(alias.id, alias.version, canonical.id);
+
+    const corrected = seasonRepository.correctAssignment(
+      assignment.id,
+      assignment.version,
+      { actId: alias.id },
+    );
+    expect(corrected.actId).toBe(canonical.id);
+
+    seasonRepository.setRecordStatus(
+      "act",
+      canonical.id,
+      canonical.version,
+      "withdrawn",
+    );
+    expect(seasonRepository.getSlot(slot.id).state).toBe("open");
+    expect(seasonRepository.listAssignments(season.id)).toEqual([]);
+  });
+
   it("keeps queues, assignments, suggestions, and email waves season-scoped", () => {
     const first = insertSeason(2104, "assigning");
     const second = insertSeason(2105, "assigning");
@@ -1528,16 +1600,18 @@ describe("season domain", () => {
     expect(
       seasonRepository.listAssignments(first.id).map(({ id }) => id),
     ).not.toContain(secondAssignment.id);
-    expect(seasonRepository.listAssignmentSuggestions(first.id)).toEqual([
-      expect.objectContaining({
-        act: expect.objectContaining({
-          id: firstCandidateId,
+    expect(rankPairings(seasonRepository.buildMatchingInput(first.id))).toEqual(
+      [
+        expect.objectContaining({
+          act: expect.objectContaining({
+            id: firstCandidateId,
+          }),
+          slot: expect.objectContaining({
+            id: firstOpenSlot.id,
+          }),
         }),
-        slot: expect.objectContaining({
-          id: firstOpenSlot.id,
-        }),
-      }),
-    ]);
+      ],
+    );
     expect(
       seasonRepository.suggestForVenue(firstVenueId).map(({ act }) => act.id),
     ).toEqual([firstCandidateId]);
@@ -1603,5 +1677,24 @@ describe("season domain", () => {
     ).toThrowError(
       "season state signups_open refuses action transition_to_setup",
     );
+  });
+
+  it("refuses archival while held slots remain and exposes read-only slot lookups", () => {
+    const season = insertSeason(2105, "locked");
+    const venueId = insertVenue(season.id, "Held Archive Venue");
+    const first = insertSlot(season.id, venueId);
+    const second = insertSlot(season.id, venueId, 2);
+    sqlite
+      .prepare(
+        "update slots set state = 'held', held_for_name = 'Synthetic Hold', held_decide_by = ? where id in (?, ?)",
+      )
+      .run(Math.floor(pinnedNow.getTime() / 1000), first.id, second.id);
+
+    expect(() =>
+      seasonRepository.transitionSeason(season.id, season.version, "archived"),
+    ).toThrowError("2 slots are still held; release them before archiving");
+    expect(seasonRepository.getSlot(first.id).id).toBe(first.id);
+    expect(seasonRepository.listVenueSlots(venueId)).toHaveLength(2);
+    expect(seasonRepository.listSeasonSlots(season.id)).toHaveLength(2);
   });
 });

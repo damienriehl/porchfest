@@ -112,6 +112,20 @@
       "housePreference": null,
       "availabilities": [],
       "linkedActIds": []
+    },
+    {
+      "id": 106,
+      "name": "Partial Window",
+      "genre": "Folk",
+      "requiresAmplification": false,
+      "housePreference": null,
+      "availabilities": [
+        {
+          "startsAt": "2105-06-01T18:00:00.000Z",
+          "endsAt": "2105-06-01T18:30:00.000Z"
+        }
+      ],
+      "linkedActIds": []
     }
   ],
   "assignments": [

@@ -5,12 +5,11 @@ import {
   SeasonConflictError,
   SeasonLifecycleError,
   suggestionsForAct,
+  zonedWallClockToUtc,
   type Act,
-  type ActLink,
   type CoreRuntime,
   type QueueItem,
   type Season,
-  type Slot,
   type Venue,
 } from "@porchfest/core";
 import type { Context } from "hono";
@@ -117,41 +116,23 @@ export function registerAssignmentRoutes(options: AssignRouteOptions): void {
           sharedMemberOverride: nullableText(fields.override_reason),
         });
       } catch (error) {
-        if (error instanceof AssignmentConflictError) {
+        const refusal = mutationRefusal(
+          error,
+          "The slot changed while you were looking at it. Look again before assigning.",
+          404,
+        );
+        if (refusal) {
+          if (refusal.status === 404) return notFound("slot or act");
           return originPage(
             options,
             organizer.id,
             fields.return_to,
             location.venue,
             act.record,
-            error.message,
-            409,
+            refusal.message,
+            refusal.status,
           );
         }
-        if (error instanceof SeasonActionError) {
-          return originPage(
-            options,
-            organizer.id,
-            fields.return_to,
-            location.venue,
-            act.record,
-            stateRefusal(error),
-            409,
-          );
-        }
-        if (error instanceof SeasonConflictError) {
-          return originPage(
-            options,
-            organizer.id,
-            fields.return_to,
-            location.venue,
-            act.record,
-            "The slot changed while you were looking at it. Look again before assigning.",
-            409,
-          );
-        }
-        if (error instanceof SeasonLifecycleError)
-          return notFound("slot or act");
         throw error;
       }
       return redirect(
@@ -196,28 +177,23 @@ export function registerAssignmentRoutes(options: AssignRouteOptions): void {
       try {
         options.core.seasons.unassignSlot(assignmentId, version);
       } catch (error) {
-        if (error instanceof SeasonActionError)
+        const refusal = mutationRefusal(
+          error,
+          "The assignment changed while you were looking at it. Look again before unassigning.",
+          404,
+        );
+        if (refusal) {
+          if (refusal.status === 404) return notFound("assignment");
           return originPage(
             options,
             organizer.id,
             fields.return_to,
             located.venue,
             act.record,
-            stateRefusal(error),
-            409,
+            refusal.message,
+            refusal.status,
           );
-        if (error instanceof SeasonConflictError)
-          return originPage(
-            options,
-            organizer.id,
-            fields.return_to,
-            located.venue,
-            act.record,
-            "The assignment changed while you were looking at it. Look again before unassigning.",
-            409,
-          );
-        if (error instanceof SeasonLifecycleError)
-          return notFound("assignment");
+        }
         throw error;
       }
       return redirect(
@@ -241,7 +217,10 @@ export function registerAssignmentRoutes(options: AssignRouteOptions): void {
       const fields = await readFields(context);
       const version = versionOf(fields.version);
       const heldForName = fields.held_for?.trim() ?? "";
-      const decideBy = parseDate(fields.decide_by);
+      const decideBy = parseEndOfDate(
+        fields.decide_by,
+        located.season.timezone,
+      );
       const fallbackVenueId = optionalPositiveId(fields.fallback_venue);
       if (
         version === null ||
@@ -329,15 +308,11 @@ export function registerAssignmentRoutes(options: AssignRouteOptions): void {
           note: nullableText(fields.note),
         });
       } catch (error) {
-        if (error instanceof SeasonActionError)
+        const refusal = mutationRefusal(error, null);
+        if (refusal)
           return actPage(options, organizer.id, act.record, {
-            error: stateRefusal(error),
-            status: 409,
-          });
-        if (error instanceof SeasonLifecycleError)
-          return actPage(options, organizer.id, act.record, {
-            error: error.message,
-            status: 409,
+            error: refusal.message,
+            status: refusal.status,
           });
         throw error;
       }
@@ -368,18 +343,18 @@ export function registerAssignmentRoutes(options: AssignRouteOptions): void {
       try {
         options.core.seasons.unlinkActs(linkId, version);
       } catch (error) {
-        if (error instanceof SeasonActionError)
+        const refusal = mutationRefusal(
+          error,
+          "The act link changed while you were looking at it. Look again before unlinking.",
+          404,
+        );
+        if (refusal) {
+          if (refusal.status === 404) return notFound("act link");
           return actPage(options, organizer.id, act.record, {
-            error: stateRefusal(error),
-            status: 409,
+            error: refusal.message,
+            status: refusal.status,
           });
-        if (error instanceof SeasonConflictError)
-          return actPage(options, organizer.id, act.record, {
-            error:
-              "The act link changed while you were looking at it. Look again before unlinking.",
-            status: 409,
-          });
-        if (error instanceof SeasonLifecycleError) return notFound("act link");
+        }
         throw error;
       }
       return redirect(`/admin/acts/${act.record.id}/assign`);
@@ -399,10 +374,9 @@ function venuePage(
   } = {},
 ): Response {
   const season = options.core.seasons.getSeason(venue.seasonId);
-  let slots: readonly Slot[] = [];
-  if (season.state !== "archived") {
-    slots = options.core.seasons.ensureVenueSlots(venue.id);
-  }
+  const slots = isSeasonActionLegal(season.state, "correction")
+    ? options.core.seasons.ensureVenueSlots(venue.id)
+    : options.core.seasons.listVenueSlots(venue.id);
   const records = options.core.queue.listForOrganizer(season.id, organizerId);
   const acts = recordRows(records, "act").filter(
     (act) => act.status !== "withdrawn",
@@ -463,12 +437,9 @@ function actPage(
   const venues = recordRows(records, "venue").filter(
     (venue) => venue.status !== "withdrawn",
   );
-  const slots =
-    season.state === "archived"
-      ? []
-      : venues.flatMap((venue) =>
-          options.core.seasons.ensureVenueSlots(venue.id),
-        );
+  const slots = isSeasonActionLegal(season.state, "correction")
+    ? venues.flatMap((venue) => options.core.seasons.ensureVenueSlots(venue.id))
+    : options.core.seasons.listSeasonSlots(season.id);
   const input = options.core.seasons.buildMatchingInput(season.id);
   const matchingAct = input.acts.find((item) => item.id === act.id);
   if (!matchingAct && act.status !== "withdrawn") return notFound("act");
@@ -519,23 +490,38 @@ function venueMutationError(
   venue: Venue,
   error: unknown,
 ): Response {
-  if (error instanceof SeasonActionError)
+  const refusal = mutationRefusal(
+    error,
+    "The slot changed while you were looking at it. Look again before continuing.",
+  );
+  if (refusal)
     return venuePage(options, organizerId, venue, {
-      error: stateRefusal(error),
-      status: 409,
-    });
-  if (error instanceof SeasonConflictError)
-    return venuePage(options, organizerId, venue, {
-      error:
-        "The slot changed while you were looking at it. Look again before continuing.",
-      status: 409,
-    });
-  if (error instanceof SeasonLifecycleError)
-    return venuePage(options, organizerId, venue, {
-      error: error.message,
-      status: 409,
+      error: refusal.message,
+      status: refusal.status,
     });
   throw error;
+}
+
+function mutationRefusal(
+  error: unknown,
+  conflictMessage: string | null,
+  lifecycleStatus = 409,
+): { readonly message: string; readonly status: number } | null {
+  if (error instanceof AssignmentConflictError) {
+    return { message: error.message, status: 409 };
+  }
+  if (error instanceof SeasonActionError) {
+    return { message: stateRefusal(error), status: 409 };
+  }
+  if (error instanceof SeasonConflictError) {
+    return conflictMessage === null
+      ? null
+      : { message: conflictMessage, status: 409 };
+  }
+  if (error instanceof SeasonLifecycleError) {
+    return { message: error.message, status: lifecycleStatus };
+  }
+  return null;
 }
 
 function findRecord<T extends "act" | "venue">(
@@ -576,51 +562,45 @@ function findSlot(
   core: CoreRuntime,
   slotId: number,
 ): { readonly season: Season; readonly venue: Venue } | null {
-  for (const season of core.setup.listSeasons()) {
-    const located = findSlotInSeason(core, season, slotId);
-    if (located) return located;
+  try {
+    const slot = core.seasons.getSlot(slotId);
+    const venue = core.seasons.getVenue(slot.venueId);
+    const season = core.seasons.getSeason(slot.seasonId);
+    if (venue.seasonId !== season.id) return null;
+    return { season, venue };
+  } catch (error) {
+    if (error instanceof SeasonLifecycleError) return null;
+    throw error;
   }
-  return null;
-}
-
-function findSlotInSeason(
-  core: CoreRuntime,
-  season: Season,
-  slotId: number,
-): { readonly season: Season; readonly venue: Venue } | null {
-  const matchingVenue = core.seasons
-    .buildMatchingInput(season.id)
-    .venues.find((venue) => venue.slots.some((slot) => slot.id === slotId));
-  if (!matchingVenue) return null;
-  const venue = core.seasons
-    .listActivityQueue(season.id)
-    .find(
-      (item) =>
-        item.recordType === "venue" && item.record.id === matchingVenue.id,
-    );
-  return venue?.recordType === "venue" ? { season, venue: venue.record } : null;
 }
 
 function findAssignment(core: CoreRuntime, assignmentId: number) {
-  for (const season of core.setup.listSeasons()) {
-    const assignment = core.seasons
-      .listAssignments(season.id)
-      .find((item) => item.id === assignmentId);
-    if (!assignment) continue;
-    const located = findSlotInSeason(core, season, assignment.slotId);
-    if (located) return { ...located, assignment };
+  try {
+    const assignment = core.seasons.getAssignment(assignmentId);
+    const slot = core.seasons.getSlot(assignment.slotId);
+    const venue = core.seasons.getVenue(slot.venueId);
+    const season = core.seasons.getSeason(assignment.seasonId);
+    if (
+      slot.seasonId !== season.id ||
+      venue.seasonId !== season.id ||
+      assignment.seasonId !== season.id
+    ) {
+      return null;
+    }
+    return { season, venue, assignment };
+  } catch (error) {
+    if (error instanceof SeasonLifecycleError) return null;
+    throw error;
   }
-  return null;
 }
 
-function findLink(core: CoreRuntime, linkId: number): ActLink | null {
-  for (const season of core.setup.listSeasons()) {
-    const link = core.seasons
-      .listActLinks(season.id)
-      .find((item) => item.id === linkId);
-    if (link) return link;
+function findLink(core: CoreRuntime, linkId: number) {
+  try {
+    return core.seasons.getActLink(linkId);
+  } catch (error) {
+    if (error instanceof SeasonLifecycleError) return null;
+    throw error;
   }
-  return null;
 }
 
 function positiveId(value: string | undefined): number | null {
@@ -637,10 +617,30 @@ function optionalPositiveId(value: string | undefined): number | null | false {
   return positiveId(value) ?? false;
 }
 
-function parseDate(value: string | undefined): Date | null {
+function parseEndOfDate(
+  value: string | undefined,
+  timezone: string,
+): Date | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value ?? "")) return null;
-  const parsed = new Date(`${value}T12:00:00.000Z`);
-  return Number.isNaN(parsed.valueOf()) ? null : parsed;
+  const [year, month, day] = value!.split("-").map(Number) as [
+    number,
+    number,
+    number,
+  ];
+  const selected = new Date(Date.UTC(year, month - 1, day));
+  if (
+    selected.getUTCFullYear() !== year ||
+    selected.getUTCMonth() !== month - 1 ||
+    selected.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  const next = new Date(Date.UTC(year, month - 1, day + 1));
+  const nextDate = `${next.getUTCFullYear().toString().padStart(4, "0")}-${(next.getUTCMonth() + 1).toString().padStart(2, "0")}-${next.getUTCDate().toString().padStart(2, "0")}`;
+  const nextMidnight = zonedWallClockToUtc(`${nextDate}T00:00`, timezone);
+  return nextMidnight === null
+    ? null
+    : new Date(nextMidnight.getTime() - 1_000);
 }
 
 function nullableText(value: string | undefined): string | null {

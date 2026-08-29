@@ -108,7 +108,10 @@ export function registerSeasonLifecycleRoutes(options: {
             `Someone else changed the season. Review the refreshed state and version ${current.version} before trying again.`,
           );
         }
-        if (error instanceof SeasonLifecycleError) return notFound();
+        if (error instanceof SeasonLifecycleError) {
+          const current = options.core.seasons.getSeason(season.id);
+          return seasonPage(options, current, 409, error.message);
+        }
         throw error;
       }
       return redirect(`/admin/seasons/${season.id}?transitioned=1`);
@@ -135,7 +138,10 @@ function findSeason(
 }
 
 function seasonPage(
-  options: { readonly csrfTokenFor: (path: string) => string },
+  options: {
+    readonly core: CoreRuntime;
+    readonly csrfTokenFor: (path: string) => string;
+  },
   season: Season,
   status: number,
   error?: string,
@@ -144,6 +150,9 @@ function seasonPage(
   return new Response(
     renderSeasonLifecyclePage({
       season,
+      heldSlotCount: options.core.seasons
+        .listSeasonSlots(season.id)
+        .filter((slot) => slot.state === "held").length,
       csrfToken: options.csrfTokenFor(SEASON_TRANSITION_PATH),
       error,
       transitioned,

@@ -61,7 +61,7 @@ async function boot() {
     displayName: "Synthetic Season",
     timezone: "UTC",
     eventDate: "2031-09-13",
-    timeSlots: [],
+    timeSlots: [{ startsAt: "18:00", endsAt: "19:00" }],
     openSignups: true,
   });
   const signup = runtime.core.seasons.createHostSignup({
@@ -313,6 +313,33 @@ describe("organizer season lifecycle", () => {
     expect(response.status).toBe(403);
     expect(runtime.core.seasons.getSeason(season.id).state).toBe(
       "signups_open",
+    );
+  });
+
+  it("shows held-slot count and names the archival refusal", async () => {
+    const { runtime, cookie, season, signup } = await boot();
+    const slot = runtime.core.seasons.ensureVenueSlots(signup.venue.id)[0]!;
+    runtime.core.seasons.holdSlot(slot.id, slot.version, {
+      heldForName: "Synthetic Held Act",
+      decideBy: new Date("2031-09-01T23:59:59.999Z"),
+    });
+    const current = runtime.core.seasons.getSeason(season.id);
+    const page = await get(runtime, `/admin/seasons/${season.id}`, cookie);
+    expect(await page.text()).toMatch(
+      /Move to archived[\s\S]*1 slot is still held/,
+    );
+
+    const response = await transition(
+      runtime,
+      cookie,
+      season.id,
+      current.version,
+      "archived",
+      "confirmed",
+    );
+    expect(response.status).toBe(409);
+    expect(await response.text()).toContain(
+      "1 slot is still held; release it before archiving",
     );
   });
 });

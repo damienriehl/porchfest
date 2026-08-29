@@ -1,4 +1,5 @@
 import {
+  formatZonedWindow,
   isSeasonActionLegal,
   type Act,
   type Assignment,
@@ -98,7 +99,7 @@ function slotSection(
   assignment: Assignment | undefined,
   assignmentLegal: boolean,
 ): string {
-  const title = formatSlot(slot, options.season.timezone);
+  const title = formatZonedWindow(slot, options.season.timezone);
   if (slot.state === "held") {
     const fallback =
       slot.fallbackVenueId === null
@@ -106,7 +107,7 @@ function slotSection(
         : `Fallback: ${options.venues.find((venue) => venue.id === slot.fallbackVenueId)?.title ?? "Unknown venue"}`;
     return `<section class="matching-slot" aria-labelledby="slot-${slot.id}">
       <h3 id="slot-${slot.id}">${escapeHtml(title)} · Held</h3>
-      <p>Held for ${escapeHtml(slot.heldForName ?? "Unnamed act")} until ${escapeHtml(slot.heldDecideBy?.toISOString().slice(0, 10) ?? "no decide-by date")}.</p>
+      <p>Held for ${escapeHtml(slot.heldForName ?? "Unnamed act")} until ${escapeHtml(slot.heldDecideBy ? formatZonedDate(slot.heldDecideBy, options.season.timezone) : "no decide-by date")}.</p>
       <p class="help">${escapeHtml(fallback)}</p>
       <form class="signup-form compact-form" method="post" action="/admin/slots/${slot.id}/release">
         ${hidden(options.csrf.release, slot.version, "venue")}
@@ -122,7 +123,7 @@ function slotSection(
       <h3 id="slot-${slot.id}">${escapeHtml(title)} · Assigned</h3>
       <p>${act ? `<a href="/admin/acts/${act.id}/assign">${escapeHtml(act.name)}</a>` : "Assigned act unavailable"}</p>
       ${
-        assignment
+        assignment && assignmentLegal
           ? `<form class="signup-form compact-form" method="post" action="/admin/assignments/${assignment.id}/unassign">
         ${hidden(options.csrf.unassign, assignment.version, "venue")}
         <button class="secondary-action" type="submit">Unassign</button>
@@ -197,15 +198,14 @@ function hidden(csrf: string, version: number, returnTo: string): string {
   return `<input type="hidden" name="_csrf" value="${escapeHtml(csrf)}"><input type="hidden" name="version" value="${version}"><input type="hidden" name="return_to" value="${returnTo}">`;
 }
 
-export function formatSlot(
-  slot: Pick<Slot, "startsAt" | "endsAt">,
-  timezone: string,
-): string {
-  const formatter = new Intl.DateTimeFormat("en-GB", {
+function formatZonedDate(date: Date, timezone: string): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: timezone,
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  });
-  return `${formatter.format(slot.startsAt)}–${formatter.format(slot.endsAt)}`;
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const value = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? "";
+  return `${value("year")}-${value("month")}-${value("day")}`;
 }
