@@ -25,9 +25,17 @@ CREATE TABLE `venue_coordinates` (
 --> statement-breakpoint
 CREATE UNIQUE INDEX `venue_coordinates_venue_id_uidx` ON `venue_coordinates` (`venue_id`);--> statement-breakpoint
 CREATE INDEX `venue_coordinates_status_idx` ON `venue_coordinates` (`status`);--> statement-breakpoint
-INSERT INTO `venue_coordinates` (`venue_id`, `latitude`, `longitude`, `source`, `provider`, `status`, `address_at_geocode`, `updated_at`)
-SELECT `id`, `latitude`, `longitude`, 'geocoded', 'legacy', 'pending', coalesce(`address`, ''), `updated_at`
+INSERT INTO `venue_coordinates` (`venue_id`, `latitude`, `longitude`, `source`, `provider`, `status`, `rejection_code`, `address_at_geocode`, `updated_at`)
+SELECT `id`,
+	CASE WHEN `latitude` IS NOT NULL AND `longitude` IS NOT NULL THEN `latitude` ELSE NULL END,
+	CASE WHEN `latitude` IS NOT NULL AND `longitude` IS NOT NULL THEN `longitude` ELSE NULL END,
+	'geocoded',
+	'legacy',
+	CASE WHEN `latitude` IS NOT NULL AND `longitude` IS NOT NULL THEN 'pending' ELSE 'needs-review' END,
+	CASE WHEN `latitude` IS NOT NULL AND `longitude` IS NOT NULL THEN NULL ELSE 'invalid-coordinate' END,
+	coalesce(`address`, ''),
+	`updated_at`
 FROM `venues`
-WHERE `latitude` IS NOT NULL AND `longitude` IS NOT NULL;--> statement-breakpoint
+WHERE `latitude` IS NOT NULL OR `longitude` IS NOT NULL;--> statement-breakpoint
 ALTER TABLE `venues` DROP COLUMN `latitude`;--> statement-breakpoint
 ALTER TABLE `venues` DROP COLUMN `longitude`;

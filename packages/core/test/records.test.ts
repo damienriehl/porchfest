@@ -1151,6 +1151,88 @@ describe("record lifecycle", () => {
     ).toEqual([host.id, reachVia.id]);
   });
 
+  it("preserves an organizer pin when promoting a differently addressed geocoded submission", () => {
+    const seasonId = insertSeason();
+    const contact = sqlite
+      .prepare(
+        "insert into contacts (season_id, name) values (?, ?) returning id",
+      )
+      .get(seasonId, "Promotion Contact") as { id: number };
+    const placeholder = records.createPlaceholderVenue({
+      seasonId,
+      reach: { reachViaContactId: contact.id },
+      venue: {
+        title: "Organizer Placeholder",
+        address: "301 Orbit Lane",
+      },
+    });
+    sqlite
+      .prepare(
+        "insert into venue_coordinates (venue_id, latitude, longitude, source, provider, ref, status, address_at_geocode) values (?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        placeholder.id,
+        10.4,
+        20.4,
+        "organizer-verified",
+        "organizer",
+        "organizer/1",
+        "verified",
+        "301 Orbit Lane",
+      );
+    const submission = sqlite
+      .prepare(
+        "insert into venues (season_id, title, address) values (?, ?, ?) returning id, version",
+      )
+      .get(seasonId, "Submitted Venue", "302 Orbit Lane") as {
+      id: number;
+      version: number;
+    };
+    sqlite
+      .prepare(
+        "insert into venue_coordinates (venue_id, latitude, longitude, source, precision, provider, ref, status, address_at_geocode) values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        submission.id,
+        10.8,
+        20.8,
+        "geocoded",
+        "parcel",
+        "fixture",
+        "way/302",
+        "verified",
+        "302 Orbit Lane",
+      );
+
+    records.promotePlaceholderVenue(
+      placeholder.id,
+      placeholder.version,
+      submission.id,
+      submission.version,
+    );
+
+    expect(
+      sqlite
+        .prepare(
+          "select latitude, longitude, source, status, rejection_code from venue_coordinates where venue_id = ?",
+        )
+        .get(placeholder.id),
+    ).toEqual({
+      latitude: 10.4,
+      longitude: 20.4,
+      source: "organizer-verified",
+      status: "needs-review",
+      rejection_code: "address-changed",
+    });
+    expect(
+      sqlite
+        .prepare(
+          "select count(*) as count from venue_coordinates where venue_id = ?",
+        )
+        .get(submission.id),
+    ).toEqual({ count: 0 });
+  });
+
   it("refuses venue promotion when the placeholder is already superseded", () => {
     const seasonId = insertSeason();
     const canonical = sqlite

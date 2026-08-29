@@ -128,46 +128,63 @@ export function createGeocodingRepository(
       };
     }
 
-    const outcome = await ports.geo.locate({
-      address,
-      boundingBox,
-      localityName: context.localityName ?? context.seasonName,
-    });
+    let outcome: LocateOutcome;
+    try {
+      outcome = await ports.geo.locate({
+        address,
+        boundingBox,
+        localityName: context.localityName ?? undefined,
+      });
+    } catch {
+      return {
+        kind: "unavailable",
+        reason: `${ports.geo.name} failed before returning a geocoding outcome.`,
+      };
+    }
     if (outcome.kind === "unavailable") {
       return { kind: "unavailable", reason: outcome.reason };
     }
 
-    const current = venueContext(db, venueId);
-    if (
-      current.venueVersion !== context.venueVersion ||
-      current.address?.trim() !== address
-    ) {
-      return {
-        kind: "unavailable",
-        reason:
-          "The venue changed while geocoding; retry with the current address.",
-      };
-    }
-    const coordinateNow = coordinateForVenue(db, venueId);
-    if (coordinateNow?.source === "organizer-verified") {
-      return {
-        kind: "preserved",
-        coordinate: coordinateNow,
-        reason:
-          "An organizer verified the coordinate while geocoding was in progress.",
-      };
-    }
+    return db.transaction(
+      (tx) => {
+        const current = venueContext(tx, venueId);
+        if (
+          current.venueVersion !== context.venueVersion ||
+          current.address?.trim() !== address
+        ) {
+          return {
+            kind: "unavailable" as const,
+            reason:
+              "The venue changed while geocoding; retry with the current address.",
+          };
+        }
+        const coordinateNow = coordinateForVenue(tx, venueId);
+        if (coordinateNow?.source === "organizer-verified") {
+          return {
+            kind: "preserved" as const,
+            coordinate: coordinateNow,
+            reason:
+              "An organizer verified the coordinate while geocoding was in progress.",
+          };
+        }
 
-    const stored = storeOutcome(db, {
-      venueId,
-      address,
-      provider: ports.geo.name,
-      actor,
-      outcome,
-      boundingBox,
-      updatedAt: now(),
-    });
-    return { kind: "stored", coordinate: stored, reason: outcome.reason };
+        const stored = storeOutcome(tx, {
+          venueId,
+          address,
+          provider: ports.geo.name,
+          actor,
+          outcome,
+          boundingBox,
+          updatedAt: now(),
+        });
+        return {
+          kind: "stored" as const,
+          coordinate: stored,
+          reason: outcome.reason,
+        };
+      },
+      { behavior: "immediate" },
+    );
   }
 
   function verifyVenueCoordinate(
@@ -380,6 +397,7 @@ function storeOutcome(
     crossCheck: outcome.crossCheck,
   });
   const distance = crossCheckDistance(outcome);
+  const validCandidate = isValidCoordinate(outcome.candidate);
   let rejectionCode: CoordinateRejectionCode | null =
     verdict.status === "rejected" ? verdict.code : null;
   if (
@@ -393,8 +411,8 @@ function storeOutcome(
 
   return upsertCoordinate(db, {
     venueId,
-    latitude: outcome.candidate.latitude,
-    longitude: outcome.candidate.longitude,
+    latitude: validCandidate ? outcome.candidate.latitude : null,
+    longitude: validCandidate ? outcome.candidate.longitude : null,
     source: "geocoded",
     precision: outcome.candidate.precision,
     provider,
