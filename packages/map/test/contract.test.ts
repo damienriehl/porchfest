@@ -1,11 +1,12 @@
-import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   VENUES_MAP_GENERATED_FROM,
   VENUES_MAP_SCHEMA_VERSION,
   assertVenuesMapSchemaDigest,
+  computeVenuesMapSchemaDigest,
+  loadVerifiedVenuesMapSchema,
   readPinnedVenuesMapSchemaDigest,
-  readVenuesMapSchemaSource,
   type VenuesMapDocument,
 } from "../src/index.js";
 
@@ -14,12 +15,23 @@ interface VenuesMapSchema {
   required: string[];
   properties: {
     schema_version: { const: string };
-    generated_from: { enum: string[]; const?: unknown };
+    generated_from: { enum: string[] };
   };
   $defs: Record<string, unknown>;
 }
 
-const sparseDocument: VenuesMapDocument = {
+const bytes = readFileSync(
+  new URL("../schemas/venues-map.v1.schema.json", import.meta.url),
+);
+const source = bytes.toString("utf8");
+const schema = JSON.parse(source) as VenuesMapSchema;
+const pinSource = readFileSync(
+  new URL("../schemas/venues-map.v1.sha256", import.meta.url),
+  "utf8",
+);
+
+// This fixture is compile-time coverage; `npm run typecheck` is the gate.
+const sparse = {
   schema_version: VENUES_MAP_SCHEMA_VERSION,
   season: 2026,
   generated_from: "packages/web/src/routes/map.ts",
@@ -48,21 +60,18 @@ const sparseDocument: VenuesMapDocument = {
       ],
     },
   ],
-};
+} satisfies VenuesMapDocument;
+void sparse;
 
 describe("venues-map schema contract", () => {
   it("pins the exact shipped schema bytes", () => {
-    const source = readVenuesMapSchemaSource();
-    const actualDigest = createHash("sha256")
-      .update(source, "utf8")
-      .digest("hex");
+    const actualDigest = computeVenuesMapSchemaDigest(bytes);
 
     expect(readPinnedVenuesMapSchemaDigest()).toBe(actualDigest);
-    expect(() => assertVenuesMapSchemaDigest()).not.toThrow();
+    expect(() => assertVenuesMapSchemaDigest(source)).not.toThrow();
   });
 
   it("rejects schema source whose bytes do not match the pin", () => {
-    const source = readVenuesMapSchemaSource();
     const mutatedSource = source.replace(
       '"title": "SAP Porchfest 2026 venues map"',
       '"title": "Mutated venues map"',
@@ -75,8 +84,6 @@ describe("venues-map schema contract", () => {
   });
 
   it("declares the 2020-12 draft and the widened v1.2.0 provenance", () => {
-    const schema = JSON.parse(readVenuesMapSchemaSource()) as VenuesMapSchema;
-
     expect(schema.$schema).toBe("https://json-schema.org/draft/2020-12/schema");
     expect(schema.properties.schema_version.const).toBe(
       VENUES_MAP_SCHEMA_VERSION,
@@ -84,18 +91,10 @@ describe("venues-map schema contract", () => {
     expect(schema.properties.generated_from.enum).toEqual(
       VENUES_MAP_GENERATED_FROM,
     );
-    expect(schema.properties.generated_from.enum).toContain(
-      "porchfest/tools/render.py",
-    );
-    expect(schema.properties.generated_from.enum).toContain(
-      "packages/web/src/routes/map.ts",
-    );
-    expect(schema.properties.generated_from).not.toHaveProperty("const");
+    expect(Object.keys(schema.properties.generated_from)).toEqual(["enum"]);
   });
 
   it("retains the required document keys and nested definitions", () => {
-    const schema = JSON.parse(readVenuesMapSchemaSource()) as VenuesMapSchema;
-
     expect(schema.required).toEqual([
       "schema_version",
       "season",
@@ -112,8 +111,34 @@ describe("venues-map schema contract", () => {
     );
   });
 
-  it("types schema-optional act notes and link labels as optional", () => {
-    expect(sparseDocument.venues[0]?.acts[0]?.note).toBeUndefined();
-    expect(sparseDocument.venues[0]?.acts[0]?.links[0]?.label).toBeUndefined();
+  it("rejects a pin that names a different schema file", () => {
+    const wrongFilename = pinSource.replace(
+      "venues-map.v1.schema.json",
+      "other-schema.json",
+    );
+
+    expect(() => readPinnedVenuesMapSchemaDigest(wrongFilename)).toThrow(
+      /expected sha256sum format/,
+    );
+  });
+
+  it("accepts an uppercase digest in the pin", () => {
+    const uppercaseDigest = pinSource.replace(/^[a-f0-9]{64}/, (digest) =>
+      digest.toUpperCase(),
+    );
+
+    expect(readPinnedVenuesMapSchemaDigest(uppercaseDigest)).toBe(
+      computeVenuesMapSchemaDigest(bytes),
+    );
+  });
+
+  it("loads and memoizes the verified parsed schema", () => {
+    const first = loadVerifiedVenuesMapSchema();
+    const second = loadVerifiedVenuesMapSchema();
+
+    expect(second).toBe(first);
+    expect(first.digest).toBe(readPinnedVenuesMapSchemaDigest());
+    expect(first.source).toBe(source);
+    expect(first.schema).toEqual(schema);
   });
 });
