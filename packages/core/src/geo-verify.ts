@@ -12,7 +12,7 @@ export type AcceptedCoordinatePrecision = Exclude<
 >;
 
 /** Where a stored coordinate came from. An organizer's correction outranks a
- *  geocoder's guess; see {@link resolveCoordinatePrecedence}. */
+ *  geocoder's guess in the core persistence layer. */
 export type CoordinateSource = "geocoded" | "organizer-verified";
 
 /** A geocoder result offered to the gate, before anything is stored. */
@@ -39,7 +39,7 @@ export interface VerifiedCoordinate extends Coordinates {
   readonly crossCheckDistanceMeters: number | null;
 }
 
-export type CoordinateRejectionCode =
+export type CoordinateGateRejectionCode =
   | "invalid-coordinate"
   | "missing-ref"
   | "interpolated"
@@ -48,7 +48,7 @@ export type CoordinateRejectionCode =
   | "cross-check-missing";
 
 export interface CoordinateRejection {
-  readonly code: CoordinateRejectionCode;
+  readonly code: CoordinateGateRejectionCode;
   readonly reason: string;
 }
 
@@ -63,7 +63,7 @@ export type CoordinateVerdict =
   | { readonly status: "accepted"; readonly coordinate: VerifiedCoordinate }
   | {
       readonly status: "rejected";
-      readonly code: CoordinateRejectionCode;
+      readonly code: CoordinateGateRejectionCode;
       readonly reason: string;
       readonly failures: readonly CoordinateRejection[];
     };
@@ -76,13 +76,6 @@ export interface CoordinateVerificationOptions {
    * corroborates it; optional for a parcel-level address point.
    */
   readonly crossCheck?: Coordinates | null;
-}
-
-export interface CoordinatePrecedenceDecision {
-  readonly outcome: "adopt" | "keep-existing";
-  /** The coordinate that should be stored after this decision. */
-  readonly coordinate: VerifiedCoordinate;
-  readonly reason: string;
 }
 
 /** IUGG mean Earth radius. Good to well under a metre at neighborhood scale. */
@@ -254,44 +247,6 @@ export function verifyOrganizerCoordinate(
       precision: null,
       crossCheckDistanceMeters: crossCheckDistance(coordinate, crossCheck),
     },
-  };
-}
-
-/**
- * R29: regeneration must never overwrite an organizer-verified coordinate with
- * a geocoded one. Pure decision — the caller stores `coordinate` either way.
- */
-export function resolveCoordinatePrecedence(
-  existing: VerifiedCoordinate | null,
-  incoming: VerifiedCoordinate,
-): CoordinatePrecedenceDecision {
-  if (existing === null) {
-    return {
-      outcome: "adopt",
-      coordinate: incoming,
-      reason: "No coordinate is stored for this address yet.",
-    };
-  }
-
-  if (
-    existing.source === "organizer-verified" &&
-    incoming.source === "geocoded"
-  ) {
-    return {
-      outcome: "keep-existing",
-      coordinate: existing,
-      reason:
-        "An organizer-verified coordinate is never overwritten by a geocoded one.",
-    };
-  }
-
-  return {
-    outcome: "adopt",
-    coordinate: incoming,
-    reason:
-      existing.source === "geocoded"
-        ? "Regeneration replaces a geocoded coordinate."
-        : "A later organizer correction replaces an earlier one.",
   };
 }
 
