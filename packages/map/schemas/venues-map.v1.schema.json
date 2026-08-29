@@ -1,0 +1,172 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "venues-map.v1.schema.json",
+  "title": "SAP Porchfest 2026 venues map",
+  "description": "Canonical public map-data contract for the 2026 SAP Porchfest.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "season",
+    "generated_from",
+    "event",
+    "venues"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.2.0"
+    },
+    "season": {
+      "const": 2026
+    },
+    "generated_from": {
+      "enum": ["porchfest/tools/render.py", "packages/web/src/routes/map.ts"]
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "date",
+        "time",
+        "city",
+        "state"
+      ],
+      "properties": {
+        "date": {
+          "const": "2026-09-16"
+        },
+        "time": {
+          "const": "6-8 PM"
+        },
+        "city": {
+          "const": "Saint Paul"
+        },
+        "state": {
+          "const": "MN"
+        }
+      }
+    },
+    "venues": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/venue"
+      }
+    }
+  },
+  "$defs": {
+    "venue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "address",
+        "lat",
+        "lng",
+        "schedule",
+        "acts"
+      ],
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "address": {
+          "type": "string",
+          "minLength": 1
+        },
+        "lat": {
+          "type": "number",
+          "minimum": 44.945,
+          "maximum": 45.005
+        },
+        "lng": {
+          "type": "number",
+          "minimum": -93.235,
+          "maximum": -93.15
+        },
+        "schedule": {
+          "type": "string",
+          "enum": [
+            "6–7 pm",
+            "7–8 pm",
+            "6–8 pm"
+          ]
+        },
+        "acts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/act"
+          }
+        }
+      }
+    },
+    "act": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "slot",
+        "slot_label",
+        "name",
+        "genre",
+        "description",
+        "links"
+      ],
+      "properties": {
+        "slot": {
+          "type": "string",
+          "enum": [
+            "6-7",
+            "7-8",
+            "6-8"
+          ]
+        },
+        "slot_label": {
+          "type": "string",
+          "enum": [
+            "6–7 pm",
+            "7–8 pm",
+            "6–8 pm"
+          ]
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "genre": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "links": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/link"
+          }
+        },
+        "note": {
+          "type": "string"
+        }
+      }
+    },
+    "link": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "url"
+      ],
+      "properties": {
+        "label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "url": {
+          "type": "string",
+          "pattern": "^https?://"
+        }
+      }
+    }
+  }
+}

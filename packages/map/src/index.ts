@@ -1,5 +1,7 @@
 import { fileURLToPath } from "node:url";
 
+export * from "./contract.js";
+
 export type VenueMapActSlot = "6-7" | "7-8" | "6-8";
 
 export interface VenueMapLink {
