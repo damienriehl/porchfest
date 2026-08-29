@@ -37,7 +37,7 @@ export type CoordinateSource = "geocoded" | "organizer-verified";
  * inverted (misconfigured) box into a valid one.
  */
 /** A geocoder result offered to the gate, before anything is stored. */
-export interface GeocodeCandidate extends LocateCandidate {}
+export type GeocodeCandidate = LocateCandidate;
 
 /** A point an organizer placed or corrected by hand. */
 export interface OrganizerCoordinate extends Coordinates {

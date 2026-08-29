@@ -43,6 +43,10 @@ export {
 } from "./storage/connection.js";
 export {
   seasonStates,
+  coordinatePrecisions,
+  coordinateRejectionCodes,
+  coordinateSources,
+  coordinateStatuses,
   venueAmenityValues,
   venueDrinkValues,
   venueGearValues,
@@ -52,6 +56,7 @@ export {
   type Season,
   type Slot,
   type Venue,
+  type VenueCoordinate,
 } from "./storage/schema.js";
 export {
   AssignmentConflictError,
@@ -150,6 +155,18 @@ export type {
 } from "./records.js";
 export { RecordLifecycleError } from "./records.js";
 export {
+  createGeocodingRepository,
+  GeocodingConflictError,
+  GeocodingLifecycleError,
+  MAX_PARCEL_CROSS_CHECK_DISTANCE_M,
+  type GeocodingActor,
+  type GeocodingPorts,
+  type GeocodingRepository,
+  type GeocodingRepositoryOptions,
+  type GeocodeVenueResult,
+  type VenueCoordinateReview,
+} from "./geocoding.js";
+export {
   AccessError,
   createAccessRepository,
   DEFAULT_BOOTSTRAP_TTL_MS,
@@ -239,6 +256,10 @@ import {
   type OutboxRepository,
   type OutboxRepositoryOptions,
 } from "./outbox.js";
+import {
+  createGeocodingRepository,
+  type GeocodingRepository,
+} from "./geocoding.js";
 import { createQueueRepository, type QueueRepository } from "./queue.js";
 import {
   createRetentionRepository,
@@ -260,6 +281,7 @@ export interface CoreRuntime {
   readonly changeRequests: ChangeRequestRepository;
   readonly retention: RetentionRepository;
   readonly outbox: OutboxRepository;
+  readonly geocoding: GeocodingRepository;
 }
 
 export interface CoreOptions {
@@ -287,5 +309,6 @@ export function createCore(
       { email: ports.email },
       options.outbox,
     ),
+    geocoding: createGeocodingRepository(database, { geo: ports.geo }),
   });
 }

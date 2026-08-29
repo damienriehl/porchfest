@@ -776,15 +776,28 @@ describe("record lifecycle", () => {
       venue: {
         title: "Placeholder Venue",
         address: "Placeholder address",
-        latitude: 44.9778,
-        longitude: -93.265,
         notes: "Placeholder notes",
         hostContactId: contact.id,
       },
     });
+    sqlite
+      .prepare(
+        "insert into venue_coordinates (venue_id, latitude, longitude, source, precision, provider, ref, status, address_at_geocode) values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        placeholder.id,
+        44.9778,
+        -93.265,
+        "geocoded",
+        "parcel",
+        "fixture",
+        "way/1",
+        "verified",
+        "Placeholder address",
+      );
     const submission = sqlite
       .prepare(
-        "insert into venues (season_id, title, address, space_description, has_power, rain_backup, latitude, longitude, notes, host_contact_id) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) returning id, version",
+        "insert into venues (season_id, title, address, space_description, has_power, rain_backup, notes, host_contact_id) values (?, ?, ?, ?, ?, ?, ?, ?) returning id, version",
       )
       .get(
         seasonId,
@@ -793,11 +806,23 @@ describe("record lifecycle", () => {
         "Submitted porch and yard",
         1,
         1,
-        44.95,
-        -93.09,
         "Submitted notes",
         contact.id,
       ) as { id: number; version: number };
+    sqlite
+      .prepare(
+        "insert into venue_coordinates (venue_id, latitude, longitude, source, provider, ref, status, address_at_geocode) values (?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        submission.id,
+        44.95,
+        -93.09,
+        "organizer-verified",
+        "organizer",
+        "organizer/1",
+        "verified",
+        "Submitted address",
+      );
     const gear = sqlite
       .prepare(
         "insert into venue_gear (season_id, venue_id, value) values (?, ?, ?) returning id, version",
@@ -1013,14 +1038,30 @@ describe("record lifecycle", () => {
       spaceDescription: "Submitted porch and yard",
       hasPower: true,
       rainBackup: true,
-      latitude: 44.95,
-      longitude: -93.09,
       notes: "Submitted notes",
       hostContactId: contact.id,
       placeholder: false,
       reachViaContactId: contact.id,
       version: placeholder.version + 1,
     });
+    expect(
+      sqlite
+        .prepare(
+          "select latitude, longitude, source from venue_coordinates where venue_id = ?",
+        )
+        .get(placeholder.id),
+    ).toEqual({
+      latitude: 44.95,
+      longitude: -93.09,
+      source: "organizer-verified",
+    });
+    expect(
+      sqlite
+        .prepare(
+          "select count(*) as count from venue_coordinates where venue_id = ?",
+        )
+        .get(submission.id),
+    ).toEqual({ count: 0 });
   });
 
   it("preserves organizer-entered venue fields omitted by the submission", () => {
@@ -1041,7 +1082,7 @@ describe("record lifecycle", () => {
     };
     const placeholder = sqlite
       .prepare(
-        "insert into venues (season_id, title, address, space_description, has_power, rain_backup, latitude, longitude, notes, host_contact_id, placeholder, reach_via_contact_id) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?) returning id, version",
+        "insert into venues (season_id, title, address, space_description, has_power, rain_backup, notes, host_contact_id, placeholder, reach_via_contact_id) values (?, ?, ?, ?, ?, ?, ?, ?, 1, ?) returning id, version",
       )
       .get(
         seasonId,
@@ -1050,12 +1091,24 @@ describe("record lifecycle", () => {
         "Organizer porch and yard",
         0,
         1,
-        44.9778,
-        -93.265,
         "Organizer notes",
         host.id,
         reachVia.id,
       ) as { id: number; version: number };
+    sqlite
+      .prepare(
+        "insert into venue_coordinates (venue_id, latitude, longitude, source, provider, ref, status, address_at_geocode) values (?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        placeholder.id,
+        44.9778,
+        -93.265,
+        "organizer-verified",
+        "organizer",
+        "organizer/1",
+        "verified",
+        "Organizer address",
+      );
     const submission = sqlite
       .prepare(
         "insert into venues (season_id, title) values (?, ?) returning id, version",
@@ -1076,11 +1129,20 @@ describe("record lifecycle", () => {
       spaceDescription: "Organizer porch and yard",
       hasPower: false,
       rainBackup: true,
-      latitude: 44.9778,
-      longitude: -93.265,
       notes: "Organizer notes",
       hostContactId: host.id,
       reachViaContactId: reachVia.id,
+    });
+    expect(
+      sqlite
+        .prepare(
+          "select latitude, longitude, source from venue_coordinates where venue_id = ?",
+        )
+        .get(placeholder.id),
+    ).toEqual({
+      latitude: 44.9778,
+      longitude: -93.265,
+      source: "organizer-verified",
     });
     expect(
       records

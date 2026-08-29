@@ -7,7 +7,6 @@ import type {
   LocateRequest,
 } from "@porchfest/core";
 import { assertBoundingBox, boundingBoxContains } from "./verify.js";
-import type { GeocodeCandidate } from "./verify.js";
 
 export const OVERPASS_URL = "https://overpass-api.de/api/interpreter";
 export const NOMINATIM_URL = "https://nominatim.openstreetmap.org/search";
@@ -424,9 +423,9 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
     return cacheableAttempt(nominatimResult);
   }
 
-  #loadOverpassPoints(boundingBox: BoundingBox): Promise<
-    ProviderResult<ReadonlyMap<string, readonly OverpassPoint[]>>
-  > {
+  #loadOverpassPoints(
+    boundingBox: BoundingBox,
+  ): Promise<ProviderResult<ReadonlyMap<string, readonly OverpassPoint[]>>> {
     const key = boundingBoxNamespace(boundingBox);
     const current = this.#overpassPoints.get(key);
     if (current !== undefined) return current;
@@ -449,9 +448,9 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
     return operation;
   }
 
-  async #fetchOverpassPoints(boundingBox: BoundingBox): Promise<
-    ProviderResult<ReadonlyMap<string, readonly OverpassPoint[]>>
-  > {
+  async #fetchOverpassPoints(
+    boundingBox: BoundingBox,
+  ): Promise<ProviderResult<ReadonlyMap<string, readonly OverpassPoint[]>>> {
     const form = new URLSearchParams({
       data: overpassQuery(boundingBox),
     });

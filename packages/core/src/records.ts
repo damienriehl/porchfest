@@ -10,6 +10,7 @@ import {
   venueAmenities,
   venueDrinks,
   venueGear,
+  venueCoordinates,
   venues,
   type Act,
   type ActAvailability,
@@ -55,8 +56,6 @@ export type VenueChanges = Partial<
     | "requestedActNames"
     | "genrePreferences"
     | "rainBackup"
-    | "latitude"
-    | "longitude"
     | "notes"
     | "hostContactId"
     | "placeholder"
@@ -156,8 +155,6 @@ export interface CreatePlaceholderVenueInput {
     spaceDescription?: string | null;
     hasPower?: boolean | null;
     rainBackup?: boolean | null;
-    latitude?: number | null;
-    longitude?: number | null;
     notes?: string | null;
     hostContactId?: number | null;
     requestedActNames?: string | null;
@@ -501,6 +498,11 @@ export function createRecordRepository(
     expectedVersion: number,
     changes: VenueChanges,
   ): Venue {
+    const before = db
+      .select({ address: venues.address })
+      .from(venues)
+      .where(eq(venues.id, id))
+      .get();
     const fields = Object.keys(changes);
     const result = db
       .update(venues)
@@ -512,6 +514,25 @@ export function createRecordRepository(
       .where(and(eq(venues.id, id), eq(venues.version, expectedVersion)))
       .run();
     if (result.changes !== 1) conflict("venue", id, fields);
+    if (
+      changes.address !== undefined &&
+      before !== undefined &&
+      changes.address !== before.address
+    ) {
+      // R29/AE10: even a hand-placed pin may be wrong after the address moves.
+      // Preserve its stronger source so a provider can never replace it, but
+      // take it off the publishable path until an organizer verifies it again.
+      db.update(venueCoordinates)
+        .set({
+          status: "needs-review",
+          rejectionCode: "address-changed",
+          updatedAt: now(),
+          updatedBy: null,
+          version: sql`${venueCoordinates.version} + 1`,
+        })
+        .where(eq(venueCoordinates.venueId, id))
+        .run();
+    }
     return getVenue(id);
   }
 
@@ -752,8 +773,6 @@ export function createRecordRepository(
             submission.spaceDescription ?? placeholder.spaceDescription,
           hasPower: submission.hasPower ?? placeholder.hasPower,
           rainBackup: submission.rainBackup ?? placeholder.rainBackup,
-          latitude: submission.latitude ?? placeholder.latitude,
-          longitude: submission.longitude ?? placeholder.longitude,
           notes: submission.notes ?? placeholder.notes,
           hostContactId: submission.hostContactId ?? placeholder.hostContactId,
           placeholder: false,
@@ -771,6 +790,77 @@ export function createRecordRepository(
         .run();
       if (placeholderResult.changes !== 1)
         conflict("venue", placeholderId, ["promotion"]);
+
+      const placeholderCoordinate = tx
+        .select()
+        .from(venueCoordinates)
+        .where(eq(venueCoordinates.venueId, placeholderId))
+        .get();
+      const submittedCoordinate = tx
+        .select()
+        .from(venueCoordinates)
+        .where(eq(venueCoordinates.venueId, submissionId))
+        .get();
+      const preserveOrganizerCoordinate =
+        placeholderCoordinate?.source === "organizer-verified" &&
+        submittedCoordinate?.source === "geocoded";
+      if (submittedCoordinate !== undefined && !preserveOrganizerCoordinate) {
+        tx.insert(venueCoordinates)
+          .values({
+            venueId: placeholderId,
+            latitude: submittedCoordinate.latitude,
+            longitude: submittedCoordinate.longitude,
+            source: submittedCoordinate.source,
+            precision: submittedCoordinate.precision,
+            provider: submittedCoordinate.provider,
+            ref: submittedCoordinate.ref,
+            crossCheckDistanceM: submittedCoordinate.crossCheckDistanceM,
+            status: submittedCoordinate.status,
+            rejectionCode: submittedCoordinate.rejectionCode,
+            addressAtGeocode: submittedCoordinate.addressAtGeocode,
+            updatedAt: now(),
+            updatedBy: submittedCoordinate.updatedBy,
+          })
+          .onConflictDoUpdate({
+            target: venueCoordinates.venueId,
+            set: {
+              latitude: submittedCoordinate.latitude,
+              longitude: submittedCoordinate.longitude,
+              source: submittedCoordinate.source,
+              precision: submittedCoordinate.precision,
+              provider: submittedCoordinate.provider,
+              ref: submittedCoordinate.ref,
+              crossCheckDistanceM: submittedCoordinate.crossCheckDistanceM,
+              status: submittedCoordinate.status,
+              rejectionCode: submittedCoordinate.rejectionCode,
+              addressAtGeocode: submittedCoordinate.addressAtGeocode,
+              updatedAt: now(),
+              updatedBy: submittedCoordinate.updatedBy,
+              version: sql`${venueCoordinates.version} + 1`,
+            },
+          })
+          .run();
+      }
+      if (submittedCoordinate !== undefined) {
+        tx.delete(venueCoordinates)
+          .where(eq(venueCoordinates.venueId, submissionId))
+          .run();
+      }
+      if (
+        (submittedCoordinate === undefined || preserveOrganizerCoordinate) &&
+        (submission.address ?? placeholder.address) !== placeholder.address
+      ) {
+        tx.update(venueCoordinates)
+          .set({
+            status: "needs-review",
+            rejectionCode: "address-changed",
+            updatedAt: now(),
+            updatedBy: null,
+            version: sql`${venueCoordinates.version} + 1`,
+          })
+          .where(eq(venueCoordinates.venueId, placeholderId))
+          .run();
+      }
 
       tx.update(slots)
         .set({

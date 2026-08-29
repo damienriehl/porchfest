@@ -180,9 +180,9 @@ describe("OpenStreetMapGeoAdapter", () => {
       candidate: { latitude: 30.5, longitude: 40.5 },
     });
     const requestedUrls = fetcher.mock.calls.map(([input]) => String(input));
-    expect(requestedUrls.filter((url) => url.includes("overpass"))).toHaveLength(
-      2,
-    );
+    expect(
+      requestedUrls.filter((url) => url.includes("overpass")),
+    ).toHaveLength(2);
     expect(requestedUrls).toEqual(
       expect.arrayContaining([
         expect.stringContaining("viewbox=20%2C10%2C21%2C11"),

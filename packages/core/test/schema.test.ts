@@ -349,6 +349,25 @@ describe("core schema migration", () => {
     ).toEqual(schema.outboxRecordTypes);
   });
 
+  it("keeps coordinate provenance checks aligned with the schema value lists", async () => {
+    const migration = await readFile(
+      new URL("../drizzle/0014_venue_coordinates.sql", import.meta.url),
+      "utf8",
+    );
+    expect(
+      constraintValues(migration, "venue_coordinates_source_check"),
+    ).toEqual(schema.coordinateSources);
+    expect(
+      constraintValues(migration, "venue_coordinates_precision_check"),
+    ).toEqual(schema.coordinatePrecisions);
+    expect(
+      constraintValues(migration, "venue_coordinates_status_check"),
+    ).toEqual(schema.coordinateStatuses);
+    expect(
+      constraintValues(migration, "venue_coordinates_rejection_code_check"),
+    ).toEqual(schema.coordinateRejectionCodes);
+  });
+
   it("keeps pre-outbox email_log rows valid and one row per recipient", () => {
     const season = sqlite
       .prepare(

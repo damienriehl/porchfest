@@ -17,6 +17,7 @@ import {
   deletionReceipts,
   emailLog,
   seasons,
+  venueCoordinates,
   venues,
 } from "../src/storage/schema.js";
 import { openTestDatabase, type TestDatabase } from "./support/db.js";
@@ -71,9 +72,19 @@ function fixtures(state: "signups_open" | "archived" = "signups_open") {
     .where(eq(contacts.id, signup.contact.id))
     .run();
   database.db
-    .update(venues)
-    .set({ latitude: 0.25, longitude: -0.5 })
-    .where(eq(venues.id, signup.venue.id))
+    .insert(venueCoordinates)
+    .values({
+      venueId: signup.venue.id,
+      latitude: 0.25,
+      longitude: -0.5,
+      source: "geocoded",
+      precision: "parcel",
+      provider: "fixture",
+      ref: "way/1",
+      status: "verified",
+      addressAtGeocode: "synthetic-host-address",
+      updatedAt: clock,
+    })
     .run();
   const act = database.db
     .insert(acts)
@@ -201,10 +212,15 @@ describe("participant anonymization", () => {
       title: "Synthetic Porch",
       address: null,
       spaceDescription: null,
-      latitude: null,
-      longitude: null,
       notes: null,
     });
+    expect(
+      database.db
+        .select()
+        .from(venueCoordinates)
+        .where(eq(venueCoordinates.venueId, signup.venue.id))
+        .get(),
+    ).toBeUndefined();
     expect(
       database.db.select().from(acts).where(eq(acts.id, act.id)).get(),
     ).toMatchObject({
@@ -266,7 +282,7 @@ describe("participant anonymization", () => {
         .from(venues)
         .where(eq(venues.id, signup.venue.id))
         .get(),
-    ).toMatchObject({ address: null, latitude: null, longitude: null });
+    ).toMatchObject({ address: null });
   });
 
   it("closes a pending proposal when anonymization makes it undecodable", () => {
