@@ -4,23 +4,28 @@ import { readFileSync } from "node:fs";
 export const VENUES_MAP_SCHEMA_VERSION = "1.3.0";
 export const VENUES_MAP_MINIMUM_SCHEMA_VERSION = "1.1.0";
 
-const venuesMapVersionPattern = /^1\.\d+\.\d+$/;
-const venuesMapMinimumVersionParts =
-  VENUES_MAP_MINIMUM_SCHEMA_VERSION.split(".").map(BigInt);
+export const venuesMapVersionPattern = /^1\.\d+\.\d+$/;
+const [minimumMajor, minimumMinor, minimumPatch] =
+  VENUES_MAP_MINIMUM_SCHEMA_VERSION.split(".").map(Number) as [
+    number,
+    number,
+    number,
+  ];
 
 export function isSupportedVenuesMapVersion(version: string): boolean {
   if (!venuesMapVersionPattern.test(version)) return false;
 
-  const versionParts = version.split(".").map(BigInt);
+  const [major, minor, patch] = version.split(".").map(Number) as [
+    number,
+    number,
+    number,
+  ];
 
-  for (let index = 0; index < venuesMapMinimumVersionParts.length; index += 1) {
-    const versionPart = versionParts[index] ?? 0n;
-    const minimumPart = venuesMapMinimumVersionParts[index] ?? 0n;
-    if (versionPart > minimumPart) return true;
-    if (versionPart < minimumPart) return false;
-  }
-
-  return true;
+  return (
+    major > minimumMajor ||
+    (major === minimumMajor && minor > minimumMinor) ||
+    (major === minimumMajor && minor === minimumMinor && patch >= minimumPatch)
+  );
 }
 
 export const VENUES_MAP_GENERATED_FROM = [
@@ -30,6 +35,7 @@ export const VENUES_MAP_GENERATED_FROM = [
 
 export type VenuesMapGeneratedFrom = (typeof VENUES_MAP_GENERATED_FROM)[number];
 
+/** Unconstrained deployment-defined slot identifier since venues-map v1.3.0. */
 export type VenueMapActSlot = string;
 
 export interface VenueMapLink {
@@ -40,6 +46,8 @@ export interface VenueMapLink {
 export interface VenueMapAct {
   slot: VenueMapActSlot;
   slot_label: string;
+  slot_start?: string;
+  slot_end?: string;
   name: string;
   genre: string;
   description: string;

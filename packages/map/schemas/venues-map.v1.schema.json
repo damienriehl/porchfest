@@ -93,7 +93,8 @@
         },
         "schedule": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "pattern": "^\\S(.*\\S)?$"
         },
         "acts": {
           "type": "array",
@@ -118,11 +119,21 @@
       "properties": {
         "slot": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "pattern": "^\\S(.*\\S)?$"
         },
         "slot_label": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "pattern": "^\\S(.*\\S)?$"
+        },
+        "slot_start": {
+          "type": "string",
+          "format": "time"
+        },
+        "slot_end": {
+          "type": "string",
+          "format": "time"
         },
         "name": {
           "type": "string",

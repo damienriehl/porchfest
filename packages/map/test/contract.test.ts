@@ -9,8 +9,9 @@ import {
   isSupportedVenuesMapVersion,
   loadVerifiedVenuesMapSchema,
   readPinnedVenuesMapSchemaDigest,
-  type VenuesMapDocument,
+  venuesMapVersionPattern,
 } from "../src/index.js";
+import { makeVenuesMapDocument } from "./fixtures.js";
 
 interface VenuesMapSchema {
   $schema: string;
@@ -34,36 +35,7 @@ const pinSource = readFileSync(
 );
 
 // This fixture is compile-time coverage; `npm run typecheck` is the gate.
-const sparse = {
-  schema_version: VENUES_MAP_SCHEMA_VERSION,
-  season: 2026,
-  generated_from: "packages/web/src/routes/map.ts",
-  event: {
-    date: "2026-09-16",
-    time: "6-8 PM",
-    city: "Saint Paul",
-    state: "MN",
-  },
-  venues: [
-    {
-      title: "Synthetic venue",
-      address: "Redacted fixture location",
-      lat: 44.97,
-      lng: -93.19,
-      schedule: "6–7 pm",
-      acts: [
-        {
-          slot: "6-7",
-          slot_label: "6–7 pm",
-          name: "Synthetic act",
-          genre: "",
-          description: "",
-          links: [{ url: "https://example.invalid/act" }],
-        },
-      ],
-    },
-  ],
-} satisfies VenuesMapDocument;
+const sparse = makeVenuesMapDocument();
 void sparse;
 
 describe("venues-map schema contract", () => {
@@ -93,6 +65,9 @@ describe("venues-map schema contract", () => {
       type: "string",
       pattern: "^1\\.\\d+\\.\\d+$",
     });
+    expect(schema.properties.schema_version.pattern).toBe(
+      venuesMapVersionPattern.source,
+    );
     expect(schema.properties.season).toEqual({
       type: "integer",
       minimum: 2000,
