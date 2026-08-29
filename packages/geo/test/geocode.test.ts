@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   InMemoryGeocodeCache,
   OpenStreetMapGeoAdapter,
+  OVERPASS_SNAPSHOT_TTL_MS,
   parseAddress,
   queryString,
   streetsMatch,
@@ -193,6 +194,36 @@ describe("OpenStreetMapGeoAdapter", () => {
     );
   });
 
+  it("omits a locality suffix when a season supplies bounds but no locality", async () => {
+    const fetcher = sequencedFetcher({ elements: [] }, []);
+    const adapter = new OpenStreetMapGeoAdapter({
+      userAgent: "porchfest-geocoder-tests/1.0 (example.invalid)",
+      fetcher,
+    });
+
+    await adapter.locate({ address: ADDRESS, boundingBox: BOUNDS });
+
+    const nominatimUrl = new URL(String(fetcher.mock.calls[1]?.[0]));
+    expect(nominatimUrl.searchParams.get("q")).toBe(ADDRESS);
+  });
+
+  it("names an invalid request locality instead of reporting a provider outage", async () => {
+    const adapter = new OpenStreetMapGeoAdapter({
+      userAgent: "porchfest-geocoder-tests/1.0 (example.invalid)",
+      fetcher: vi.fn<typeof fetch>(),
+    });
+
+    await expect(
+      adapter.locate({
+        address: ADDRESS,
+        boundingBox: BOUNDS,
+        localityName: "—",
+      }),
+    ).rejects.toThrow(
+      new TypeError("localityName must contain a word or number."),
+    );
+  });
+
   it("prefers ways over nodes, then the lowest id within the same kind", async () => {
     const fetcher = sequencedFetcher(
       {
@@ -321,6 +352,71 @@ describe("OpenStreetMapGeoAdapter", () => {
     expect(
       fetcher.mock.calls.filter(([url]) => String(url).includes("overpass")),
     ).toHaveLength(1);
+  });
+
+  it("evicts the oldest Overpass snapshot when a fifth box is loaded", async () => {
+    const cache: GeocodeCache = {
+      get: vi.fn(async () => undefined),
+      set: vi.fn(async () => undefined),
+    };
+    const fetcher = vi.fn<typeof fetch>(async (input) =>
+      String(input).includes("overpass")
+        ? jsonResponse({ elements: [] })
+        : jsonResponse([]),
+    );
+    const adapter = new OpenStreetMapGeoAdapter({
+      userAgent: "porchfest-geocoder-tests/1.0 (example.invalid)",
+      fetcher,
+      cache,
+      wait: async () => undefined,
+    });
+    const boxes = Array.from({ length: 5 }, (_, index) => ({
+      south: 10 + index,
+      north: 11 + index,
+      west: 20 + index,
+      east: 21 + index,
+    }));
+
+    for (const boundingBox of boxes) {
+      await adapter.locate({ address: ADDRESS, boundingBox });
+    }
+    await adapter.locate({ address: ADDRESS, boundingBox: boxes[0] });
+
+    expect(
+      fetcher.mock.calls.filter(([input]) =>
+        String(input).includes("overpass"),
+      ),
+    ).toHaveLength(6);
+  });
+
+  it("refetches an expired Overpass snapshot", async () => {
+    let now = 0;
+    const cache: GeocodeCache = {
+      get: vi.fn(async () => undefined),
+      set: vi.fn(async () => undefined),
+    };
+    const fetcher = vi.fn<typeof fetch>(async (input) =>
+      String(input).includes("overpass")
+        ? jsonResponse({ elements: [] })
+        : jsonResponse([]),
+    );
+    const adapter = new OpenStreetMapGeoAdapter(
+      options(fetcher, {
+        cache,
+        now: () => now,
+        wait: async () => undefined,
+      }),
+    );
+
+    await adapter.locate({ address: ADDRESS });
+    now = OVERPASS_SNAPSHOT_TTL_MS + 1;
+    await adapter.locate({ address: "202 Quasar Place" });
+
+    expect(
+      fetcher.mock.calls.filter(([input]) =>
+        String(input).includes("overpass"),
+      ),
+    ).toHaveLength(2);
   });
 
   it("deduplicates concurrent normalized-equivalent lookups", async () => {
@@ -473,6 +569,33 @@ describe("OpenStreetMapGeoAdapter", () => {
     ).locate({ address: ADDRESS });
 
     expect(otherBoundsFetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it("namespaces cache and in-flight work by effective locality grammar", async () => {
+    const cache: GeocodeCache = {
+      get: vi.fn(async () => undefined),
+      set: vi.fn(async () => undefined),
+    };
+    const fetcher = sequencedFetcher({ elements: [] }, [], []);
+    const adapter = new OpenStreetMapGeoAdapter(
+      options(fetcher, { cache, wait: async () => undefined }),
+    );
+    const address = `${ADDRESS}, St Nebula, ZZ`;
+
+    await Promise.all([
+      adapter.locate({
+        address,
+        localityName: "Saint Nebula, ZZ",
+      }),
+      adapter.locate({
+        address,
+        localityName: "St Nebula, ZZ",
+      }),
+    ]);
+
+    expect(cache.get).toHaveBeenCalledTimes(2);
+    expect(cache.set).toHaveBeenCalledTimes(2);
+    expect(fetcher).toHaveBeenCalledTimes(3);
   });
 
   it("treats a cache read failure as a miss", async () => {

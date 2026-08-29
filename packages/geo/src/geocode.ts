@@ -16,6 +16,8 @@ export const DEFAULT_OPENSTREETMAP_USER_AGENT =
 export const DEFAULT_OVERPASS_TIMEOUT_MS = 180_000;
 export const DEFAULT_NOMINATIM_TIMEOUT_MS = 10_000;
 export const NOMINATIM_INTERVAL_MS = 1_000;
+export const MAX_OVERPASS_SNAPSHOTS = 4;
+export const OVERPASS_SNAPSHOT_TTL_MS = 6 * 60 * 60 * 1_000;
 
 const HOUSE_LEVEL_TYPES = new Set(["house", "building"]);
 const STREET_LEVEL_TYPES = new Set([
@@ -91,7 +93,10 @@ export interface ParsedAddress {
 export interface OpenStreetMapGeoAdapterOptions {
   /** Legacy fallback only; core supplies season bounds to every locate call. */
   readonly boundingBox?: BoundingBox;
-  /** Locality appended to address queries that do not already end with it. */
+  /**
+   * Explicit fallback locality for callers that omit request.localityName.
+   * Without either value, queries and parsing remain locality-free.
+   */
   readonly localitySuffix?: string;
   /**
    * Nominatim requires an identifying User-Agent. Deployments should replace
@@ -141,6 +146,13 @@ interface LocalityGrammar {
   readonly tail: RegExp;
 }
 
+interface OverpassSnapshot {
+  readonly operation: Promise<
+    ProviderResult<ReadonlyMap<string, readonly OverpassPoint[]>>
+  >;
+  readonly expiresAt: number;
+}
+
 type FetchJsonResult =
   | { readonly kind: "success"; readonly body: unknown }
   | { readonly kind: "http-error"; readonly status: number }
@@ -166,7 +178,7 @@ export function parseAddress(
 
 function parseAddressWithGrammar(
   address: string,
-  grammar: LocalityGrammar,
+  grammar: LocalityGrammar | null,
 ): ParsedAddress {
   const houseMatch = /^\s*(\d+(?:-[A-Za-z]|[A-Za-z]|\s+\d+\/\d+)?)\b/.exec(
     address,
@@ -221,7 +233,7 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
   readonly name = "openstreetmap";
   readonly configured = true;
   readonly #defaultBoundingBox: BoundingBox | null;
-  readonly #defaultLocalitySuffix: string;
+  readonly #defaultLocalitySuffix: string | null;
   readonly #userAgent: string;
   readonly #countryCodes: string;
   readonly #overpassTimeoutMs: number;
@@ -231,10 +243,7 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
   readonly #wait: (milliseconds: number) => Promise<void>;
   readonly #cache: GeocodeCache;
   readonly #inFlight = new Map<string, Promise<GeocodeOutcome>>();
-  readonly #overpassPoints = new Map<
-    string,
-    Promise<ProviderResult<ReadonlyMap<string, readonly OverpassPoint[]>>>
-  >();
+  readonly #overpassPoints = new Map<string, OverpassSnapshot>();
   #lastNominatimRequestAt: number | null = null;
   #nominatimQueue: Promise<void> = Promise.resolve();
 
@@ -245,7 +254,9 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
     this.#defaultBoundingBox =
       options.boundingBox === undefined ? null : { ...options.boundingBox };
     this.#defaultLocalitySuffix =
-      options.localitySuffix ?? DEFAULT_LOCALITY_SUFFIX;
+      options.localitySuffix === undefined
+        ? null
+        : localityGrammar(options.localitySuffix, "localitySuffix").suffix;
     this.#userAgent = requireNonEmpty(
       options.userAgent ?? DEFAULT_OPENSTREETMAP_USER_AGENT,
       "userAgent",
@@ -286,13 +297,20 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
       };
     }
     assertBoundingBox(boundingBox);
-    const grammar = localityGrammar(
-      request.localityName ?? this.#defaultLocalitySuffix,
-    );
+    const localitySuffix = request.localityName ?? this.#defaultLocalitySuffix;
+    const grammar =
+      localitySuffix === null
+        ? null
+        : localityGrammar(
+            localitySuffix,
+            request.localityName === undefined
+              ? "localitySuffix"
+              : "localityName",
+          );
     const { key, query } = normalizedAddressKey(
       request.address,
       grammar,
-      cacheNamespace(boundingBox, this.#countryCodes),
+      cacheNamespace(boundingBox, this.#countryCodes, grammar),
     );
     const active = this.#inFlight.get(key);
     if (active !== undefined) return active;
@@ -316,7 +334,7 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
     key: string,
     address: string,
     query: string,
-    grammar: LocalityGrammar,
+    grammar: LocalityGrammar | null,
     boundingBox: BoundingBox,
   ): Promise<GeocodeOutcome> {
     try {
@@ -345,7 +363,7 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
   async #locateUncached(
     address: string,
     submittedQuery: string,
-    grammar: LocalityGrammar,
+    grammar: LocalityGrammar | null,
     boundingBox: BoundingBox,
   ): Promise<LocateAttempt> {
     let parsed: ParsedAddress;
@@ -427,20 +445,34 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
     boundingBox: BoundingBox,
   ): Promise<ProviderResult<ReadonlyMap<string, readonly OverpassPoint[]>>> {
     const key = boundingBoxNamespace(boundingBox);
+    const currentTime = this.#now();
     const current = this.#overpassPoints.get(key);
-    if (current !== undefined) return current;
+    if (current !== undefined && current.expiresAt > currentTime) {
+      this.#overpassPoints.delete(key);
+      this.#overpassPoints.set(key, current);
+      return current.operation;
+    }
+    if (current !== undefined) this.#overpassPoints.delete(key);
     const operation = this.#fetchOverpassPoints(boundingBox);
-    this.#overpassPoints.set(key, operation);
+    this.#overpassPoints.set(key, {
+      operation,
+      expiresAt: currentTime + OVERPASS_SNAPSHOT_TTL_MS,
+    });
+    while (this.#overpassPoints.size > MAX_OVERPASS_SNAPSHOTS) {
+      const oldestKey = this.#overpassPoints.keys().next().value;
+      if (oldestKey === undefined) break;
+      this.#overpassPoints.delete(oldestKey);
+    }
     void operation.then(
       (result) => {
         if (result.kind === "unavailable") {
-          if (this.#overpassPoints.get(key) === operation) {
+          if (this.#overpassPoints.get(key)?.operation === operation) {
             this.#overpassPoints.delete(key);
           }
         }
       },
       () => {
-        if (this.#overpassPoints.get(key) === operation) {
+        if (this.#overpassPoints.get(key)?.operation === operation) {
           this.#overpassPoints.delete(key);
         }
       },
@@ -846,7 +878,7 @@ function overpassReference(point: OverpassPoint): string {
 
 function normalizedAddressKey(
   address: string,
-  grammar: LocalityGrammar,
+  grammar: LocalityGrammar | null,
   namespace: string,
 ): { readonly key: string; readonly query: string } {
   const query = queryStringWithGrammar(address.trim(), grammar);
@@ -856,12 +888,20 @@ function normalizedAddressKey(
   };
 }
 
-function cacheNamespace(box: BoundingBox, countryCodes: string): string {
+function cacheNamespace(
+  box: BoundingBox,
+  countryCodes: string,
+  grammar: LocalityGrammar | null,
+): string {
   const canonicalCountryCodes = countryCodes
     .split(",")
     .map((code) => caseFold(code.trim()))
     .join(",");
-  return `openstreetmap-v1|countrycodes=${canonicalCountryCodes}|bbox=${boundingBoxNamespace(box)}`;
+  const locality =
+    grammar === null
+      ? "none"
+      : caseFold(grammar.suffix).replace(/\s+/g, " ").trim();
+  return `openstreetmap-v1|countrycodes=${canonicalCountryCodes}|bbox=${boundingBoxNamespace(box)}|locality=${locality}`;
 }
 
 function boundingBoxNamespace(box: BoundingBox): string {
@@ -870,8 +910,9 @@ function boundingBoxNamespace(box: BoundingBox): string {
 
 function queryStringWithGrammar(
   address: string,
-  grammar: LocalityGrammar,
+  grammar: LocalityGrammar | null,
 ): string {
+  if (grammar === null) return address.trim();
   if (containsLocality(address, grammar)) return address;
   return `${address}, ${grammar.suffix}`;
 }
@@ -880,15 +921,21 @@ function containsLocality(address: string, grammar: LocalityGrammar): boolean {
   return grammar.tail.test(address);
 }
 
-function stripLocalityTail(street: string, grammar: LocalityGrammar): string {
-  return street.replace(grammar.tail, "");
+function stripLocalityTail(
+  street: string,
+  grammar: LocalityGrammar | null,
+): string {
+  return grammar === null ? street : street.replace(grammar.tail, "");
 }
 
-function localityGrammar(localitySuffix: string): LocalityGrammar {
-  const suffix = requireNonEmpty(localitySuffix, "localitySuffix");
+function localityGrammar(
+  localitySuffix: string,
+  fieldName = "localitySuffix",
+): LocalityGrammar {
+  const suffix = requireNonEmpty(localitySuffix, fieldName);
   const tokenMatches = [...suffix.matchAll(/[A-Za-z0-9]+(?:\.)?/g)];
   if (tokenMatches.length === 0) {
-    throw new TypeError("localitySuffix must contain a word or number.");
+    throw new TypeError(`${fieldName} must contain a word or number.`);
   }
 
   let localityPattern = localityTokenPattern(tokenMatches[0]?.[0] ?? "");

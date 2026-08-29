@@ -6,9 +6,11 @@ export {
   DEFAULT_LOCALITY_SUFFIX,
   DEFAULT_OPENSTREETMAP_USER_AGENT,
   InMemoryGeocodeCache,
+  MAX_OVERPASS_SNAPSHOTS,
   NOMINATIM_INTERVAL_MS,
   NOMINATIM_URL,
   OpenStreetMapGeoAdapter,
+  OVERPASS_SNAPSHOT_TTL_MS,
   OVERPASS_URL,
   parseAddress,
   queryString,
@@ -19,28 +21,7 @@ export {
   type OpenStreetMapGeoAdapterOptions,
   type ParsedAddress,
 } from "./geocode.js";
-export {
-  EARTH_RADIUS_METERS,
-  assertBoundingBox,
-  boundingBoxContains,
-  haversineDistanceMeters,
-  isValidCoordinate,
-  resolveCoordinatePrecedence,
-  verifyGeocodedCoordinate,
-  verifyOrganizerCoordinate,
-  type AcceptedCoordinatePrecision,
-  type BoundingBox,
-  type CoordinatePrecedenceDecision,
-  type CoordinatePrecision,
-  type CoordinateRejection,
-  type CoordinateRejectionCode,
-  type CoordinateSource,
-  type CoordinateVerdict,
-  type CoordinateVerificationOptions,
-  type GeocodeCandidate,
-  type OrganizerCoordinate,
-  type VerifiedCoordinate,
-} from "./verify.js";
+export * from "./verify.js";
 
 import type {
   GeocodeRequest,
