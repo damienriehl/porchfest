@@ -385,7 +385,7 @@ function rejected(failures: readonly CoordinateRejection[]): CoordinateVerdict {
   };
 }
 
-function assertBoundingBox(box: BoundingBox): void {
+export function assertBoundingBox(box: BoundingBox): void {
   if (
     !isValidCoordinate({ latitude: box.south, longitude: box.west }) ||
     !isValidCoordinate({ latitude: box.north, longitude: box.east })

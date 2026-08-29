@@ -1,5 +1,5 @@
 import type { Coordinates, GeocodeRequest, GeoPort } from "@porchfest/core";
-import { isValidCoordinate } from "./verify.js";
+import { assertBoundingBox, boundingBoxContains } from "./verify.js";
 import type { BoundingBox, GeocodeCandidate } from "./verify.js";
 
 export const OVERPASS_URL = "https://overpass-api.de/api/interpreter";
@@ -7,10 +7,10 @@ export const NOMINATIM_URL = "https://nominatim.openstreetmap.org/search";
 export const DEFAULT_LOCALITY_SUFFIX = "Saint Paul, MN";
 export const DEFAULT_OPENSTREETMAP_USER_AGENT =
   "porchfest-openstreetmap-geocoder/0.1 (self-hosted neighborhood event mapping)";
-export const DEFAULT_GEOCODE_TIMEOUT_MS = 180_000;
+export const DEFAULT_OVERPASS_TIMEOUT_MS = 180_000;
+export const DEFAULT_NOMINATIM_TIMEOUT_MS = 10_000;
 export const NOMINATIM_INTERVAL_MS = 1_000;
 
-const DEFAULT_LOCALITY_PATTERN = String.raw`(?:saint|st\.?)\s+paul`;
 const HOUSE_LEVEL_TYPES = new Set(["house", "building"]);
 const STREET_LEVEL_TYPES = new Set([
   "living_street",
@@ -27,11 +27,19 @@ const STREET_LEVEL_TYPES = new Set([
   "unclassified",
 ]);
 const DIRECTION_WORDS = new Set(["north", "south", "east", "west"]);
-const TOKEN_ALIASES: Readonly<Record<string, string>> = {
+const STREET_SUFFIX_ALIASES: Readonly<Record<string, string>> = {
   ave: "avenue",
   av: "avenue",
   st: "street",
   pl: "place",
+  blvd: "boulevard",
+  dr: "drive",
+  ct: "court",
+  rd: "road",
+  ln: "lane",
+  pkwy: "parkway",
+};
+const DIRECTION_ALIASES: Readonly<Record<string, string>> = {
   n: "north",
   s: "south",
   e: "east",
@@ -43,6 +51,7 @@ export type GeocodeOutcome =
       readonly kind: "located";
       readonly candidate: GeocodeCandidate;
       readonly crossCheck: Coordinates | null;
+      readonly reason?: string;
     }
   | { readonly kind: "not-found"; readonly reason: string }
   | { readonly kind: "refused"; readonly reason: string }
@@ -85,13 +94,17 @@ export interface ParsedAddress {
 export interface OpenStreetMapGeoAdapterOptions {
   /** Core's season bounds. The adapter never supplies a city-specific box. */
   readonly boundingBox: BoundingBox;
+  /** Locality appended to address queries that do not already end with it. */
   readonly localitySuffix?: string;
   /**
    * Nominatim requires an identifying User-Agent. Deployments should replace
    * the descriptive software default with their own application/contact value.
    */
   readonly userAgent?: string;
-  readonly timeoutMs?: number;
+  /** Comma-separated Nominatim countrycodes filter. Defaults to `"us"`. */
+  readonly countryCodes?: string;
+  readonly overpassTimeoutMs?: number;
+  readonly nominatimTimeoutMs?: number;
   readonly fetcher?: typeof fetch;
   readonly now?: () => number;
   readonly wait?: (milliseconds: number) => Promise<void>;
@@ -99,12 +112,11 @@ export interface OpenStreetMapGeoAdapterOptions {
   readonly cache?: GeocodeCache;
 }
 
-interface OverpassAddressPoint {
+interface OverpassPoint {
   readonly houseNumber: string;
   readonly street: string;
   readonly latitude: number;
   readonly longitude: number;
-  readonly ref: string;
   readonly kind: "node" | "way";
   readonly id: number;
 }
@@ -114,17 +126,30 @@ type ProviderResult<T> =
   | { readonly kind: "unavailable"; readonly reason: string };
 
 type NominatimResult =
-  | { readonly kind: "hit"; readonly point: Coordinates; readonly ref: string }
-  | { readonly kind: "miss"; readonly streetLevelOnly: boolean };
+  | {
+      readonly kind: "located";
+      readonly point: Coordinates;
+      readonly ref: string;
+    }
+  | { readonly kind: "not-found"; readonly reason: string }
+  | { readonly kind: "refused"; readonly reason: string };
+
+interface LocalityGrammar {
+  readonly suffix: string;
+  readonly tail: RegExp;
+}
+
+type FetchResult =
+  | { readonly kind: "response"; readonly response: Response }
+  | { readonly kind: "timeout" }
+  | { readonly kind: "unreachable" };
 
 /** Append the deployment locality unless the address already names it. */
 export function queryString(
   address: string,
   localitySuffix = DEFAULT_LOCALITY_SUFFIX,
 ): string {
-  const locality = requireNonEmpty(localitySuffix, "localitySuffix");
-  if (containsLocality(address, locality)) return address;
-  return `${address}, ${locality}`;
+  return queryStringWithGrammar(address, localityGrammar(localitySuffix));
 }
 
 /** Extract the first house number and the submitted street that follows it. */
@@ -132,18 +157,26 @@ export function parseAddress(
   address: string,
   localitySuffix = DEFAULT_LOCALITY_SUFFIX,
 ): ParsedAddress {
-  const locality = requireNonEmpty(localitySuffix, "localitySuffix");
-  const houseMatch = /\b(\d+[A-Za-z]?)\b/.exec(address);
+  return parseAddressWithGrammar(address, localityGrammar(localitySuffix));
+}
+
+function parseAddressWithGrammar(
+  address: string,
+  grammar: LocalityGrammar,
+): ParsedAddress {
+  const houseMatch = /^\s*(\d+(?:-[A-Za-z]|[A-Za-z]|\s+\d+\/\d+)?)\b/.exec(
+    address,
+  );
   if (houseMatch === null) {
     throw new AddressParseError(
       "house-number-missing",
-      "The address has no house number.",
+      "OpenStreetMap could not parse a house number at the start of the address.",
     );
   }
 
   const houseNumber = caseFold(houseMatch[1] ?? "");
   let street = address.slice(houseMatch.index + houseMatch[0].length).trim();
-  street = stripLocalityTail(street, locality).replace(/^[ ,.]+|[ ,.]+$/g, "");
+  street = stripLocalityTail(street, grammar).replace(/^[ ,.]+|[ ,.]+$/g, "");
   if (street.length === 0) {
     throw new AddressParseError(
       "street-missing",
@@ -156,8 +189,16 @@ export function parseAddress(
 
 /** Match street tokens while treating an omitted direction as unspecified. */
 export function streetsMatch(submitted: string, osmStreet: string): boolean {
-  const submittedTokens = normalizedStreetTokens(submitted);
-  const osmTokens = normalizedStreetTokens(osmStreet);
+  return streetTokenSequencesMatch(
+    normalizedStreetTokens(submitted),
+    normalizedStreetTokens(osmStreet),
+  );
+}
+
+function streetTokenSequencesMatch(
+  submittedTokens: readonly string[],
+  osmTokens: readonly string[],
+): boolean {
   const submittedBase = submittedTokens.filter(
     (token) => !DIRECTION_WORDS.has(token),
   );
@@ -176,16 +217,18 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
   readonly name = "openstreetmap";
   readonly configured = true;
   readonly #boundingBox: BoundingBox;
-  readonly #localitySuffix: string;
+  readonly #localityGrammar: LocalityGrammar;
   readonly #userAgent: string;
-  readonly #timeoutMs: number;
+  readonly #countryCodes: string;
+  readonly #overpassTimeoutMs: number;
+  readonly #nominatimTimeoutMs: number;
   readonly #fetcher: typeof fetch;
   readonly #now: () => number;
   readonly #wait: (milliseconds: number) => Promise<void>;
   readonly #cache: GeocodeCache;
   readonly #inFlight = new Map<string, Promise<GeocodeOutcome>>();
   #overpassPoints: Promise<
-    ProviderResult<ReadonlyMap<string, readonly OverpassAddressPoint[]>>
+    ProviderResult<ReadonlyMap<string, readonly OverpassPoint[]>>
   > | null = null;
   #lastNominatimRequestAt: number | null = null;
   #nominatimQueue: Promise<void> = Promise.resolve();
@@ -193,18 +236,25 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
   constructor(options: OpenStreetMapGeoAdapterOptions) {
     assertBoundingBox(options.boundingBox);
     this.#boundingBox = { ...options.boundingBox };
-    this.#localitySuffix = requireNonEmpty(
+    this.#localityGrammar = localityGrammar(
       options.localitySuffix ?? DEFAULT_LOCALITY_SUFFIX,
-      "localitySuffix",
     );
     this.#userAgent = requireNonEmpty(
       options.userAgent ?? DEFAULT_OPENSTREETMAP_USER_AGENT,
       "userAgent",
     );
-    this.#timeoutMs = options.timeoutMs ?? DEFAULT_GEOCODE_TIMEOUT_MS;
-    if (!Number.isSafeInteger(this.#timeoutMs) || this.#timeoutMs <= 0) {
-      throw new RangeError("timeoutMs must be a positive safe integer.");
-    }
+    this.#countryCodes = requireNonEmpty(
+      options.countryCodes ?? "us",
+      "countryCodes",
+    );
+    this.#overpassTimeoutMs = positiveTimeout(
+      options.overpassTimeoutMs ?? DEFAULT_OVERPASS_TIMEOUT_MS,
+      "overpassTimeoutMs",
+    );
+    this.#nominatimTimeoutMs = positiveTimeout(
+      options.nominatimTimeoutMs ?? DEFAULT_NOMINATIM_TIMEOUT_MS,
+      "nominatimTimeoutMs",
+    );
     this.#fetcher = options.fetcher ?? fetch;
     this.#now = options.now ?? Date.now;
     this.#wait = options.wait ?? defaultWait;
@@ -221,19 +271,14 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
   }
 
   async locate(request: GeocodeRequest): Promise<GeocodeOutcome> {
-    const key = normalizedAddressKey(request.address, this.#localitySuffix);
-    const cached = await this.#cache.get(key);
-    if (cached !== undefined) return cached;
-
+    const { key, query } = normalizedAddressKey(
+      request.address,
+      this.#localityGrammar,
+    );
     const active = this.#inFlight.get(key);
     if (active !== undefined) return active;
 
-    const operation = this.#locateUncached(request.address).then(
-      async (outcome) => {
-        await this.#cache.set(key, outcome);
-        return outcome;
-      },
-    );
+    const operation = this.#locateWithCache(key, request.address, query);
     this.#inFlight.set(key, operation);
     try {
       return await operation;
@@ -242,10 +287,35 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
     }
   }
 
-  async #locateUncached(address: string): Promise<GeocodeOutcome> {
+  async #locateWithCache(
+    key: string,
+    address: string,
+    query: string,
+  ): Promise<GeocodeOutcome> {
+    try {
+      const cached = await this.#cache.get(key);
+      if (cached !== undefined && cached.kind !== "unavailable") return cached;
+    } catch {
+      // A persistent cache is an optimization, not a provider dependency.
+    }
+
+    const outcome = await this.#locateUncached(address, query);
+    if (outcome.kind === "unavailable") return outcome;
+    try {
+      await this.#cache.set(key, outcome);
+    } catch {
+      // The located/refused/not-found provider outcome remains authoritative.
+    }
+    return outcome;
+  }
+
+  async #locateUncached(
+    address: string,
+    submittedQuery: string,
+  ): Promise<GeocodeOutcome> {
     let parsed: ParsedAddress;
     try {
-      parsed = parseAddress(address, this.#localitySuffix);
+      parsed = parseAddressWithGrammar(address, this.#localityGrammar);
     } catch (error) {
       if (error instanceof AddressParseError) {
         return { kind: "refused", reason: error.message };
@@ -253,111 +323,140 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
       throw error;
     }
 
-    const overpass = await this.#loadOverpassPoints();
-    if (overpass.kind === "unavailable") return overpass;
-    const parcel = selectParcelPoint(parsed, overpass.value);
-
-    const nominatim = await this.#lookupNominatim(address, parsed, parcel?.ref);
+    const submittedStreetTokens = normalizedStreetTokens(parsed.street);
+    const [overpass, nominatim] = await Promise.all([
+      this.#loadOverpassPoints(),
+      this.#lookupNominatim(submittedQuery),
+    ]);
+    const parcel =
+      overpass.kind === "available"
+        ? selectParcelPoint(parsed, submittedStreetTokens, overpass.value)
+        : null;
     if (nominatim.kind === "unavailable") {
       if (parcel !== null) return locatedParcel(parcel, null);
-      return nominatim;
+      return overpass.kind === "unavailable"
+        ? {
+            kind: "unavailable",
+            reason: `${overpass.reason} ${nominatim.reason}`,
+          }
+        : nominatim;
     }
+
+    const nominatimResult = selectNominatimResult(
+      nominatim.value,
+      parsed,
+      submittedStreetTokens,
+      this.#boundingBox,
+      parcel === null ? undefined : overpassReference(parcel),
+    );
 
     if (parcel !== null) {
       return locatedParcel(
         parcel,
-        nominatim.value.kind === "hit" ? nominatim.value.point : null,
+        nominatimResult.kind === "located" ? nominatimResult.point : null,
       );
     }
-    if (nominatim.value.kind === "hit") {
+    if (nominatimResult.kind === "located") {
       return {
         kind: "located",
         candidate: {
-          ...nominatim.value.point,
+          ...nominatimResult.point,
           precision: "house",
           interpolated: false,
-          ref: nominatim.value.ref,
+          ref: nominatimResult.ref,
         },
         crossCheck: null,
+        ...(overpass.kind === "unavailable"
+          ? { reason: `Overpass was unavailable: ${overpass.reason}` }
+          : {}),
       };
     }
-    if (nominatim.value.streetLevelOnly) {
+    if (overpass.kind === "unavailable") {
       return {
-        kind: "refused",
-        reason:
-          "Nominatim returned only street- or road-level results, which are not precise enough to publish.",
+        kind: "unavailable",
+        reason: `Overpass was unavailable: ${overpass.reason} ${nominatimResult.reason}`,
       };
     }
-    return {
-      kind: "not-found",
-      reason: "OpenStreetMap returned no acceptable address match.",
-    };
+    return nominatimResult;
   }
 
   #loadOverpassPoints(): Promise<
-    ProviderResult<ReadonlyMap<string, readonly OverpassAddressPoint[]>>
+    ProviderResult<ReadonlyMap<string, readonly OverpassPoint[]>>
   > {
-    this.#overpassPoints ??= this.#fetchOverpassPoints();
-    return this.#overpassPoints;
+    if (this.#overpassPoints !== null) return this.#overpassPoints;
+    const operation = this.#fetchOverpassPoints();
+    this.#overpassPoints = operation;
+    void operation.then(
+      (result) => {
+        if (
+          result.kind === "unavailable" &&
+          this.#overpassPoints === operation
+        ) {
+          this.#overpassPoints = null;
+        }
+      },
+      () => {
+        if (this.#overpassPoints === operation) this.#overpassPoints = null;
+      },
+    );
+    return operation;
   }
 
   async #fetchOverpassPoints(): Promise<
-    ProviderResult<ReadonlyMap<string, readonly OverpassAddressPoint[]>>
+    ProviderResult<ReadonlyMap<string, readonly OverpassPoint[]>>
   > {
     const form = new URLSearchParams({
       data: overpassQuery(this.#boundingBox),
     });
-    try {
-      const response = await this.#fetcher(OVERPASS_URL, {
+    const request = await fetchWithTimeout(
+      this.#fetcher,
+      OVERPASS_URL,
+      {
         method: "POST",
         headers: {
           "content-type": "application/x-www-form-urlencoded",
           "user-agent": this.#userAgent,
         },
         body: form,
-        signal: AbortSignal.timeout(this.#timeoutMs),
-      });
-      if (!response.ok) {
-        return {
-          kind: "unavailable",
-          reason:
-            "The Overpass address-point service returned a non-success response.",
-        };
-      }
+      },
+      this.#overpassTimeoutMs,
+    );
+    if (request.kind === "timeout") {
+      return { kind: "unavailable", reason: "Overpass timed out." };
+    }
+    if (request.kind === "unreachable") {
+      return { kind: "unavailable", reason: "Overpass could not be reached." };
+    }
+    const { response } = request;
+    if (!response.ok) {
+      return {
+        kind: "unavailable",
+        reason: `Overpass returned ${response.status}.`,
+      };
+    }
 
-      let body: unknown;
-      try {
-        body = await response.json();
-      } catch {
-        return {
-          kind: "unavailable",
-          reason: "The Overpass address-point service returned malformed JSON.",
-        };
-      }
-      const elements = objectProperty(body, "elements");
-      if (!Array.isArray(elements)) {
-        return {
-          kind: "unavailable",
-          reason:
-            "The Overpass address-point service returned a malformed body.",
-        };
-      }
-      return { kind: "available", value: indexOverpassElements(elements) };
+    let body: unknown;
+    try {
+      body = await response.json();
     } catch {
       return {
         kind: "unavailable",
-        reason: "The Overpass address-point service could not be reached.",
+        reason: "Overpass returned malformed JSON.",
       };
     }
+    const elements = objectProperty(body, "elements");
+    if (!Array.isArray(elements)) {
+      return {
+        kind: "unavailable",
+        reason: "Overpass returned a malformed body.",
+      };
+    }
+    return { kind: "available", value: indexOverpassElements(elements) };
   }
 
-  #lookupNominatim(
-    address: string,
-    parsed: ParsedAddress,
-    preferredRef?: string,
-  ): Promise<ProviderResult<NominatimResult>> {
+  #lookupNominatim(query: string): Promise<ProviderResult<readonly unknown[]>> {
     const operation = this.#nominatimQueue.then(() =>
-      this.#fetchNominatim(address, parsed, preferredRef),
+      this.#fetchNominatim(query),
     );
     this.#nominatimQueue = operation.then(
       () => undefined,
@@ -367,63 +466,66 @@ export class OpenStreetMapGeoAdapter implements GeoPort {
   }
 
   async #fetchNominatim(
-    address: string,
-    parsed: ParsedAddress,
-    preferredRef?: string,
-  ): Promise<ProviderResult<NominatimResult>> {
-    try {
-      if (this.#lastNominatimRequestAt !== null) {
-        const remaining =
-          NOMINATIM_INTERVAL_MS - (this.#now() - this.#lastNominatimRequestAt);
-        if (remaining > 0) await this.#wait(remaining);
-      }
-      this.#lastNominatimRequestAt = this.#now();
+    query: string,
+  ): Promise<ProviderResult<readonly unknown[]>> {
+    if (this.#lastNominatimRequestAt !== null) {
+      const remaining =
+        NOMINATIM_INTERVAL_MS - (this.#now() - this.#lastNominatimRequestAt);
+      if (remaining > 0) await this.#wait(remaining);
+    }
+    this.#lastNominatimRequestAt = this.#now();
 
-      const url = new URL(NOMINATIM_URL);
-      url.search = new URLSearchParams({
-        format: "jsonv2",
-        limit: "5",
-        addressdetails: "1",
-        countrycodes: "us",
-        q: queryString(address, this.#localitySuffix),
-      }).toString();
-      const response = await this.#fetcher(url, {
+    const url = new URL(NOMINATIM_URL);
+    url.search = new URLSearchParams({
+      format: "jsonv2",
+      limit: "5",
+      addressdetails: "1",
+      countrycodes: this.#countryCodes,
+      viewbox: `${this.#boundingBox.west},${this.#boundingBox.south},${this.#boundingBox.east},${this.#boundingBox.north}`,
+      bounded: "1",
+      q: query,
+    }).toString();
+    const request = await fetchWithTimeout(
+      this.#fetcher,
+      url,
+      {
         headers: { "user-agent": this.#userAgent },
-        signal: AbortSignal.timeout(this.#timeoutMs),
-      });
-      if (!response.ok) {
-        return {
-          kind: "unavailable",
-          reason: "Nominatim returned a non-success response.",
-        };
-      }
-
-      let body: unknown;
-      try {
-        body = await response.json();
-      } catch {
-        return {
-          kind: "unavailable",
-          reason: "Nominatim returned malformed JSON.",
-        };
-      }
-      if (!Array.isArray(body)) {
-        return {
-          kind: "unavailable",
-          reason: "Nominatim returned a malformed body.",
-        };
-      }
-
-      return {
-        kind: "available",
-        value: selectNominatimResult(body, parsed, preferredRef),
-      };
-    } catch {
+      },
+      this.#nominatimTimeoutMs,
+    );
+    if (request.kind === "timeout") {
+      return { kind: "unavailable", reason: "Nominatim timed out." };
+    }
+    if (request.kind === "unreachable") {
       return {
         kind: "unavailable",
         reason: "Nominatim could not be reached.",
       };
     }
+    const { response } = request;
+    if (!response.ok) {
+      return {
+        kind: "unavailable",
+        reason: `Nominatim returned ${response.status}.`,
+      };
+    }
+
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch {
+      return {
+        kind: "unavailable",
+        reason: "Nominatim returned malformed JSON.",
+      };
+    }
+    if (!Array.isArray(body)) {
+      return {
+        kind: "unavailable",
+        reason: "Nominatim returned a malformed body.",
+      };
+    }
+    return { kind: "available", value: body };
   }
 }
 
@@ -439,8 +541,8 @@ function overpassQuery(box: BoundingBox): string {
   );
 }
 
-function parseOverpassElement(element: unknown): OverpassAddressPoint[] {
-  if (!isObject(element)) return [];
+function parseOverpassElement(element: unknown): OverpassPoint | null {
+  if (!isObject(element)) return null;
   const type = element.type;
   const id = element.id;
   if (
@@ -448,39 +550,47 @@ function parseOverpassElement(element: unknown): OverpassAddressPoint[] {
     typeof id !== "number" ||
     !Number.isSafeInteger(id)
   ) {
-    return [];
+    return null;
   }
-  if (!isObject(element.tags)) return [];
+  if (!isObject(element.tags)) return null;
+  if ("addr:interpolation" in element.tags) return null;
   const houseNumber = element.tags["addr:housenumber"];
   const street = element.tags["addr:street"] ?? element.tags["addr:place"];
-  if (typeof houseNumber !== "string" || typeof street !== "string") return [];
+  if (typeof houseNumber !== "string" || typeof street !== "string") {
+    return null;
+  }
 
   const source = type === "node" ? element : element.center;
-  if (!isObject(source)) return [];
+  if (!isObject(source)) return null;
   const latitude = finiteNumber(source.lat);
   const longitude = finiteNumber(source.lon);
-  if (latitude === null || longitude === null) return [];
+  if (latitude === null || longitude === null) return null;
 
-  return [
-    {
-      houseNumber: caseFold(houseNumber.trim()),
-      street,
-      latitude,
-      longitude,
-      ref: `${type}/${id}`,
-      kind: type,
-      id,
-    },
-  ];
+  return {
+    houseNumber: caseFold(houseNumber.trim()),
+    street,
+    latitude,
+    longitude,
+    kind: type,
+    id,
+  };
 }
 
 function selectParcelPoint(
   address: ParsedAddress,
-  pointsByHouseNumber: ReadonlyMap<string, readonly OverpassAddressPoint[]>,
-): OverpassAddressPoint | null {
-  let selected: OverpassAddressPoint | null = null;
+  submittedStreetTokens: readonly string[],
+  pointsByHouseNumber: ReadonlyMap<string, readonly OverpassPoint[]>,
+): OverpassPoint | null {
+  let selected: OverpassPoint | null = null;
   for (const point of pointsByHouseNumber.get(address.houseNumber) ?? []) {
-    if (!streetsMatch(address.street, point.street)) continue;
+    if (
+      !streetTokenSequencesMatch(
+        submittedStreetTokens,
+        normalizedStreetTokens(point.street),
+      )
+    ) {
+      continue;
+    }
     if (selected === null || parcelPointPrecedes(point, selected)) {
       selected = point;
     }
@@ -489,7 +599,7 @@ function selectParcelPoint(
 }
 
 function locatedParcel(
-  parcel: OverpassAddressPoint,
+  parcel: OverpassPoint,
   crossCheck: Coordinates | null,
 ): GeocodeOutcome {
   return {
@@ -499,7 +609,7 @@ function locatedParcel(
       longitude: roundCoordinate(parcel.longitude),
       precision: "parcel",
       interpolated: false,
-      ref: parcel.ref,
+      ref: overpassReference(parcel),
     },
     crossCheck,
   };
@@ -508,34 +618,47 @@ function locatedParcel(
 function selectNominatimResult(
   body: readonly unknown[],
   submitted: ParsedAddress,
+  submittedStreetTokens: readonly string[],
+  boundingBox: BoundingBox,
   preferredRef?: string,
 ): NominatimResult {
-  let sawStreetLevel = false;
-  let sawNonStreetLevel = false;
+  // Nominatim does not expose enough information to distinguish interpolation
+  // results. Any such house result remains subject to the independent
+  // cross-check gate before publication.
   let selected: {
     readonly rank: number;
     readonly index: number;
     readonly point: Coordinates;
     readonly ref: string;
   } | null = null;
+  const results = body.filter((value): value is Record<string, unknown> => {
+    if (!isObject(value)) return false;
+    const latitude = finiteNumber(value.lat);
+    const longitude = finiteNumber(value.lon);
+    return (
+      latitude !== null &&
+      longitude !== null &&
+      boundingBoxContains(boundingBox, { latitude, longitude })
+    );
+  });
+  const streetLevelOnly =
+    results.length > 0 && results.every(isStreetLevelNominatimResult);
 
-  for (const [index, value] of body.entries()) {
-    if (!isObject(value)) continue;
-    if (isStreetLevelNominatimResult(value)) {
-      sawStreetLevel = true;
-      continue;
-    }
-    sawNonStreetLevel = true;
+  for (const [index, value] of results.entries()) {
+    if (isStreetLevelNominatimResult(value)) continue;
 
     const latitude = finiteNumber(value.lat);
     const longitude = finiteNumber(value.lon);
     if (latitude === null || longitude === null) continue;
     const type = stringValue(value.type);
-    const ref = nominatimReference(value, type);
+    const ref = nominatimReference(value);
+    if (ref === null) continue;
     let rank: number | null = null;
     if (preferredRef !== undefined && ref === preferredRef) {
       rank = 0;
-    } else if (nominatimAddressMatches(value, submitted)) {
+    } else if (
+      nominatimAddressMatches(value, submitted, submittedStreetTokens)
+    ) {
       rank = 1;
     } else if (HOUSE_LEVEL_TYPES.has(type)) {
       rank = 2;
@@ -560,11 +683,18 @@ function selectNominatimResult(
   }
 
   if (selected !== null) {
-    return { kind: "hit", point: selected.point, ref: selected.ref };
+    return { kind: "located", point: selected.point, ref: selected.ref };
+  }
+  if (streetLevelOnly) {
+    return {
+      kind: "refused",
+      reason:
+        "Nominatim returned only street- or road-level results, which are not precise enough to publish.",
+    };
   }
   return {
-    kind: "miss",
-    streetLevelOnly: sawStreetLevel && !sawNonStreetLevel,
+    kind: "not-found",
+    reason: "OpenStreetMap returned no acceptable address match.",
   };
 }
 
@@ -582,10 +712,7 @@ function isStreetLevelNominatimResult(value: Record<string, unknown>): boolean {
   );
 }
 
-function nominatimReference(
-  value: Record<string, unknown>,
-  type: string,
-): string {
+function nominatimReference(value: Record<string, unknown>): string | null {
   const osmType = stringValue(value.osm_type);
   const osmId = value.osm_id;
   if (
@@ -595,12 +722,13 @@ function nominatimReference(
   ) {
     return `${osmType}/${String(osmId)}`;
   }
-  return type;
+  return null;
 }
 
 function nominatimAddressMatches(
   value: Record<string, unknown>,
   submitted: ParsedAddress,
+  submittedStreetTokens: readonly string[],
 ): boolean {
   if (!isObject(value.address)) return false;
   const houseNumber = value.address.house_number;
@@ -609,88 +737,133 @@ function nominatimAddressMatches(
     typeof houseNumber === "string" &&
     caseFold(houseNumber.trim()) === submitted.houseNumber &&
     typeof street === "string" &&
-    streetsMatch(submitted.street, street)
+    streetTokenSequencesMatch(
+      submittedStreetTokens,
+      normalizedStreetTokens(street),
+    )
   );
 }
 
 function normalizedStreetTokens(street: string): string[] {
-  return [...caseFold(street).matchAll(/[a-z0-9]+/g)].map((match) => {
-    const token = match[0];
-    return TOKEN_ALIASES[token] ?? token;
+  const tokens = [...caseFold(street).matchAll(/[a-z0-9]+/g)].map(
+    (match) => match[0],
+  );
+  if (tokens.length === 0) return tokens;
+
+  const normalized = tokens.map((token, index) => {
+    if (
+      index === 0 &&
+      tokens.length > 1 &&
+      (token === "st" || token === "ste")
+    ) {
+      return "saint";
+    }
+    if (index === 0 || index === tokens.length - 1) {
+      return DIRECTION_ALIASES[token] ?? token;
+    }
+    return token;
   });
+  const lastIndex = normalized.length - 1;
+  const suffixIndex = DIRECTION_WORDS.has(normalized[lastIndex] ?? "")
+    ? lastIndex - 1
+    : lastIndex;
+  if (suffixIndex >= 0) {
+    normalized[suffixIndex] =
+      STREET_SUFFIX_ALIASES[normalized[suffixIndex] ?? ""] ??
+      normalized[suffixIndex] ??
+      "";
+  }
+  return normalized;
 }
 
 function indexOverpassElements(
   elements: readonly unknown[],
-): ReadonlyMap<string, readonly OverpassAddressPoint[]> {
-  const pointsByHouseNumber = new Map<string, OverpassAddressPoint[]>();
+): ReadonlyMap<string, readonly OverpassPoint[]> {
+  const pointsByHouseNumber = new Map<string, OverpassPoint[]>();
   for (const element of elements) {
-    for (const point of parseOverpassElement(element)) {
-      const points = pointsByHouseNumber.get(point.houseNumber) ?? [];
-      points.push(point);
-      pointsByHouseNumber.set(point.houseNumber, points);
-    }
+    const point = parseOverpassElement(element);
+    if (point === null) continue;
+    const points = pointsByHouseNumber.get(point.houseNumber) ?? [];
+    points.push(point);
+    pointsByHouseNumber.set(point.houseNumber, points);
   }
   return pointsByHouseNumber;
 }
 
 function parcelPointPrecedes(
-  candidate: OverpassAddressPoint,
-  selected: OverpassAddressPoint,
+  candidate: OverpassPoint,
+  selected: OverpassPoint,
 ): boolean {
   if (candidate.kind !== selected.kind) return candidate.kind === "way";
   return candidate.id < selected.id;
 }
 
-function normalizedAddressKey(address: string, localitySuffix: string): string {
-  return caseFold(queryString(address.trim(), localitySuffix))
-    .replace(/\s+/g, " ")
-    .trim();
+function overpassReference(point: OverpassPoint): string {
+  return `${point.kind}/${point.id}`;
 }
 
-function containsLocality(address: string, localitySuffix: string): boolean {
-  if (localitySuffix === DEFAULT_LOCALITY_SUFFIX) {
-    return new RegExp(String.raw`\b${DEFAULT_LOCALITY_PATTERN}\b`, "i").test(
-      address,
-    );
-  }
-  const localityPattern = escapedLocality(localitySuffix);
-  return new RegExp(
-    String.raw`(?:^|[,\s])${localityPattern}(?:\s+\d{5}(?:-\d{4})?)?\s*$`,
-    "i",
-  ).test(address);
+function normalizedAddressKey(
+  address: string,
+  grammar: LocalityGrammar,
+): { readonly key: string; readonly query: string } {
+  const query = queryStringWithGrammar(address.trim(), grammar);
+  return {
+    query,
+    key: caseFold(query).replace(/\s+/g, " ").trim(),
+  };
 }
 
-function stripLocalityTail(street: string, localitySuffix: string): string {
-  if (localitySuffix === DEFAULT_LOCALITY_SUFFIX) {
-    const withoutState = street.replace(
-      new RegExp(
-        String.raw`\s*,?\s+(?:${DEFAULT_LOCALITY_PATTERN}\s*,?\s*)?mn\s*,?\s*(?:\d{5}(?:-\d{4})?)?\s*$`,
-        "i",
-      ),
-      "",
-    );
-    return withoutState.replace(
-      new RegExp(String.raw`\s*,?\s+${DEFAULT_LOCALITY_PATTERN}\s*$`, "i"),
-      "",
-    );
+function queryStringWithGrammar(
+  address: string,
+  grammar: LocalityGrammar,
+): string {
+  if (containsLocality(address, grammar)) return address;
+  return `${address}, ${grammar.suffix}`;
+}
+
+function containsLocality(address: string, grammar: LocalityGrammar): boolean {
+  return grammar.tail.test(address);
+}
+
+function stripLocalityTail(street: string, grammar: LocalityGrammar): string {
+  return street.replace(grammar.tail, "");
+}
+
+function localityGrammar(localitySuffix: string): LocalityGrammar {
+  const suffix = requireNonEmpty(localitySuffix, "localitySuffix");
+  const tokenMatches = [...suffix.matchAll(/[A-Za-z0-9]+(?:\.)?/g)];
+  if (tokenMatches.length === 0) {
+    throw new TypeError("localitySuffix must contain a word or number.");
   }
-  return street.replace(
-    new RegExp(
-      String.raw`\s*,?\s+${escapedLocality(localitySuffix)}(?:\s*,?\s*\d{5}(?:-\d{4})?)?\s*$`,
+
+  let localityPattern = localityTokenPattern(tokenMatches[0]?.[0] ?? "");
+  for (let index = 1; index < tokenMatches.length; index += 1) {
+    const previous = tokenMatches[index - 1];
+    const current = tokenMatches[index];
+    if (previous === undefined || current === undefined) continue;
+    const separator = suffix.slice(
+      (previous.index ?? 0) + previous[0].length,
+      current.index,
+    );
+    localityPattern += separator.includes(",")
+      ? String.raw`(?:\s*,\s*|\s+)`
+      : String.raw`\s+`;
+    localityPattern += localityTokenPattern(current[0]);
+  }
+
+  return {
+    suffix,
+    tail: new RegExp(
+      String.raw`(?:^|,\s*|\s+)${localityPattern}(?:,?\s*\d{5}(?:-\d{4})?)?\s*$`,
       "i",
     ),
-    "",
-  );
+  };
 }
 
-function escapedLocality(localitySuffix: string): string {
-  return localitySuffix
-    .trim()
-    .split(/\s+/)
-    .map((part) => escapeRegExp(part))
-    .join(String.raw`\s+`)
-    .replaceAll(",", String.raw`\s*,\s*`);
+function localityTokenPattern(token: string): string {
+  return /^(?:saint|st\.?)$/i.test(token)
+    ? String.raw`(?:saint|st\.?)`
+    : escapeRegExp(token);
 }
 
 function escapeRegExp(value: string): string {
@@ -740,16 +913,49 @@ function requireNonEmpty(value: string, name: string): string {
   return trimmed;
 }
 
-function assertBoundingBox(box: BoundingBox): void {
-  if (
-    !isValidCoordinate({ latitude: box.south, longitude: box.west }) ||
-    !isValidCoordinate({ latitude: box.north, longitude: box.east }) ||
-    box.north <= box.south ||
-    box.east <= box.west
-  ) {
-    throw new RangeError(
-      "boundingBox must contain valid, ordered coordinates.",
-    );
+function positiveTimeout(value: number, name: string): number {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new RangeError(`${name} must be a positive safe integer.`);
+  }
+  return value;
+}
+
+async function fetchWithTimeout(
+  fetcher: typeof fetch,
+  input: string | URL,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<FetchResult> {
+  const abortController = new AbortController();
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  let operation: Promise<Response>;
+  try {
+    operation = fetcher(input, {
+      ...init,
+      signal: abortController.signal,
+    });
+  } catch {
+    return { kind: "unreachable" };
+  }
+  const timeout = new Promise<FetchResult>((resolve) => {
+    timeoutHandle = setTimeout(() => {
+      resolve({ kind: "timeout" });
+      abortController.abort();
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([
+      operation.then((response): FetchResult => ({
+        kind: "response",
+        response,
+      })),
+      timeout,
+    ]);
+  } catch {
+    return { kind: "unreachable" };
+  } finally {
+    if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
   }
 }
 

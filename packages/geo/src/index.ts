@@ -1,7 +1,8 @@
 export type { Coordinates, GeocodeRequest, GeoPort } from "@porchfest/core";
 export {
   AddressParseError,
-  DEFAULT_GEOCODE_TIMEOUT_MS,
+  DEFAULT_NOMINATIM_TIMEOUT_MS,
+  DEFAULT_OVERPASS_TIMEOUT_MS,
   DEFAULT_LOCALITY_SUFFIX,
   DEFAULT_OPENSTREETMAP_USER_AGENT,
   InMemoryGeocodeCache,
@@ -20,6 +21,7 @@ export {
 } from "./geocode.js";
 export {
   EARTH_RADIUS_METERS,
+  assertBoundingBox,
   boundingBoxContains,
   haversineDistanceMeters,
   isValidCoordinate,
