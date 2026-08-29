@@ -462,7 +462,7 @@ function response(payload, options = {}) {
 }
 
 function venue(overrides = {}) {
-  return Object.assign(
+  const result = Object.assign(
     {
       title: "Garden Stage",
       address: "100 Festival Ave",
@@ -483,6 +483,16 @@ function venue(overrides = {}) {
     },
     overrides,
   );
+  const goalOneSlotLabels = {
+    "6-7": "6–7 pm",
+    "7-8": "7–8 pm",
+    "6-8": "6–8 pm",
+  };
+  result.acts = result.acts.map((act) => ({
+    slot_label: goalOneSlotLabels[act.slot] || act.slot,
+    ...act,
+  }));
+  return result;
 }
 
 async function settlePromises() {
@@ -1402,7 +1412,7 @@ test("a collapsed venue card still navigates to its marker without changing filt
     .querySelectorAll(".porchfest-venue-card")
     .find((card) => card.dataset.venueKey === run.testApi.venueKey(venues[1]));
 
-  applyFilters(run, venues, "6-7", "Folk");
+  applyFilters(run, venues, "6–7 pm", "Folk");
   assertViewClasses(rockCard, "collapsed");
 
   rockCard
@@ -1410,7 +1420,7 @@ test("a collapsed venue card still navigates to its marker without changing filt
     .dispatchEvent({ type: "click" });
 
   assertViewClasses(rockCard, "collapsed");
-  assert.equal(run.testApi.getViewState().hour, "6-7");
+  assert.equal(run.testApi.getViewState().hour, "6–7 pm");
   assert.equal(run.testApi.getViewState().genre, "Folk");
   assert.equal(run.leaflet.records.maps[0].flyToCalls.length, 1);
   assert.deepEqual(
@@ -1423,7 +1433,17 @@ test("a collapsed venue card still navigates to its marker without changing filt
 });
 
 test("renders a permanent one-line hour control with exactly one active button", async () => {
-  const run = await runScript();
+  const venues = [
+    venue({ title: "Early", acts: [{ slot: "6-7", name: "Early Act" }] }),
+    venue({
+      title: "Late",
+      lat: 44.99,
+      acts: [{ slot: "7-8", name: "Late Act" }],
+    }),
+  ];
+  const run = await runScript({
+    fetch: () => Promise.resolve(response({ venues })),
+  });
   const controls = run.nodes.mount.querySelector(".porchfest-map-controls");
   const hourControl = controls.querySelector(".porchfest-hour-control");
   const buttons = hourControl.querySelectorAll("button");
@@ -1457,6 +1477,48 @@ test("renders a permanent one-line hour control with exactly one active button",
   assert.match(hourControl.getAttribute("aria-label"), /hour/i);
 });
 
+test("derives hour filters from first-seen non-Goal-1 slot labels", async () => {
+  const venues = [
+    venue({
+      title: "Second Afternoon Stage",
+      acts: [
+        {
+          slot: "slot-b",
+          slot_label: "afternoon-2",
+          name: "Second Afternoon Act",
+        },
+      ],
+    }),
+    venue({
+      title: "First Afternoon Stage",
+      lat: 44.99,
+      acts: [
+        {
+          slot: "slot-a",
+          slot_label: "afternoon-1",
+          name: "First Afternoon Act",
+        },
+      ],
+    }),
+  ];
+  const run = await runScript({
+    fetch: () => Promise.resolve(response({ venues })),
+  });
+  const buttons = run.nodes.mount
+    .querySelector(".porchfest-hour-control")
+    .querySelectorAll("button");
+
+  assert.deepEqual(
+    buttons.map((button) => button.textContent),
+    ["All", "afternoon-2", "afternoon-1"],
+  );
+
+  buttons[2].dispatchEvent({ type: "click" });
+  assert.equal(run.testApi.getViewState().hour, "afternoon-1");
+  assertViewClasses(run.nodes.list.children[0], "collapsed");
+  assertViewClasses(run.nodes.list.children[1], "match");
+});
+
 test("hour buttons are accessible native buttons that update state and reapply the view", async () => {
   const venues = [
     venue({ title: "Early", acts: [{ slot: "6-7", name: "Early Act" }] }),
@@ -1480,7 +1542,7 @@ test("hour buttons are accessible native buttons that update state and reapply t
   });
 
   buttons[2].dispatchEvent({ type: "click" });
-  assert.equal(run.testApi.getViewState().hour, "7-8");
+  assert.equal(run.testApi.getViewState().hour, "7–8 pm");
   assert.equal(
     buttons.filter((button) => button.getAttribute("aria-pressed") === "true")
       .length,
@@ -1740,7 +1802,7 @@ test("sort button shares the accessible 44px chip treatment", async () => {
   );
 });
 
-test("a full-evening act matches both hour filters", async () => {
+test("a full-evening act matches its payload-provided hour label", async () => {
   const venues = [venue({ acts: [{ slot: "6-8", name: "Full Evening" }] })];
   const run = await runScript({
     fetch: () => Promise.resolve(response({ venues })),
@@ -1748,11 +1810,7 @@ test("a full-evening act matches both hour filters", async () => {
   const card = run.nodes.list.children[0];
   const markerElement = run.leaflet.records.markers[0].element;
 
-  applyFilters(run, venues, "6-7", "all");
-  assertViewClasses(card, "match");
-  assertViewClasses(markerElement, "match");
-
-  applyFilters(run, venues, "7-8", "all");
+  applyFilters(run, venues, "6–8 pm", "all");
   assertViewClasses(card, "match");
   assertViewClasses(markerElement, "match");
 });
@@ -1771,7 +1829,7 @@ test("filtering keeps non-matching venues in the lineup and their markers on the
     fetch: () => Promise.resolve(response({ venues })),
   });
 
-  applyFilters(run, venues, "6-7", "all");
+  applyFilters(run, venues, "6–7 pm", "all");
 
   assert.equal(
     run.nodes.list.querySelectorAll(".porchfest-venue-card").length,
@@ -1802,7 +1860,7 @@ test("only non-matching cards collapse while matching and neutral cards stay ful
   assertViewClasses(earlyCard, "neutral");
   assertViewClasses(lateCard, "neutral");
 
-  applyFilters(run, venues, "6-7", "all");
+  applyFilters(run, venues, "6–7 pm", "all");
 
   assertViewClasses(earlyCard, "match");
   assertViewClasses(lateCard, "collapsed");
@@ -1822,7 +1880,7 @@ test("matching venues mark both the lineup card and marker element", async () =>
     fetch: () => Promise.resolve(response({ venues })),
   });
 
-  applyFilters(run, venues, "6-7", "all");
+  applyFilters(run, venues, "6–7 pm", "all");
 
   assertViewClasses(run.nodes.list.children[0], "match");
   assertViewClasses(run.leaflet.records.markers[0].element, "match");
@@ -1843,7 +1901,7 @@ test("a faded marker stays keyboard-focusable and opens its popup", async () => 
   });
   const fadedMarker = run.leaflet.records.markers[1];
 
-  applyFilters(run, venues, "6-7", "all");
+  applyFilters(run, venues, "6–7 pm", "all");
   fadedMarker.element.dispatchEvent({
     type: "keydown",
     key: " ",
@@ -1856,7 +1914,7 @@ test("a faded marker stays keyboard-focusable and opens its popup", async () => 
   assert.equal(fadedMarker.openedContent.className, "porchfest-map-popup");
 });
 
-test("hour filters resolve every slot value and a two-act venue", async () => {
+test("hour filters resolve every slot label and a two-act venue", async () => {
   const venues = [
     venue({ title: "Early", acts: [{ slot: "6-7", name: "Early Act" }] }),
     venue({
@@ -1883,19 +1941,25 @@ test("hour filters resolve every slot value and a two-act venue", async () => {
   });
   const cards = run.nodes.list.children;
 
-  applyFilters(run, venues, "6-7", "all");
+  applyFilters(run, venues, "6–7 pm", "all");
   assert.deepEqual(
     cards.map((card) => card.classList.contains("is-match")),
-    [true, false, true, true],
+    [true, false, false, true],
   );
   assertViewClasses(cards[1], "collapsed");
 
-  applyFilters(run, venues, "7-8", "all");
+  applyFilters(run, venues, "7–8 pm", "all");
   assert.deepEqual(
     cards.map((card) => card.classList.contains("is-match")),
-    [false, true, true, true],
+    [false, true, false, true],
   );
   assertViewClasses(cards[0], "collapsed");
+
+  applyFilters(run, venues, "6–8 pm", "all");
+  assert.deepEqual(
+    cards.map((card) => card.classList.contains("is-match")),
+    [false, false, true, false],
+  );
 });
 
 test("a genre-less act is collapsed under an active genre filter", async () => {
@@ -1933,7 +1997,7 @@ test("facets combine with AND when hour matches but genre does not", async () =>
     fetch: () => Promise.resolve(response({ venues })),
   });
 
-  applyFilters(run, venues, "6-7", "Folk");
+  applyFilters(run, venues, "6–7 pm", "Folk");
 
   assertViewClasses(run.nodes.list.children[0], "collapsed");
   assertViewClasses(run.nodes.list.children[1], "match");
@@ -1952,7 +2016,7 @@ test("different acts can satisfy the venue hour and genre facets", async () => {
     fetch: () => Promise.resolve(response({ venues })),
   });
 
-  applyFilters(run, venues, "6-7", "Folk");
+  applyFilters(run, venues, "6–7 pm", "Folk");
 
   assertViewClasses(run.nodes.list.children[0], "match");
   assertViewClasses(run.leaflet.records.markers[0].element, "match");
@@ -1978,7 +2042,7 @@ test("filtering preserves sorted card and marker pairing by venue key", async ()
   const lateCard = run.nodes.list.children[1];
   [lateCard, earlyCard].forEach((card) => run.nodes.list.appendChild(card));
 
-  applyFilters(run, venues, "6-7", "Folk");
+  applyFilters(run, venues, "6–7 pm", "Folk");
 
   assert.equal(run.nodes.list.children[1], earlyCard);
   assertViewClasses(earlyCard, "match");
@@ -2019,7 +2083,7 @@ test("returning both facets to All removes every view class", async () => {
     fetch: () => Promise.resolve(response({ venues })),
   });
 
-  applyFilters(run, venues, "6-7", "Folk");
+  applyFilters(run, venues, "6–7 pm", "Folk");
   applyFilters(run, venues, "all", "all");
 
   run.nodes.list.children.forEach((card) => assertViewClasses(card, "neutral"));
@@ -2036,7 +2100,7 @@ test("a zero-match combination explains how to return to All without removing ve
     fetch: () => Promise.resolve(response({ venues })),
   });
 
-  applyFilters(run, venues, "7-8", "Rock");
+  applyFilters(run, venues, "7–8 pm", "Rock");
 
   assert.equal(run.nodes.status.hidden, false);
   assert.equal(run.nodes.status.className, "porchfest-map-status is-no-match");
@@ -2065,7 +2129,7 @@ test("a zero-match combination explains how to return to All without removing ve
   assertViewClasses(run.nodes.list.children[0], "collapsed");
   assertViewClasses(run.leaflet.records.markers[0].element, "dimmed");
 
-  applyFilters(run, venues, "6-7", "Folk");
+  applyFilters(run, venues, "6–7 pm", "Folk");
 
   assert.equal(run.nodes.status.hidden, true);
   assert.equal(run.nodes.status.className, "porchfest-map-status");
@@ -2110,7 +2174,7 @@ test("applyView preserves the existing card node identity", async () => {
     throw new Error("applyView must not detach or re-append cards");
   };
 
-  applyFilters(run, venues, "6-7", "Rock");
+  applyFilters(run, venues, "6–7 pm", "Rock");
 
   assert.equal(run.nodes.list.children[0], cardsBefore[0]);
   assert.equal(run.nodes.list.children[1], cardsBefore[1]);

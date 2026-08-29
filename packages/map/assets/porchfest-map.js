@@ -158,8 +158,7 @@
   function actMatchesHour(act, hour) {
     if (hour === "all") return true;
 
-    var slot = cleanText(act && act.slot);
-    return slot === hour || slot === "6-8";
+    return cleanText(act && act.slot_label) === hour;
   }
 
   function venueMatchesHour(venue, hour) {
@@ -269,38 +268,44 @@
 
   function createHourControl(status, listSection, venues, markerLookup) {
     var hourControl = document.createElement("div");
+    var labels = [];
     hourControl.className = "porchfest-hour-control";
     hourControl.setAttribute("role", "group");
     hourControl.setAttribute("aria-label", "Filter venues by performance hour");
 
-    [
-      { label: "All", name: "Show all performance hours", value: "all" },
-      {
-        label: "6–7 pm",
-        name: "Show performances from 6 to 7 pm",
-        value: "6-7",
-      },
-      {
-        label: "7–8 pm",
-        name: "Show performances from 7 to 8 pm",
-        value: "7-8",
-      },
-    ].forEach(function (option) {
-      hourControl.appendChild(
-        createFilterButton(
-          option.label,
-          option.name,
-          option.value,
-          viewState.hour,
-          function () {
-            viewState.hour = option.value;
-            updatePressedButtons(hourControl, viewState.hour);
-            applyView(status, listSection, venues, markerLookup);
-            scheduleVenueLayout(listSection);
-          },
-        ),
-      );
+    venues.forEach(function (venue) {
+      venueActs(venue).forEach(function (act) {
+        var label = cleanText(act && act.slot_label);
+        if (label && labels.indexOf(label) === -1) labels.push(label);
+      });
     });
+
+    [{ label: "All", name: "Show all performance hours", value: "all" }]
+      .concat(
+        labels.map(function (label) {
+          return {
+            label: label,
+            name: "Show performances for " + label,
+            value: label,
+          };
+        }),
+      )
+      .forEach(function (option) {
+        hourControl.appendChild(
+          createFilterButton(
+            option.label,
+            option.name,
+            option.value,
+            viewState.hour,
+            function () {
+              viewState.hour = option.value;
+              updatePressedButtons(hourControl, viewState.hour);
+              applyView(status, listSection, venues, markerLookup);
+              scheduleVenueLayout(listSection);
+            },
+          ),
+        );
+      });
 
     return hourControl;
   }
