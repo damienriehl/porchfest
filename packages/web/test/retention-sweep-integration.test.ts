@@ -52,6 +52,8 @@ function createParticipant(runtime: PorchfestRuntime) {
     displayName: "Synthetic Sweep Season",
     timezone: "UTC",
     eventDate: "2030-09-14",
+    eventCity: "Exampleton",
+    eventState: "WI",
     timeSlots: [],
     openSignups: true,
   });

@@ -869,6 +869,8 @@ export function createSeasonRepository(
         .update(seasons)
         .set({
           state: targetState,
+          mapPublishedAt:
+            targetState === "archived" ? null : season.mapPublishedAt,
           version: sql`${seasons.version} + 1`,
           updatedAt: now(),
         })
@@ -879,6 +881,58 @@ export function createSeasonRepository(
       if (result.changes !== 1) conflict("season", seasonId, ["state"]);
       return getSeason(seasonId, tx);
     });
+  }
+
+  function setSeasonMapPublication(
+    seasonId: number,
+    actor: number | null,
+    expectedVersion: number,
+    published: boolean,
+  ): Season {
+    void actor;
+    return db.transaction(
+      (tx) => {
+        const season = getSeason(seasonId, tx);
+        if (season.state !== "locked") {
+          throw new SeasonActionError(
+            season.state,
+            published ? "map_publish" : "map_unpublish",
+          );
+        }
+        const result = tx
+          .update(seasons)
+          .set({
+            mapPublishedAt: published ? now() : null,
+            version: sql`${seasons.version} + 1`,
+            updatedAt: now(),
+          })
+          .where(
+            and(eq(seasons.id, seasonId), eq(seasons.version, expectedVersion)),
+          )
+          .run();
+        if (result.changes !== 1) {
+          conflict("season", seasonId, ["mapPublishedAt"]);
+        }
+        return getSeason(seasonId, tx);
+      },
+      { behavior: "immediate" },
+    );
+  }
+
+  function publishSeasonMap(
+    seasonId: number,
+    actor: number | null,
+    expectedVersion: number,
+  ): Season {
+    return setSeasonMapPublication(seasonId, actor, expectedVersion, true);
+  }
+
+  function unpublishSeasonMap(
+    seasonId: number,
+    actor: number | null,
+    expectedVersion: number,
+  ): Season {
+    return setSeasonMapPublication(seasonId, actor, expectedVersion, false);
   }
 
   function ensureVenueSlots(venueId: number): Slot[] {
@@ -911,6 +965,16 @@ export function createSeasonRepository(
       .from(slots)
       .where(eq(slots.seasonId, seasonId))
       .orderBy(asc(slots.startsAt), asc(slots.id))
+      .all();
+  }
+
+  function listSeasonVenues(seasonId: number): Venue[] {
+    getSeason(seasonId);
+    return db
+      .select()
+      .from(venues)
+      .where(eq(venues.seasonId, seasonId))
+      .orderBy(asc(venues.id))
       .all();
   }
 
@@ -1723,9 +1787,12 @@ export function createSeasonRepository(
     supersedeVenue,
     supersedeContact,
     transitionSeason,
+    publishSeasonMap,
+    unpublishSeasonMap,
     ensureVenueSlots,
     listVenueSlots,
     listSeasonSlots,
+    listSeasonVenues,
     linkActs,
     unlinkActs,
     listActLinks,

@@ -117,6 +117,8 @@ describe("outbox", () => {
       displayName: fixture.season.displayName,
       timezone: fixture.season.timezone,
       eventDate: fixture.season.eventDate,
+      eventCity: "Exampleton",
+      eventState: "WI",
       timeSlots: fixture.season.timeSlots,
       publicMapUrl: fixture.season.publicMapUrl,
       senderName: fixture.season.senderName,

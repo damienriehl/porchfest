@@ -79,6 +79,8 @@ async function boot() {
     displayName: "Synthetic Season",
     timezone: "UTC",
     eventDate: "2031-09-13",
+    eventCity: "Exampleton",
+    eventState: "WI",
     timeSlots: [],
     openSignups: true,
   });

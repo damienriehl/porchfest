@@ -54,6 +54,8 @@ async function makeRuntime(
     displayName: "Synthetic 2031 Porchfest",
     timezone: "UTC",
     eventDate: "2031-06-01",
+    eventCity: "Exampleton",
+    eventState: "WI",
     timeSlots: [],
     openSignups: true,
   });
@@ -202,6 +204,8 @@ describe("public signup forms", () => {
       displayName: "Synthetic 2032 Porchfest",
       timezone: "UTC",
       eventDate: "2032-06-01",
+      eventCity: "Exampleton",
+      eventState: "WI",
       timeSlots: [],
       openSignups: true,
     });

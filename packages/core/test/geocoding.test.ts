@@ -92,6 +92,8 @@ describe("core venue geocoding (U9 / KTD11)", () => {
       displayName: `Synthetic ${year}`,
       timezone: "UTC",
       eventDate: `${year}-09-10`,
+      eventCity: "Exampleton",
+      eventState: "WI",
       timeSlots: [],
       localityName,
       bounds: box,

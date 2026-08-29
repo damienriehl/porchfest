@@ -72,6 +72,8 @@ function completeSetup(csrf: string, overrides: Record<string, string> = {}) {
     display_name: "SAP Porchfest 2027",
     year: "2027",
     event_date: "2027-09-11",
+    event_city: "Exampleton",
+    event_state: "WI",
     timezone: "America/Chicago",
     signup_opens_on: "2027-05-01",
     signup_closes_on: "2027-07-01",
@@ -181,6 +183,8 @@ describe("first-run setup", () => {
     expect(season.displayName).toBe("SAP Porchfest 2027");
     expect(season.timezone).toBe("America/Chicago");
     expect(season.eventDate).toBe("2027-09-11");
+    expect(season.eventCity).toBe("Exampleton");
+    expect(season.eventState).toBe("WI");
     expect(season.localityName).toBe("Saint Anthony Park");
     expect(season.boundsNorth).toBeCloseTo(44.99);
     expect(season.publicMapUrl).toContain("sapporchfest.example/map");

@@ -112,6 +112,8 @@ async function makeRuntime(
     displayName: "Synthetic 2031 Porchfest",
     timezone: options.timezone ?? "UTC",
     eventDate: "2031-06-01",
+    eventCity: "Exampleton",
+    eventState: "WI",
     timeSlots: [],
     openSignups: requestedState === "signups_open",
   });

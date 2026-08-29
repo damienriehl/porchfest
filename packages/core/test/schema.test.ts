@@ -63,19 +63,37 @@ describe("core schema migration", () => {
     }
   });
 
+  it("adds the U9 map publication and event metadata columns in migration 0015", async () => {
+    const migration = await readFile(
+      new URL("../drizzle/0015_map_publication.sql", import.meta.url),
+      "utf8",
+    );
+    expect(migration).toContain("`map_published_at` integer");
+    expect(migration).toContain("`event_city` text");
+    expect(migration).toContain("`event_state` text");
+
+    const seasonColumns = sqlite
+      .prepare("select name from pragma_table_info('seasons') order by name")
+      .all()
+      .map((row) => (row as { name: string }).name);
+    expect(seasonColumns).toEqual(
+      expect.arrayContaining(["event_city", "event_state", "map_published_at"]),
+    );
+  });
+
   it("upgrades complete and partial 0013 coordinates into explicit provenance", () => {
     const upgrade = new Database(":memory:");
     upgrade.pragma("foreign_keys = ON");
     const migrations = readMigrationFiles({
       migrationsFolder: fileURLToPath(new URL("../drizzle", import.meta.url)),
     });
-    const migration0014 = migrations.at(-1);
+    const migration0014 = migrations.at(14);
     if (migration0014 === undefined) {
       throw new Error("migration 0014 was not loaded");
     }
 
     try {
-      for (const migration of migrations.slice(0, -1)) {
+      for (const migration of migrations.slice(0, 14)) {
         for (const statement of migration.sql) {
           if (statement.trim() !== "") upgrade.exec(statement);
         }

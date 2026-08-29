@@ -162,6 +162,10 @@ export const seasons = sqliteTable(
     // a failed install, so everything an organizer must decide to run a season
     // lives here and is captured in one flow.
     eventDate: text("event_date"), // YYYY-MM-DD in the season's own timezone
+    // venues-map.v1 requires these as document-level event fields. They live
+    // on the season rather than being guessed from a venue address or locality.
+    eventCity: text("event_city").notNull().default("Unconfigured"),
+    eventState: text("event_state").notNull().default("Unconfigured"),
     signupOpensAt: integer("signup_opens_at", { mode: "timestamp" }),
     signupClosesAt: integer("signup_closes_at", { mode: "timestamp" }),
     // The locality R17 sanity-checks geocoded coordinates against. Stored as a
@@ -176,6 +180,9 @@ export const seasons = sqliteTable(
     publicMapUrl: text("public_map_url"),
     senderName: text("sender_name"),
     senderEmail: text("sender_email"),
+    // R16: publication is an explicit organizer act, not a consequence of
+    // locking assignments. Archival clears this timestamp in the domain layer.
+    mapPublishedAt: integer("map_published_at", { mode: "timestamp" }),
     // R35's deployer-configurable retention window.
     retentionDays: integer("retention_days"),
     ...mutableColumns(),
