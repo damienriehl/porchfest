@@ -1,4 +1,5 @@
 import {
+  seasonBoundingBox,
   type CoordinateRejectionCode,
   type Season,
   type VenueCoordinateReview,
@@ -47,7 +48,7 @@ export function renderCoordinatesPage(options: {
 }): string {
   const { season } = options;
   const boxName = season.localityName ?? season.displayName;
-  const bounds = completeBounds(season);
+  const bounds = seasonBoundingBox(season);
   const boundsText = bounds
     ? `${boxName}: north ${bounds.north}, south ${bounds.south}, east ${bounds.east}, west ${bounds.west}`
     : `${boxName}: no complete bounding box is configured`;
@@ -186,22 +187,4 @@ function renderRow(
           <td>${escapeHtml(candidate)}</td>
           <td>${verification}</td>
         </tr>`;
-}
-
-function completeBounds(season: Season) {
-  const { boundsNorth, boundsSouth, boundsEast, boundsWest } = season;
-  if (
-    boundsNorth === null ||
-    boundsSouth === null ||
-    boundsEast === null ||
-    boundsWest === null
-  ) {
-    return null;
-  }
-  return {
-    north: boundsNorth,
-    south: boundsSouth,
-    east: boundsEast,
-    west: boundsWest,
-  };
 }

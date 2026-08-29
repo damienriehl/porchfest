@@ -12,6 +12,7 @@ import {
   venues,
   type CoordinateRejectionCode,
   type CoordinateStatus,
+  type Season,
   type VenueCoordinate,
 } from "./storage/schema.js";
 import {
@@ -387,7 +388,16 @@ function venueContext(db: CoreExecutor, venueId: number): VenueSeasonContext {
 }
 
 function boundsFor(context: VenueSeasonContext) {
-  const { boundsNorth, boundsSouth, boundsEast, boundsWest } = context;
+  return seasonBoundingBox(context);
+}
+
+export function seasonBoundingBox(
+  season: Pick<
+    Season,
+    "boundsNorth" | "boundsSouth" | "boundsEast" | "boundsWest"
+  >,
+) {
+  const { boundsNorth, boundsSouth, boundsEast, boundsWest } = season;
   if (
     boundsNorth === null ||
     boundsSouth === null ||
