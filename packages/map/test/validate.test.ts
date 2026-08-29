@@ -151,6 +151,14 @@ describe("validateVenuesMapDocument", () => {
     expectInvalid(document, "/venues/0/lat");
   });
 
+  it("rejects a malformed event date", () => {
+    const document = copyDocument();
+    const event = document.event as Record<string, unknown>;
+    event.date = "not-a-date";
+
+    expectInvalid(document, "/event/date", /format/);
+  });
+
   it("compiles the schema once across repeated validation calls", async () => {
     vi.resetModules();
     const compile = vi.spyOn(Ajv2020.prototype, "compile");

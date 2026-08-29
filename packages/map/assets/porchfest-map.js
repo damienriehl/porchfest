@@ -159,7 +159,7 @@
   function actMatchesHour(act, hour) {
     if (hour === ALL_HOURS) return true;
 
-    return cleanText(act && act.slot_label) === hour;
+    return Boolean(act && act.slot_label === hour);
   }
 
   function venueMatchesHour(venue, hour) {
@@ -276,8 +276,8 @@
 
     venues.forEach(function (venue) {
       venueActs(venue).forEach(function (act) {
-        var label = cleanText(act && act.slot_label);
-        if (label) labels.add(label);
+        var label = act && act.slot_label;
+        if (typeof label === "string" && label.length > 0) labels.add(label);
       });
     });
 
@@ -285,8 +285,8 @@
       .concat(
         Array.from(labels).map(function (label) {
           return {
-            label: label,
-            name: "Show performances for " + label,
+            label: cleanText(label),
+            name: "Show performances for " + cleanText(label),
             value: label,
           };
         }),

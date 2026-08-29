@@ -1552,6 +1552,86 @@ test('keeps a payload slot label named "all" distinct from the All option', asyn
   assertViewClasses(run.nodes.list.children[1], "collapsed");
 });
 
+test("keeps distinct raw slot labels separate while de-duplicating exact repeats", async () => {
+  const venues = [
+    venue({
+      title: "Plain Label Stage",
+      acts: [
+        {
+          slot: "slot-plain",
+          slot_label: "afternoon-1",
+          name: "Plain Label Act",
+        },
+      ],
+    }),
+    venue({
+      title: "Padded Label Stage",
+      lat: 44.99,
+      acts: [
+        {
+          slot: "slot-padded",
+          slot_label: " afternoon-1 ",
+          name: "Padded Label Act",
+        },
+      ],
+    }),
+    venue({
+      title: "Whitespace Label Stage",
+      lat: 44.98,
+      acts: [
+        {
+          slot: "slot-whitespace",
+          slot_label: " ",
+          name: "Whitespace Label Act",
+        },
+        {
+          slot: "slot-duplicate",
+          slot_label: "afternoon-1",
+          name: "Duplicate Plain Label Act",
+        },
+      ],
+    }),
+  ];
+  const run = await runScript({
+    fetch: () => Promise.resolve(response({ venues })),
+  });
+  const buttons = run.nodes.mount
+    .querySelector(".porchfest-hour-control")
+    .querySelectorAll("button");
+  const cardsByVenueKey = Object.fromEntries(
+    run.nodes.list.children.map((card) => [card.dataset.venueKey, card]),
+  );
+
+  assert.deepEqual(
+    buttons.map((button) => button.dataset.filterValue),
+    [ALL_HOURS, "afternoon-1", " afternoon-1 ", " "],
+  );
+
+  buttons[2].dispatchEvent({ type: "click" });
+  assert.equal(run.testApi.getViewState().hour, " afternoon-1 ");
+  assertViewClasses(
+    cardsByVenueKey[run.testApi.venueKey(venues[0])],
+    "collapsed",
+  );
+  assertViewClasses(cardsByVenueKey[run.testApi.venueKey(venues[1])], "match");
+  assertViewClasses(
+    cardsByVenueKey[run.testApi.venueKey(venues[2])],
+    "collapsed",
+  );
+
+  buttons[3].dispatchEvent({ type: "click" });
+  assert.equal(run.testApi.getViewState().hour, " ");
+  assertViewClasses(
+    cardsByVenueKey[run.testApi.venueKey(venues[0])],
+    "collapsed",
+  );
+  assertViewClasses(
+    cardsByVenueKey[run.testApi.venueKey(venues[1])],
+    "collapsed",
+  );
+  assertViewClasses(cardsByVenueKey[run.testApi.venueKey(venues[2])], "match");
+});
+
 test("hour buttons are accessible native buttons that update state and reapply the view", async () => {
   const venues = [
     venue({ title: "Early", acts: [{ slot: "6-7", name: "Early Act" }] }),
