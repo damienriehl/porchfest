@@ -1235,6 +1235,64 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
     }
   });
 
+  it("removes a legacy host-form note when map_address disappears", async () => {
+    const temporary = await copyFixture("porchfest-legacy-host-address-");
+    try {
+      const submissionsPath = join(temporary, fixtureArtifactFiles.submissions);
+      const slatePath = join(temporary, fixtureArtifactFiles.slate);
+      const submissions = JSON.parse(
+        await readFile(submissionsPath, "utf8"),
+      ) as { hosts: { ts: string; address: string }[] };
+      const matches = JSON.parse(await readFile(slatePath, "utf8")) as {
+        venues: { host_ts: string; map_address?: string }[];
+      };
+      const entry = matches.venues.find(({ map_address }) => map_address)!;
+      const host = submissions.hosts.find(({ ts }) => ts === entry.host_ts)!;
+      const options = { ...importOptions, artifactsDirectory: temporary };
+      const first = importGoal1Season(core, options);
+      const venueId = core.importKeys.find(
+        first.seasonId,
+        "goal1:host-venue",
+        entry.host_ts,
+      )!.recordId;
+      const venue = core.seasons.getVenue(venueId);
+      core.seasons.updateVenue(venue.id, venue.version, {
+        notes: `Public synthetic note\n[host-form address] ${host.address}`,
+      });
+
+      delete entry.map_address;
+      await writeFile(slatePath, `${JSON.stringify(matches, null, 2)}\n`);
+      const second = importGoal1Season(core, options);
+      const cleaned = core.seasons.getVenue(venueId);
+
+      expect(cleaned.notes).toBe("Public synthetic note");
+      expect(
+        core.annotations
+          .listAnnotations(second.seasonId, "venue", venueId)
+          .filter(({ note }) => note === `[host-form address] ${host.address}`),
+      ).toHaveLength(1);
+
+      const outbox = createOutboxRepository(
+        database.db,
+        { email: offlineEmail },
+        { now: () => beforeDecideBy },
+      );
+      const wave = outbox.generateWave({
+        seasonId: second.seasonId,
+        kind: "match",
+      });
+      const renderedBodies = outbox
+        .listMessages(wave.wave.id)
+        .flatMap(({ textBody, htmlBody }) => [textBody, htmlBody])
+        .filter((body): body is string => body !== null);
+      expect(renderedBodies.every((body) => !body.includes(host.address))).toBe(
+        true,
+      );
+    } finally {
+      await rm(temporary, { recursive: true, force: true });
+    }
+  });
+
   it("R27: both supersession directions resolve to the right canonical record", () => {
     const { seasonId } = runImport();
     const cases = [

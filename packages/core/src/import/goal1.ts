@@ -931,6 +931,18 @@ function importVenueSlate(state: ImportState, matches: JsonObject): void {
       continue;
     }
     const mapAddress = optionalString(venueEntry.map_address);
+    const organizerOnlyNotes = withoutHostFormAddressNotes(venue.notes);
+    const notesChanged = organizerOnlyNotes !== venue.notes;
+    const addressChanged =
+      mapAddress !== null &&
+      normalizeVenueAddress(venue.address) !==
+        normalizeVenueAddress(mapAddress);
+    if (addressChanged || notesChanged) {
+      venue = state.core.seasons.updateVenue(venue.id, venue.version, {
+        ...(addressChanged ? { address: mapAddress } : {}),
+        ...(notesChanged ? { notes: organizerOnlyNotes } : {}),
+      });
+    }
     if (mapAddress) {
       const hostFormAddress = hostKey
         ? optionalString(state.hostRows.get(hostKey)?.address)
@@ -941,17 +953,6 @@ function importVenueSlate(state: ImportState, matches: JsonObject): void {
           normalizeVenueAddress(mapAddress)
           ? `[host-form address] ${hostFormAddress}`
           : null;
-      const addressChanged =
-        normalizeVenueAddress(venue.address) !==
-        normalizeVenueAddress(mapAddress);
-      const organizerOnlyNotes = withoutHostFormAddressNotes(venue.notes);
-      const notesChanged = organizerOnlyNotes !== venue.notes;
-      if (addressChanged || notesChanged) {
-        venue = state.core.seasons.updateVenue(venue.id, venue.version, {
-          ...(addressChanged ? { address: mapAddress } : {}),
-          ...(notesChanged ? { notes: organizerOnlyNotes } : {}),
-        });
-      }
       if (privateAddressLine) {
         addAnnotation(
           state,
@@ -961,9 +962,9 @@ function importVenueSlate(state: ImportState, matches: JsonObject): void {
           privateAddressLine,
         );
       }
-      if (hostKey) state.hostVenues.set(hostKey, venue);
-      if (virtualKey) state.virtualVenues.set(virtualKey, venue);
     }
+    if (hostKey) state.hostVenues.set(hostKey, venue);
+    if (virtualKey) state.virtualVenues.set(virtualKey, venue);
     venue = applyVenueWithdrawal(state, venue, venueEntry.withdrawn);
     if (hostKey) state.hostVenues.set(hostKey, venue);
     if (virtualKey) state.virtualVenues.set(virtualKey, venue);
