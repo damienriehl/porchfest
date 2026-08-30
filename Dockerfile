@@ -49,7 +49,7 @@ VOLUME ["/data"]
 EXPOSE 9398
 USER node
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --start-interval=2s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORCHFEST_PORT||9398)+'/health').then(r=>{if(!r.ok)process.exit(1);return r.json()}).then(j=>process.exit(j&&j.ok?0:1)).catch(()=>process.exit(1))"
 
 CMD ["node_modules/.bin/tsx", "packages/web/src/server.ts"]

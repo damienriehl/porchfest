@@ -3,12 +3,20 @@ set -euo pipefail
 
 run_id="$(date -u +%Y%m%d%H%M%S)-$$"
 compose_project="porchfest-smoke-${run_id}"
+example_compose_project="${compose_project}-example-env"
 image="porchfest-ci:${run_id}"
 container="porchfest-empty-config-smoke-${run_id}"
 data_volume="${compose_project}-data"
 caddy_data_volume="${compose_project}-caddy-data"
 caddy_config_volume="${compose_project}-caddy-config"
+example_data_volume="${example_compose_project}-data"
+example_caddy_data_volume="${example_compose_project}-caddy-data"
+example_caddy_config_volume="${example_compose_project}-caddy-config"
 tls_response_file=""
+archive_dir=""
+example_env_dir="$(mktemp -d)"
+cp .env.example "$example_env_dir/.env"
+cmp -s .env.example "$example_env_dir/.env"
 
 compose() {
   env \
@@ -21,7 +29,17 @@ compose() {
     PORCHFEST_HTTPS_PORT_MAPPING="127.0.0.1::443" \
     PUBLIC_BASE_URL= \
     PORCHFEST_SESSION_SECRET= \
-    docker compose -p "$compose_project" "$@"
+    docker compose --env-file "$example_env_dir/.env" -p "$compose_project" "$@"
+}
+
+example_compose() {
+  env \
+    PORCHFEST_COMPOSE_PROJECT="$example_compose_project" \
+    PORCHFEST_APP_IMAGE="$image" \
+    PORCHFEST_DATA_VOLUME="$example_data_volume" \
+    PORCHFEST_CADDY_DATA_VOLUME="$example_caddy_data_volume" \
+    PORCHFEST_CADDY_CONFIG_VOLUME="$example_caddy_config_volume" \
+    docker compose --env-file "$example_env_dir/.env" -p "$example_compose_project" "$@"
 }
 
 assert_schema_ready() {
@@ -86,7 +104,12 @@ cleanup() {
   if [[ -n "$tls_response_file" ]]; then
     rm -f -- "$tls_response_file"
   fi
+  if [[ -n "$archive_dir" ]]; then
+    rm -rf -- "$archive_dir"
+  fi
+  rm -rf -- "$example_env_dir"
   docker rm -fv "$container" >/dev/null 2>&1 || true
+  example_compose down --volumes --remove-orphans >/dev/null 2>&1 || true
   compose down --volumes --remove-orphans >/dev/null 2>&1 || true
   docker image rm -f "$image" >/dev/null 2>&1 || true
 }
@@ -100,7 +123,29 @@ if [[ "$compose_project" == "porchfest-reference" || \
   exit 1
 fi
 
+bash scripts/deploy-common.test.sh
+bash scripts/deploy-probe.test.sh
+bash scripts/deploy-failure-paths.test.sh
+
 docker build -t "$image" .
+
+example_compose up -d --no-build app
+example_app_container="$(example_compose ps -q app)"
+for _ in $(seq 1 150); do
+  example_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$example_app_container")"
+  [[ "$example_health" != healthy ]] || break
+  [[ "$example_health" != exited && "$example_health" != dead && "$example_health" != unhealthy ]] \
+    || { echo "ERROR: .env.example app boot failed with state $example_health" >&2; exit 1; }
+  sleep 1
+done
+[[ "$example_health" == healthy ]] || {
+  echo "ERROR: .env.example app did not become healthy" >&2
+  exit 1
+}
+docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$example_app_container" \
+  | grep -Fxq 'PUBLIC_BASE_URL='
+example_compose down --volumes --remove-orphans >/dev/null
+echo "OK: .env.example copied verbatim boots with zero-configuration values"
 
 # No --env or --env-file flags: this proves the image's unconfigured boot path.
 docker run -d --name "$container" -p 127.0.0.1::9398 "$image" >/dev/null
@@ -241,3 +286,30 @@ if ((tls_curl_status != 0)) || \
 fi
 
 echo "OK: container migrates an empty data volume, contains all workspaces, and serves TLS health"
+
+archive_dir="$(mktemp -d)"
+export PORCHFEST_COMPOSE_PROJECT="$compose_project"
+export PORCHFEST_APP_IMAGE="$image"
+export PORCHFEST_DATA_VOLUME="$data_volume"
+export PORCHFEST_CADDY_DATA_VOLUME="$caddy_data_volume"
+export PORCHFEST_CADDY_CONFIG_VOLUME="$caddy_config_volume"
+export PORCHFEST_ARCHIVE_DIR="$archive_dir"
+export PUBLIC_BASE_URL=
+rehearsal_output=""
+if rehearsal_output="$(bash scripts/restore-rehearsal.sh 2>&1)"; then
+  :
+else
+  rehearsal_status=$?
+  printf '%s\n' "$rehearsal_output" >&2
+  printf 'ERROR: restore rehearsal exited with status %s\n' "$rehearsal_status" >&2
+  exit "$rehearsal_status"
+fi
+failed_rehearsal_output="$(grep -E '^(ERROR|REFUSED)' <<<"$rehearsal_output" || true)"
+if [[ -n "$failed_rehearsal_output" ]]; then
+  printf '%s\n' "$rehearsal_output" >&2
+  echo "ERROR: restore rehearsal emitted failure output" >&2
+  exit 1
+fi
+printf '%s\n' "$rehearsal_output"
+rm -rf -- "$archive_dir"
+archive_dir=""

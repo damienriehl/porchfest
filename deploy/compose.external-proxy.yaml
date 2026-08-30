@@ -1,0 +1,26 @@
+services:
+  app:
+    networks:
+      - default
+      - porchfest-proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=${PORCHFEST_PROXY_NETWORK:?PORCHFEST_PROXY_NETWORK must be set}"
+      - "traefik.http.routers.${PORCHFEST_COMPOSE_PROJECT:-porchfest-reference}-http.entrypoints=http"
+      - "traefik.http.routers.${PORCHFEST_COMPOSE_PROJECT:-porchfest-reference}-http.rule=Host(`${PORCHFEST_DOMAIN:?PORCHFEST_DOMAIN must be set}`)"
+      - "traefik.http.routers.${PORCHFEST_COMPOSE_PROJECT:-porchfest-reference}-http.middlewares=${PORCHFEST_COMPOSE_PROJECT:-porchfest-reference}-https-redirect"
+      - "traefik.http.middlewares.${PORCHFEST_COMPOSE_PROJECT:-porchfest-reference}-https-redirect.redirectscheme.scheme=https"
+      - "traefik.http.middlewares.${PORCHFEST_COMPOSE_PROJECT:-porchfest-reference}-https-redirect.redirectscheme.permanent=true"
+      - "traefik.http.routers.${PORCHFEST_COMPOSE_PROJECT:-porchfest-reference}-https.entrypoints=https"
+      - "traefik.http.routers.${PORCHFEST_COMPOSE_PROJECT:-porchfest-reference}-https.rule=Host(`${PORCHFEST_DOMAIN:?PORCHFEST_DOMAIN must be set}`)"
+      - "traefik.http.routers.${PORCHFEST_COMPOSE_PROJECT:-porchfest-reference}-https.tls=true"
+      - "traefik.http.routers.${PORCHFEST_COMPOSE_PROJECT:-porchfest-reference}-https.tls.certresolver=${PORCHFEST_TLS_RESOLVER:?PORCHFEST_TLS_RESOLVER must be set}"
+      - "traefik.http.routers.${PORCHFEST_COMPOSE_PROJECT:-porchfest-reference}-https.service=${PORCHFEST_COMPOSE_PROJECT:-porchfest-reference}"
+      - "traefik.http.services.${PORCHFEST_COMPOSE_PROJECT:-porchfest-reference}.loadbalancer.server.port=9398"
+
+  caddy: !reset null
+
+networks:
+  porchfest-proxy:
+    external: true
+    name: "${PORCHFEST_PROXY_NETWORK:?PORCHFEST_PROXY_NETWORK must be set}"
