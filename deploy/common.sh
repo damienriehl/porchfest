@@ -213,14 +213,14 @@ volume_integrity() {
 
 volume_counts() {
   local counts table count
-  counts="$(volume_sqlite '
-    SELECT "seasons=" || count(*) FROM seasons
-    UNION ALL SELECT "venues=" || count(*) FROM venues
-    UNION ALL SELECT "acts=" || count(*) FROM acts
-    UNION ALL SELECT "contacts=" || count(*) FROM contacts
-    UNION ALL SELECT "assignments=" || count(*) FROM assignments
-    UNION ALL SELECT "outbox_messages=" || count(*) FROM outbox_messages;
-  ')"
+  counts="$(volume_sqlite "
+    SELECT 'seasons=' || count(*) FROM seasons
+    UNION ALL SELECT 'venues=' || count(*) FROM venues
+    UNION ALL SELECT 'acts=' || count(*) FROM acts
+    UNION ALL SELECT 'contacts=' || count(*) FROM contacts
+    UNION ALL SELECT 'assignments=' || count(*) FROM assignments
+    UNION ALL SELECT 'outbox_messages=' || count(*) FROM outbox_messages;
+  ")"
   for table in seasons venues acts contacts assignments outbox_messages; do
     count="$(count_value "$counts" "$table")"
     [[ "$count" =~ ^[0-9]+$ ]] || die "invalid count returned for $table"
