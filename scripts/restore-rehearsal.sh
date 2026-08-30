@@ -76,7 +76,9 @@ echo "OK: deploy dotenv parsing preserves literal values without shell evaluatio
 "$project_dir/deploy/preflight.sh" >/dev/null
 "$project_dir/deploy/archive.sh" >/dev/null
 no_restart_output="$fake_dir/no-restart-output.txt"
-"$project_dir/deploy/archive.sh" --no-restart >"$no_restart_output"
+archive_result="$fake_dir/archive-result.txt"
+PORCHFEST_ARCHIVE_RESULT_FILE="$archive_result" \
+  "$project_dir/deploy/archive.sh" --no-restart >"$no_restart_output"
 grep -Fxq 'archive_app_state=stopped' "$no_restart_output"
 stopped_state="$(docker inspect --format '{{.State.Status}}' "$app_container")"
 [[ "$stopped_state" == exited ]] || {
@@ -86,7 +88,7 @@ stopped_state="$(docker inspect --format '{{.State.Status}}' "$app_container")"
 docker compose -p "$PORCHFEST_COMPOSE_PROJECT" -f "$project_dir/compose.yaml" start app >/dev/null
 wait_for_container_health "$app_container"
 archive_dir="$PORCHFEST_ARCHIVE_DIR"
-archive="$(newest_archive)"
+archive="$(archive_from_result_file "$archive_result")"
 [[ -n "$archive" ]] || {
   printf 'ERROR: archive rehearsal produced no archive\n' >&2
   exit 1

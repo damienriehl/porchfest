@@ -78,9 +78,14 @@ run_stamp="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 preflight_evidence="$archive_dir/preflight-${run_stamp}.json"
 PORCHFEST_EVIDENCE_FILE="$preflight_evidence" "$script_dir/preflight.sh" >/dev/null
 
-"$script_dir/archive.sh" >/dev/null
-archive="$(newest_archive)"
-[[ -n "$archive" ]] || die "archive step did not produce an archive"
+archive_result="$(mktemp)"
+chmod 0600 "$archive_result"
+if ! PORCHFEST_ARCHIVE_RESULT_FILE="$archive_result" "$script_dir/archive.sh" >/dev/null; then
+  rm -f -- "$archive_result"
+  die "archive step failed"
+fi
+archive="$(archive_from_result_file "$archive_result")"
+rm -f -- "$archive_result"
 archive_metadata="$(archive_metadata_path "$archive")"
 archive_sha="$(verify_archive_sha "$archive")"
 archive_mode="$(stat -c '%a' "$archive")"

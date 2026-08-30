@@ -5,6 +5,34 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=deploy/common.sh
 source "$script_dir/common.sh"
 
+recover_safety_archive() {
+  local safety_image_ref="$1"
+  local safety_archive="$2"
+  local safety_restore_project="$3"
+  if ! PORCHFEST_APP_IMAGE="$safety_image_ref" \
+    PORCHFEST_RESTORE_VOLUME="$data_volume" \
+    PORCHFEST_RESTORE_PROJECT="$safety_restore_project" \
+    PORCHFEST_ALLOW_PINNED_RESTORE=1 \
+    "$script_dir/restore.sh" "$safety_archive" >/dev/null; then
+    return 1
+  fi
+
+  printf 'safety_archive_restored=%s\n' "$safety_archive" >&2
+  if (
+    docker tag "$safety_image_ref" "$app_image" &&
+    compose up -d --no-build app &&
+    wait_for_app_health &&
+    assert_pinned_volume
+  ); then
+    return 0
+  fi
+  return 2
+}
+
+if [[ "${PORCHFEST_ROLLBACK_LIB_ONLY:-0}" == 1 ]]; then
+  return 0 2>/dev/null || exit 0
+fi
+
 load_dotenv_if_present
 init_deploy_config
 require_command docker
@@ -83,12 +111,18 @@ else
   safety_image_ref="$(image_tag_ref "$app_image" "rollback-safety-${compose_project}-$$")"
   docker tag "$(image_id "$app_image")" "$safety_image_ref"
   cleanup_safety_tag() {
+    [[ -z "${safety_result:-}" ]] || rm -f -- "$safety_result"
     docker image rm "$safety_image_ref" >/dev/null 2>&1 || true
   }
   trap cleanup_safety_tag EXIT
 
-  PORCHFEST_ARCHIVE_KEEP=1000000 "$script_dir/archive.sh" --no-restart >/dev/null
-  safety_archive="$(newest_archive)"
+  safety_result="$(mktemp)"
+  chmod 0600 "$safety_result"
+  PORCHFEST_ARCHIVE_KEEP=1000000 PORCHFEST_ARCHIVE_RESULT_FILE="$safety_result" \
+    "$script_dir/archive.sh" --no-restart >/dev/null
+  safety_archive="$(archive_from_result_file "$safety_result")"
+  rm -f -- "$safety_result"
+  safety_result=""
   [[ -n "$safety_archive" && "$safety_archive" != "$archive" ]] \
     || die "safety archive was not created"
   verify_archive_sha "$safety_archive" >/dev/null
@@ -120,19 +154,14 @@ else
     docker volume rm "$data_volume" >/dev/null 2>&1 || true
 
     safety_restore_project="${compose_project}-safety-restore-$$"
-    if PORCHFEST_APP_IMAGE="$safety_image_ref" \
-      PORCHFEST_RESTORE_VOLUME="$data_volume" \
-      PORCHFEST_RESTORE_PROJECT="$safety_restore_project" \
-      PORCHFEST_ALLOW_PINNED_RESTORE=1 \
-      "$script_dir/restore.sh" "$safety_archive" >/dev/null; then
-      docker tag "$safety_image_ref" "$app_image"
-      compose up -d --no-build app
-      wait_for_app_health
-      assert_pinned_volume
-      printf 'safety_archive_restored=%s\n' "$safety_archive" >&2
-      die "rollback failed; the pre-rollback safety archive was restored automatically"
-    fi
-    die "rollback failed and automatic safety-archive restoration also failed"
+    recovery_status=0
+    recover_safety_archive "$safety_image_ref" "$safety_archive" "$safety_restore_project" \
+      || recovery_status=$?
+    case "$recovery_status" in
+      0) die "rollback failed; the pre-rollback safety archive was restored automatically and the app was restarted" ;;
+      2) die "rollback failed; the pre-rollback safety archive data was restored automatically, but the app did not restart" ;;
+      *) die "rollback failed and automatic safety-archive restoration also failed" ;;
+    esac
   fi
 fi
 

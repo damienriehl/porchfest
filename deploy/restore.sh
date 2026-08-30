@@ -22,6 +22,8 @@ require_command sha256sum
 restore_volume="${PORCHFEST_RESTORE_VOLUME:-${data_volume}-restore-$(date -u +%Y%m%d%H%M%S)-$$}"
 restore_project="${PORCHFEST_RESTORE_PROJECT:-${compose_project}-restore-$$}"
 [[ "$restore_volume" != "$data_volume" || "${PORCHFEST_ALLOW_PINNED_RESTORE:-0}" == "1" ]] || die "rehearsal restore target must differ from the pinned production volume"
+[[ "$restore_project" != "$compose_project" ]] \
+  || die "restore Compose project must differ from the production project"
 
 temp_dir="$(mktemp -d)"
 archive="$source_archive"

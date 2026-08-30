@@ -32,7 +32,6 @@ running_image_id="$(docker inspect --format '{{.Image}}' "$container")"
 [[ "$running_image_id" == "$(image_id "$app_image")" ]] || die "running app image is not PORCHFEST_APP_IMAGE"
 IFS=$'\t' read -r schema_when schema_tag _schema_idx < <(image_schema_entry "$running_image_id")
 
-stopped=0
 archive_app_state() {
   local target
   target="$(compose ps -a -q app 2>/dev/null || true)"
@@ -50,10 +49,11 @@ archive_exit() {
   trap - EXIT
   if ((status != 0)); then
     printf '%s\n' 'ERROR: archive step failed' >&2
-    if ((stopped)); then
-      if ((no_restart)); then
-        restart_result="not-requested"
-      elif compose start app; then
+    resulting_state="$(archive_app_state)"
+    if ((no_restart)); then
+      restart_result="not-requested"
+    elif [[ "$resulting_state" != running ]]; then
+      if compose start app; then
         restart_result="restarted"
       else
         restart_result="restart-failed"
@@ -68,7 +68,6 @@ archive_exit() {
 trap archive_exit EXIT
 
 compose stop app >/dev/null
-stopped=1
 
 integrity="$(volume_integrity)"
 counts="$(volume_counts)"
@@ -101,7 +100,6 @@ else
   compose start app
   wait_for_app_health
   assert_pinned_volume
-  stopped=0
 fi
 
 mapfile -t archives < <(
@@ -113,6 +111,11 @@ for ((index = archive_keep; index < ${#archives[@]}; index++)); do
   old="${archives[index]}"
   rm -f -- "$old" "$(archive_sha_path "$old")" "$(archive_metadata_path "$old")" "${old}.age" "${old}.age.sha256"
 done
+
+if [[ -n "${PORCHFEST_ARCHIVE_RESULT_FILE:-}" ]]; then
+  (umask 077; printf '%s\n' "$archive" >"$PORCHFEST_ARCHIVE_RESULT_FILE")
+  chmod 0600 "$PORCHFEST_ARCHIVE_RESULT_FILE"
+fi
 
 printf 'schema_journal=%s:%s\n' "$schema_when" "$schema_tag"
 printf 'archive_metadata=%s\n' "$metadata"

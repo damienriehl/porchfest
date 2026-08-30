@@ -435,6 +435,16 @@ newest_archive() {
     | cut -f 2-
 }
 
+archive_from_result_file() {
+  local result_file="$1"
+  local archive
+  [[ -f "$result_file" ]] || die "archive result file is missing: $result_file"
+  IFS= read -r archive <"$result_file"
+  [[ -n "$archive" && "$archive" == "$archive_dir/"* && -f "$archive" ]] \
+    || die "archive result did not name a current archive in PORCHFEST_ARCHIVE_DIR"
+  printf '%s\n' "$archive"
+}
+
 archive_metadata_path() {
   printf '%s.json\n' "$1"
 }
