@@ -42,6 +42,8 @@ function fixtures(state: "signups_open" | "archived" = "signups_open") {
     displayName: "Synthetic Retention Season",
     timezone: "UTC",
     eventDate: "2032-09-11",
+    eventCity: "Exampleton",
+    eventState: "WI",
     timeSlots: [],
     openSignups: true,
   });

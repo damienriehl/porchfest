@@ -36,6 +36,8 @@ export interface SeasonSetupInput {
   readonly timezone: string;
   /** "YYYY-MM-DD", read in the season's own timezone. */
   readonly eventDate: string;
+  readonly eventCity?: string;
+  readonly eventState?: string;
   readonly signupOpensOn?: string | null;
   readonly signupClosesOn?: string | null;
   readonly timeSlots: readonly TimeSlotInput[];
@@ -96,6 +98,8 @@ export function createSeasonSetup(
         state: input.openSignups ? "signups_open" : "setup",
         timezone: validated.timezone,
         eventDate: validated.eventDate,
+        eventCity: validated.eventCity,
+        eventState: validated.eventState,
         signupOpensAt: validated.signupOpensAt,
         signupClosesAt: validated.signupClosesAt,
         localityName: validated.localityName,
@@ -165,6 +169,8 @@ interface ValidatedSetup {
   displayName: string;
   timezone: string;
   eventDate: string;
+  eventCity: string;
+  eventState: string;
   signupOpensAt: Date | null;
   signupClosesAt: Date | null;
   timeSlots: { startsAt: Date; endsAt: Date }[];
@@ -188,6 +194,17 @@ function validate(input: SeasonSetupInput): ValidatedSetup {
     input.year > 2200
   ) {
     throw new SeasonSetupError("year", "Enter a four-digit year.");
+  }
+  const eventCity = input.eventCity?.trim() ?? "Unconfigured";
+  if (!eventCity) {
+    throw new SeasonSetupError("eventCity", "Enter the event city.");
+  }
+  const eventState = input.eventState?.trim() ?? "Unconfigured";
+  if (!eventState) {
+    throw new SeasonSetupError(
+      "eventState",
+      "Enter the event state or region.",
+    );
   }
   // Refused rather than defaulted: a wrong timezone silently shifts every
   // availability window a performer types, which is the U4 bug this column exists
@@ -285,15 +302,25 @@ function validate(input: SeasonSetupInput): ValidatedSetup {
     }
   }
 
+  const localityName = trimmed(input.localityName);
+  if (localityName !== null && !/[A-Za-z0-9]/.test(localityName)) {
+    throw new SeasonSetupError(
+      "localityName",
+      "Enter a locality containing a word or number.",
+    );
+  }
+
   return {
     year: input.year,
     displayName,
     timezone: input.timezone,
     eventDate: input.eventDate,
+    eventCity,
+    eventState,
     signupOpensAt,
     signupClosesAt,
     timeSlots,
-    localityName: trimmed(input.localityName),
+    localityName,
     bounds,
     publicSiteUrl: httpUrl(input.publicSiteUrl, "publicSiteUrl"),
     publicMapUrl: httpUrl(input.publicMapUrl, "publicMapUrl"),

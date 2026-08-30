@@ -219,6 +219,8 @@ export function registerAdminRoutes(options: AdminRouteOptions): void {
           displayName: fields.display_name ?? "",
           timezone: fields.timezone ?? "",
           eventDate: fields.event_date ?? "",
+          eventCity: fields.event_city ?? "",
+          eventState: fields.event_state ?? "",
           signupOpensOn: fields.signup_opens_on ?? null,
           signupClosesOn: fields.signup_closes_on ?? null,
           timeSlots: [1, 2, 3, 4, 5, 6].map((index) => ({
@@ -338,6 +340,8 @@ function formFieldFor(field: string): string {
   const map: Readonly<Record<string, string>> = {
     displayName: "display_name",
     eventDate: "event_date",
+    eventCity: "event_city",
+    eventState: "event_state",
     signupOpensOn: "signup_opens_on",
     signupClosesOn: "signup_closes_on",
     localityName: "locality_name",

@@ -51,7 +51,7 @@ const stylesheetSource = fs.readFileSync(stylesheetPath, "utf8");
 const FALLBACK =
   "The interactive map could not be loaded. Please refresh the page and try again.";
 const EMPTY_STATE =
-  "The 2026 lineup is not on the interactive map yet. Please check back soon.";
+  "No map is published yet. Please check back closer to the event.";
 const ALL_HOURS = "";
 const DEFAULT_SLOT_LABELS_BY_ID = {
   "6-7": "6–7 pm",
@@ -506,6 +506,7 @@ async function settlePromises() {
 
 async function runScript(options = {}) {
   const document = new TestDocument();
+  document.currentScript = options.currentScript || null;
   const nodes = buildMount(document);
   const leaflet = createLeaflet(document);
   const timers = [];
@@ -584,6 +585,23 @@ async function runScript(options = {}) {
 function flushAnimationFrames(run) {
   while (run.animationFrames.length) run.animationFrames.shift()();
 }
+
+test("reads the platform data URL from the script tag", async () => {
+  let requestedUrl;
+  await runScript({
+    currentScript: {
+      getAttribute(name) {
+        return name === "data-map-url" ? "/map/data.json" : null;
+      },
+    },
+    fetch(url) {
+      requestedUrl = url;
+      return Promise.resolve(response({ venues: [] }));
+    },
+  });
+
+  assert.equal(requestedUrl, "/map/data.json");
+});
 
 function assertFailure(nodes) {
   assert.equal(nodes.status.hidden, false);

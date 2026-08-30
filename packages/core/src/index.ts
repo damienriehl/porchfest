@@ -158,6 +158,7 @@ export {
   GeocodingConflictError,
   GeocodingLifecycleError,
   MAX_CROSS_CHECK_DISTANCE_M,
+  seasonBoundingBox,
   type GeocodingActor,
   type GeocodingPorts,
   type GeocodingRepository,

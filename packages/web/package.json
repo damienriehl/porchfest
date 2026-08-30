@@ -8,6 +8,7 @@
     "@porchfest/antibot": "*",
     "@porchfest/core": "*",
     "@porchfest/email": "*",
-    "@porchfest/geo": "*"
+    "@porchfest/geo": "*",
+    "@porchfest/map": "*"
   }
 }

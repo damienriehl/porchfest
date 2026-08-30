@@ -72,6 +72,8 @@ function completeSetup(csrf: string, overrides: Record<string, string> = {}) {
     display_name: "SAP Porchfest 2027",
     year: "2027",
     event_date: "2027-09-11",
+    event_city: "Exampleton",
+    event_state: "WI",
     timezone: "America/Chicago",
     signup_opens_on: "2027-05-01",
     signup_closes_on: "2027-07-01",
@@ -181,6 +183,8 @@ describe("first-run setup", () => {
     expect(season.displayName).toBe("SAP Porchfest 2027");
     expect(season.timezone).toBe("America/Chicago");
     expect(season.eventDate).toBe("2027-09-11");
+    expect(season.eventCity).toBe("Exampleton");
+    expect(season.eventState).toBe("WI");
     expect(season.localityName).toBe("Saint Anthony Park");
     expect(season.boundsNorth).toBeCloseTo(44.99);
     expect(season.publicMapUrl).toContain("sapporchfest.example/map");
@@ -233,6 +237,38 @@ describe("setup refuses what it cannot honour", () => {
     // later types — the exact U4 bug this column exists to prevent.
     expect(response.status).toBe(422);
     expect(await response.text()).toContain("valid IANA timezone");
+  });
+
+  it.each([
+    ["event_city", "event city"],
+    ["event_state", "event state"],
+  ])("refuses blank required map metadata in %s", async (field, message) => {
+    const { runtime, cookie } = await bootAndSignIn();
+    const csrf = await setupCsrf(runtime, cookie);
+
+    const response = await submitSetup(
+      runtime,
+      cookie,
+      completeSetup(csrf, { [field]: "   " }),
+    );
+
+    expect(response.status).toBe(422);
+    expect(await response.text()).toContain(message);
+    expect(runtime.core.setup.seasonCount()).toBe(0);
+  });
+
+  it("refuses locality text without a word or number", async () => {
+    const { runtime, cookie } = await bootAndSignIn();
+    const csrf = await setupCsrf(runtime, cookie);
+
+    const response = await submitSetup(
+      runtime,
+      cookie,
+      completeSetup(csrf, { locality_name: "---" }),
+    );
+
+    expect(response.status).toBe(422);
+    expect(await response.text()).toContain("word or number");
   });
 
   it("refuses a bounding box that is inside out", async () => {

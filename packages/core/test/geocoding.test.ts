@@ -92,6 +92,8 @@ describe("core venue geocoding (U9 / KTD11)", () => {
       displayName: `Synthetic ${year}`,
       timezone: "UTC",
       eventDate: `${year}-09-10`,
+      eventCity: "Exampleton",
+      eventState: "WI",
       timeSlots: [],
       localityName,
       bounds: box,
@@ -226,6 +228,21 @@ describe("core venue geocoding (U9 / KTD11)", () => {
     });
   });
 
+  it("loads every verified coordinate for one season in a venue-keyed map", async () => {
+    const first = fixture();
+    const second = fixture(2035);
+    await geocoding().geocodeVenue(first.venue.id, actor);
+    fake.locate.mockResolvedValue(located({ latitude: 12 }));
+    await geocoding().geocodeVenue(second.venue.id, actor);
+
+    expect(
+      geocoding().publishableCoordinatesForSeason(first.season.id),
+    ).toEqual(new Map([[first.venue.id, { latitude: 10.5, longitude: 20.5 }]]));
+    expect(
+      geocoding().publishableCoordinatesForSeason(second.season.id),
+    ).toEqual(new Map());
+  });
+
   it("R17: an out-of-bounds result is stored for review and never published", async () => {
     const { season, venue } = fixture();
     fake.locate.mockResolvedValue(located({ latitude: 12 }));
@@ -340,18 +357,20 @@ describe("core venue geocoding (U9 / KTD11)", () => {
   });
 
   it("surfaces an invalid locality as a caller configuration fault", async () => {
-    const { venue } = fixture(2037, BOX, "—");
-    fake.locate.mockImplementation(async (request) => {
-      if (request.localityName === "—") {
-        throw new TypeError("localityName must contain a word or number.");
-      }
-      return located();
-    });
+    const { venue } = fixture();
+    fake.locate.mockRejectedValue(
+      new TypeError("localityName must contain a word or number."),
+    );
 
     await expect(geocoding().geocodeVenue(venue.id, actor)).rejects.toThrow(
-      /localityName/,
+      /localityName must contain a word or number/,
     );
     expect(stored(venue.id)).toBeUndefined();
+  });
+
+  it("refuses an invalid locality during season setup", () => {
+    expect(() => fixture(2037, BOX, "—")).toThrow(/locality|word or number/i);
+    expect(fake.locate).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -605,6 +624,6 @@ describe("core venue geocoding (U9 / KTD11)", () => {
         actor,
         emptyAddressVenue.version,
       ),
-    ).toThrow(new RangeError(`Venue ${venue.id} has no address to verify.`));
+    ).toThrow(/Add an address before verifying its pin/);
   });
 });

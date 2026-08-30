@@ -40,6 +40,18 @@ describe("application scaffold", () => {
       { method: "POST", path: "/signup/host", tier: "public" },
       { method: "GET", path: "/signup/performer", tier: "public" },
       { method: "POST", path: "/signup/performer", tier: "public" },
+      { method: "GET", path: "/map", tier: "public" },
+      { method: "GET", path: "/map/data.json", tier: "public" },
+      {
+        method: "GET",
+        path: "/map/assets/porchfest-map.js",
+        tier: "public",
+      },
+      {
+        method: "GET",
+        path: "/map/assets/porchfest-map.css",
+        tier: "public",
+      },
       { method: "GET", path: "/admin", tier: "organizer" },
       { method: "GET", path: "/admin/sign-in", tier: "public" },
       { method: "POST", path: "/admin/sign-in", tier: "public" },
@@ -118,6 +130,27 @@ describe("application scaffold", () => {
       {
         method: "POST",
         path: "/admin/seasons/:id/transition",
+        tier: "organizer",
+      },
+      { method: "GET", path: "/seasons/:id/coordinates", tier: "organizer" },
+      {
+        method: "POST",
+        path: "/seasons/:id/coordinates/:venueId/verify",
+        tier: "organizer",
+      },
+      {
+        method: "POST",
+        path: "/seasons/:id/coordinates/geocode",
+        tier: "organizer",
+      },
+      {
+        method: "POST",
+        path: "/seasons/:id/map/publish",
+        tier: "organizer",
+      },
+      {
+        method: "POST",
+        path: "/seasons/:id/map/unpublish",
         tier: "organizer",
       },
       { method: "GET", path: "/admin/venues/:id/assign", tier: "organizer" },

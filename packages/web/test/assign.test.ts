@@ -59,6 +59,8 @@ async function boot() {
     displayName: "Synthetic Season",
     timezone: "America/Chicago",
     eventDate: "2031-09-13",
+    eventCity: "Exampleton",
+    eventState: "WI",
     timeSlots: [
       { startsAt: "18:00", endsAt: "19:00" },
       { startsAt: "19:00", endsAt: "20:00" },

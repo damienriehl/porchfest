@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 
-export const VENUES_MAP_SCHEMA_VERSION = "1.3.0";
+export const VENUES_MAP_SCHEMA_VERSION = "1.3.1";
 export const VENUES_MAP_MINIMUM_SCHEMA_VERSION = "1.1.0";
 
 export const venuesMapVersionPattern = /^1\.\d+\.\d+$/;

@@ -34,6 +34,7 @@ import {
   type SignupValues,
 } from "../views/signup-view.js";
 import { HOST_SIGNUP_PATH, PERFORMER_SIGNUP_PATH } from "./signup-paths.js";
+import { normalizedHttpUrl, tokenizeLinks } from "./http-links.js";
 
 export const CONTACT_EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -814,15 +815,11 @@ function parseDuration(values: SignupValues, errors: SignupError[]): number {
 
 function validateLinks(links: string, errors: SignupError[]): void {
   if (!links) return;
-  const candidates = links.split(/\s+/).filter(Boolean);
-  const invalid = candidates.some((candidate) => {
-    try {
-      const protocol = new URL(candidate).protocol;
-      return protocol !== "http:" && protocol !== "https:";
-    } catch {
-      return true;
-    }
-  });
+  // Unlike map serialization, a public signup rejects the whole field when
+  // any token is invalid so the participant can correct it immediately.
+  const invalid = tokenizeLinks(links).some(
+    (candidate) => normalizedHttpUrl(candidate) === null,
+  );
   if (invalid) {
     errors.push({
       field: "links",

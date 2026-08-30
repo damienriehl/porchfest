@@ -11,7 +11,14 @@ import type { Context } from "hono";
 import { adminHeaders, currentOrganizer } from "../auth.js";
 import type { RouteRegistry } from "../router/registry.js";
 import { renderSeasonLifecyclePage } from "../views/season-lifecycle.js";
-import { readFields, redirect, unauthorized } from "./admin-http.js";
+import {
+  findSeason,
+  notFound,
+  positiveInteger,
+  readFields,
+  redirect,
+  unauthorized,
+} from "./admin-http.js";
 
 export const SEASON_LIFECYCLE_PATH = "/admin/seasons/:id";
 export const SEASON_TRANSITION_PATH = "/admin/seasons/:id/transition";
@@ -58,8 +65,8 @@ export function registerSeasonLifecycleRoutes(options: {
           `Unknown season state "${fields.target_state ?? ""}".`,
         );
       }
-      const version = Number(fields.version ?? "");
-      if (!Number.isSafeInteger(version) || version < 1) {
+      const version = positiveInteger(fields.version);
+      if (version === null) {
         return seasonPage(
           options,
           season,
@@ -123,20 +130,6 @@ function asSeasonState(value: string | undefined): SeasonState | null {
   return seasonStates.find((state) => state === value) ?? null;
 }
 
-function findSeason(
-  core: CoreRuntime,
-  rawId: string | undefined,
-): Season | null {
-  const id = Number(rawId);
-  if (!Number.isSafeInteger(id) || id < 1) return null;
-  try {
-    return core.seasons.getSeason(id);
-  } catch (error) {
-    if (error instanceof SeasonLifecycleError) return null;
-    throw error;
-  }
-}
-
 function seasonPage(
   options: {
     readonly core: CoreRuntime;
@@ -159,11 +152,4 @@ function seasonPage(
     }),
     { status, headers: adminHeaders() },
   );
-}
-
-function notFound(): Response {
-  return new Response("No such season.", {
-    status: 404,
-    headers: { ...adminHeaders(), "content-type": "text/plain; charset=UTF-8" },
-  });
 }

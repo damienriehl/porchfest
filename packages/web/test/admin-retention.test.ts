@@ -75,6 +75,8 @@ async function boot() {
     displayName: "Synthetic Retention Season",
     timezone: "UTC",
     eventDate: "2030-09-14",
+    eventCity: "Exampleton",
+    eventState: "WI",
     timeSlots: [],
     openSignups: true,
   });

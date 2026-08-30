@@ -48,6 +48,15 @@ describe("validateVenuesMapDocument", () => {
     });
   });
 
+  it("R16 accepts the unpublished empty-venues document", () => {
+    const document = makeVenuesMapDocument({ venues: [] });
+
+    expect(validateVenuesMapDocument(document)).toEqual({
+      ok: true,
+      document,
+    });
+  });
+
   it("accepts optional act slot intervals", () => {
     const document = copyDocument();
     const venues = document.venues as Array<Record<string, unknown>>;

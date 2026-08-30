@@ -12,6 +12,7 @@ import {
   venues,
   type CoordinateRejectionCode,
   type CoordinateStatus,
+  type Season,
   type VenueCoordinate,
 } from "./storage/schema.js";
 import {
@@ -48,6 +49,7 @@ export type GeocodeVenueResult =
 
 export interface VenueCoordinateReview {
   readonly venueId: number;
+  readonly venueVersion: number;
   readonly title: string;
   readonly address: string | null;
   readonly status: Exclude<CoordinateStatus, "verified">;
@@ -100,7 +102,7 @@ export function createGeocodingRepository(
         reason: "The venue has no address to geocode.",
       };
     }
-    const boundingBox = boundsFor(context);
+    const boundingBox = seasonBoundingBox(context);
     if (boundingBox === null) {
       return {
         kind: "unavailable",
@@ -209,9 +211,11 @@ export function createGeocodingRepository(
         const context = venueContext(tx, venueId);
         const address = normalizeVenueAddress(context.address);
         if (address.length === 0) {
-          throw new RangeError(`Venue ${venueId} has no address to verify.`);
+          throw new GeocodingLifecycleError(
+            `Venue ${venueId} has no address to verify. Add an address before verifying its pin.`,
+          );
         }
-        const boundingBox = boundsFor(context);
+        const boundingBox = seasonBoundingBox(context);
         if (boundingBox === null) {
           throw new GeocodingLifecycleError(
             `${context.seasonName} has no complete geocoding bounding box.`,
@@ -272,6 +276,7 @@ export function createGeocodingRepository(
     return db
       .select({
         venueId: venues.id,
+        venueVersion: venues.version,
         title: venues.title,
         address: venues.address,
         coordinate: venueCoordinates,
@@ -286,8 +291,9 @@ export function createGeocodingRepository(
       )
       .orderBy(venues.id)
       .all()
-      .map(({ venueId, title, address, coordinate }) => ({
+      .map(({ venueId, venueVersion, title, address, coordinate }) => ({
         venueId,
+        venueVersion,
         title,
         address,
         status: coordinate.status as Exclude<CoordinateStatus, "verified">,
@@ -316,11 +322,41 @@ export function createGeocodingRepository(
     return { latitude, longitude };
   }
 
+  function publishableCoordinatesForSeason(
+    seasonId: number,
+  ): Map<number, Coordinates> {
+    const rows = db
+      .select({
+        venueId: venueCoordinates.venueId,
+        latitude: venueCoordinates.latitude,
+        longitude: venueCoordinates.longitude,
+      })
+      .from(venueCoordinates)
+      .innerJoin(venues, eq(venues.id, venueCoordinates.venueId))
+      .where(
+        and(
+          eq(venues.seasonId, seasonId),
+          eq(venueCoordinates.status, "verified"),
+        ),
+      )
+      .all();
+    const coordinates = new Map<number, Coordinates>();
+    for (const row of rows) {
+      if (row.latitude == null || row.longitude == null) continue;
+      coordinates.set(row.venueId, {
+        latitude: row.latitude,
+        longitude: row.longitude,
+      });
+    }
+    return coordinates;
+  }
+
   return Object.freeze({
     geocodeVenue,
     verifyVenueCoordinate,
     listVenuesNeedingCoordinateReview,
     publishableCoordinate,
+    publishableCoordinatesForSeason,
   });
 }
 
@@ -351,8 +387,13 @@ function venueContext(db: CoreExecutor, venueId: number): VenueSeasonContext {
   return context;
 }
 
-function boundsFor(context: VenueSeasonContext) {
-  const { boundsNorth, boundsSouth, boundsEast, boundsWest } = context;
+export function seasonBoundingBox(
+  season: Pick<
+    Season,
+    "boundsNorth" | "boundsSouth" | "boundsEast" | "boundsWest"
+  >,
+) {
+  const { boundsNorth, boundsSouth, boundsEast, boundsWest } = season;
   if (
     boundsNorth === null ||
     boundsSouth === null ||
@@ -386,7 +427,7 @@ interface StoreOutcomeInput {
   readonly provider: string;
   readonly actor: GeocodingActor;
   readonly outcome: Exclude<LocateOutcome, { kind: "unavailable" }>;
-  readonly boundingBox: NonNullable<ReturnType<typeof boundsFor>>;
+  readonly boundingBox: NonNullable<ReturnType<typeof seasonBoundingBox>>;
   readonly updatedAt: Date;
 }
 

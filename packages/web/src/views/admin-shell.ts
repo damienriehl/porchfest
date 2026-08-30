@@ -175,6 +175,8 @@ export function renderSetupPage(options: {
         ${field("display_name", "Season name", "What neighbours will see, such as “SAP Porchfest 2027”.")}
         ${field("year", "Year", "The four-digit year this season belongs to.", 'type="number" inputmode="numeric" min="2000" max="2200"')}
         ${field("event_date", "Event date", "The day the porches play.", 'type="date"')}
+        ${field("event_city", "Event city", "The city shown on the public map.")}
+        ${field("event_state", "Event state or region", "The state, province, or region shown on the public map.")}
         ${field("timezone", "Timezone", "The festival's local clock. Everything a participant types is read in this zone.")}
       </fieldset>
       <fieldset>
