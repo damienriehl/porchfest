@@ -77,7 +77,7 @@ assert_pinned_volume
 
 integrity="$(volume_integrity)"
 counts="$(volume_counts)"
-assert_counts_match_json "$metadata" "$counts"
+assert_counts_equal_json "$metadata" "$counts"
 database_schema_when="$(volume_schema_when)"
 [[ "$database_schema_when" == "$image_schema_when" ]] || die "restored database did not reach the restore image's schema journal"
 

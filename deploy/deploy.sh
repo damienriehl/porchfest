@@ -27,7 +27,7 @@ if [[ "$mode" == "dry-run" ]]; then
   printf '%s\n' '4. Quiesce, archive, checksum, restart, and health-check app.'
   printf '%s\n' '5. Optionally encrypt/copy/prune the off-site backup when PORCHFEST_DEPLOY_OFFSITE=1.'
   printf '%s\n' '6. Build and replace only app; the proxy service is left alone.'
-  printf '%s\n' '7. Recheck the pinned volume, integrity, and exact row counts.'
+  printf '%s\n' '7. Recheck the pinned volume and integrity; refuse row-count decreases or season changes.'
   printf '%s\n' '8. Check HTTPS status, HTTP redirect, and sign-in cookie flags, then revoke the probe session.'
   printf '%s\n' 'Evidence fields: commit, image id, volume, integrity, six row counts, archive path/SHA/mode, tags, HTTPS/redirect/cookie results.'
   exit 0
@@ -147,8 +147,6 @@ external_checks() {
 run_stamp="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 preflight_evidence="$archive_dir/preflight-${run_stamp}.json"
 PORCHFEST_EVIDENCE_FILE="$preflight_evidence" "$script_dir/preflight.sh" >/dev/null
-pre_counts="$(volume_counts)"
-assert_counts_match_json "$preflight_evidence" "$pre_counts"
 
 "$script_dir/archive.sh" >/dev/null
 archive="$(newest_archive)"
@@ -168,7 +166,7 @@ wait_for_app_health
 assert_pinned_volume
 integrity="$(volume_integrity)"
 post_counts="$(volume_counts)"
-assert_counts_match_json "$preflight_evidence" "$post_counts"
+assert_counts_match_json "$archive_metadata" "$post_counts"
 https_status="$(external_checks)"
 
 post_evidence="$archive_dir/post-deploy-${run_stamp}.json"

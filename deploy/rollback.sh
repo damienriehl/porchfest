@@ -77,7 +77,7 @@ else
   assert_pinned_volume
   integrity="$(volume_integrity)"
   counts="$(volume_counts)"
-  assert_counts_match_json "$matching_metadata" "$counts"
+  assert_counts_equal_json "$matching_metadata" "$counts"
 fi
 
 printf 'rollback_path=%s\n' "$path"

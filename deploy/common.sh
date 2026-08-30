@@ -365,6 +365,26 @@ assert_counts_match_json() {
   for table in $COUNT_TABLES; do
     wanted="$(count_value "$expected_counts" "$table")"
     got="$(count_value "$actual" "$table")"
+    [[ "$got" =~ ^[0-9]+$ ]] || die "row count is invalid for $table (got ${got:-missing})"
+    if [[ "$table" == seasons ]]; then
+      [[ "$wanted" == "$got" ]] || die "row count mismatch for seasons (expected $wanted, got $got)"
+    else
+      ((got >= wanted)) || die "row count decreased for $table (baseline $wanted, got $got)"
+      if ((got > wanted)); then
+        printf '+%s %s during the window\n' "$((got - wanted))" "$table"
+      fi
+    fi
+  done
+}
+
+assert_counts_equal_json() {
+  local expected="$1"
+  local actual="$2"
+  local expected_counts table wanted got
+  expected_counts="$(counts_from_json "$expected")"
+  for table in $COUNT_TABLES; do
+    wanted="$(count_value "$expected_counts" "$table")"
+    got="$(count_value "$actual" "$table")"
     [[ -n "$wanted" && "$wanted" == "$got" ]] \
       || die "row count mismatch for $table (expected ${wanted:-missing}, got ${got:-missing})"
   done
