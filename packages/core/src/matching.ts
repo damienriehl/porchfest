@@ -1,3 +1,5 @@
+import { escapeRegex } from "./strings.js";
+
 export interface MatchingSlot {
   id: number;
   venueId: number;
@@ -56,13 +58,9 @@ function normalize(value: string): string {
   return value.toLocaleLowerCase("en").trim().replace(/\s+/g, " ");
 }
 
-function escaped(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 function containsWholeWords(value: string, words: string): boolean {
   return new RegExp(
-    `(?:^|[^\\p{L}\\p{N}])${escaped(words)}(?:$|[^\\p{L}\\p{N}])`,
+    `(?:^|[^\\p{L}\\p{N}])${escapeRegex(words)}(?:$|[^\\p{L}\\p{N}])`,
     "u",
   ).test(value);
 }
@@ -133,7 +131,7 @@ function genreMatch(
   for (const token of tokens) {
     for (const clause of clauses) {
       const match = new RegExp(
-        `(?:^|[^\\p{L}\\p{N}])${escaped(token)}(?:$|[^\\p{L}\\p{N}])`,
+        `(?:^|[^\\p{L}\\p{N}])${escapeRegex(token)}(?:$|[^\\p{L}\\p{N}])`,
         "u",
       ).exec(clause);
       if (!match) continue;

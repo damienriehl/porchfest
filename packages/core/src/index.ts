@@ -264,6 +264,7 @@ export {
   zonedWallClockToUtc,
   type WallClockParts,
 } from "./time.js";
+export { escapeRegex } from "./strings.js";
 export {
   goal1ArtifactFiles,
   importGoal1Season,
