@@ -12,6 +12,8 @@ import {
   type Goal1ImportCore,
   type ImportReport,
 } from "../src/import/goal1.js";
+import { createOutboxRepository } from "../src/outbox.js";
+import type { EmailPort } from "../src/ports/email.js";
 import type { GeoPort } from "../src/ports/geo.js";
 import { createSeasonRepository } from "../src/season.js";
 import { createSeasonSetup } from "../src/setup.js";
@@ -55,6 +57,14 @@ const offlineGeo: GeoPort = {
   },
   async geocode() {
     return null;
+  },
+};
+
+const offlineEmail: EmailPort = {
+  name: "offline-test",
+  configured: false,
+  async deliver() {
+    return { status: "skipped", reason: "offline synthetic test" };
   },
 };
 
@@ -1002,7 +1012,7 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
     }
   });
 
-  it("map_address replaces the public address and preserves the host-form address privately", async () => {
+  it("map_address keeps the host-form address organizer-only and out of generated mail", async () => {
     const submissions = await readFixture<{
       hosts: { ts: string; address: string }[];
     }>(fixtureArtifactFiles.submissions);
@@ -1024,7 +1034,7 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
       );
       const privateLine = `[host-form address] ${host.address}`;
       expect(venue.address).toBe(entry.map_address);
-      expect(venue.notes).toContain(privateLine);
+      expect(venue.notes).not.toContain(privateLine);
       expect(
         core.annotations
           .listAnnotations(report.seasonId, "venue", venue.id)
@@ -1036,6 +1046,40 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
             venueId === venue.id && address === entry.map_address,
         ),
       ).toBe(true);
+    }
+
+    runImport();
+    for (const entry of mapped) {
+      const host = submissions.hosts.find(({ ts }) => ts === entry.host_ts)!;
+      const venueId = core.importKeys.find(
+        report.seasonId,
+        "goal1:host-venue",
+        entry.host_ts,
+      )!.recordId;
+      expect(
+        core.annotations
+          .listAnnotations(report.seasonId, "venue", venueId)
+          .filter(({ note }) => note === `[host-form address] ${host.address}`),
+      ).toHaveLength(1);
+    }
+
+    const outbox = createOutboxRepository(
+      database.db,
+      { email: offlineEmail },
+      { now: () => beforeDecideBy },
+    );
+    const wave = outbox.generateWave({
+      seasonId: report.seasonId,
+      kind: "match",
+    });
+    const renderedBodies = outbox
+      .listMessages(wave.wave.id)
+      .flatMap(({ textBody, htmlBody }) => [textBody, htmlBody]);
+    for (const entry of mapped) {
+      const host = submissions.hosts.find(({ ts }) => ts === entry.host_ts)!;
+      expect(renderedBodies.every((body) => !body.includes(host.address))).toBe(
+        true,
+      );
     }
   });
 

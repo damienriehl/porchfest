@@ -927,15 +927,12 @@ function importVenueSlate(state: ImportState, matches: JsonObject): void {
       const addressChanged =
         normalizeVenueAddress(venue.address) !==
         normalizeVenueAddress(mapAddress);
-      const notesChanged =
-        privateAddressLine !== null &&
-        !venue.notes?.split("\n").includes(privateAddressLine);
+      const organizerOnlyNotes = withoutHostFormAddressNotes(venue.notes);
+      const notesChanged = organizerOnlyNotes !== venue.notes;
       if (addressChanged || notesChanged) {
         venue = state.core.seasons.updateVenue(venue.id, venue.version, {
           ...(addressChanged ? { address: mapAddress } : {}),
-          ...(notesChanged
-            ? { notes: joinedNotes([venue.notes, privateAddressLine]) }
-            : {}),
+          ...(notesChanged ? { notes: organizerOnlyNotes } : {}),
         });
       }
       if (privateAddressLine) {
@@ -2315,6 +2312,14 @@ function joinedNotes(values: readonly (string | null)[]): string | null {
     (value): value is string => value !== null && !placeholder(value),
   );
   return useful.length > 0 ? useful.join("\n") : null;
+}
+
+function withoutHostFormAddressNotes(notes: string | null): string | null {
+  if (notes === null) return null;
+  const kept = notes
+    .split("\n")
+    .filter((line) => !line.startsWith("[host-form address] "));
+  return kept.length === 0 ? null : kept.join("\n");
 }
 
 function object(value: unknown, label: string): JsonObject {
