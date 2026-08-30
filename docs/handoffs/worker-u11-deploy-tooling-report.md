@@ -260,4 +260,4 @@ under concurrent writers and refusal to reuse the production Compose project for
   organizer-controlled addresses and verify per-recipient delivery state and post-send immutability.
   No deployment or CI command sends that wave automatically.
 
-Nothing was pushed or merged. This report is intended for one final focused documentation commit.
+Nothing was pushed or merged. The review-fix documentation is committed locally on the branch.
