@@ -159,6 +159,7 @@ function venueCandidate(
   );
   return `<li class="matching-candidate">
     <h4><a href="/admin/acts/${pairing.act.id}/assign">${escapeHtml(pairing.act.name)}</a></h4>
+    ${pairing.isBestScoreTie ? '<p class="help">Equally suitable based on recorded information</p>' : ""}
     ${explanation(pairing)}
     <form class="signup-form compact-form" method="post" action="/admin/slots/${slot.id}/assign">
       <input type="hidden" name="_csrf" value="${escapeHtml(options.csrf.assign)}">

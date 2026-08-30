@@ -208,6 +208,63 @@ async function assignmentCsrf(
 }
 
 describe("organizer assignment screens", () => {
+  it("labels equally suitable best choices in both organizer views", async () => {
+    const { runtime, cookie, oak, cats } = await boot();
+
+    const venueHtml = await (
+      await get(runtime, `/admin/venues/${oak.venue.id}/assign`, cookie)
+    ).text();
+    const actHtml = await (
+      await get(runtime, `/admin/acts/${cats.act.id}/assign`, cookie)
+    ).text();
+
+    expect(
+      venueHtml.match(/Equally suitable based on recorded information/g),
+    ).toHaveLength(4);
+    expect(
+      actHtml.match(/Equally suitable based on recorded information/g),
+    ).toHaveLength(2);
+  });
+
+  it("keeps a unique best choice first without labeling lower-score ties", async () => {
+    const { runtime, cookie, maple, oak, cats, acoustic, amplified } =
+      await boot();
+    const [filledSlot] = runtime.core.seasons.ensureVenueSlots(maple.venue.id);
+    runtime.core.seasons.assignSlot(
+      filledSlot!.id,
+      filledSlot!.version,
+      amplified.act.id,
+    );
+
+    const venueHtml = await (
+      await get(runtime, `/admin/venues/${maple.venue.id}/assign`, cookie)
+    ).text();
+    const actHtml = await (
+      await get(runtime, `/admin/acts/${cats.act.id}/assign`, cookie)
+    ).text();
+
+    const catsChoice = `>Assign ${cats.act.name}</button>`;
+    const acousticChoice = `>Assign ${acoustic.act.name}</button>`;
+    const mapleChoice = `>Assign to ${maple.venue.title}</button>`;
+    const oakChoice = `>Assign to ${oak.venue.title}</button>`;
+    expect(venueHtml).toContain(catsChoice);
+    expect(venueHtml).toContain(acousticChoice);
+    expect(actHtml).toContain(mapleChoice);
+    expect(actHtml).toContain(oakChoice);
+    expect(venueHtml.indexOf(catsChoice)).toBeLessThan(
+      venueHtml.indexOf(acousticChoice),
+    );
+    expect(actHtml.indexOf(mapleChoice)).toBeLessThan(
+      actHtml.indexOf(oakChoice),
+    );
+    expect(venueHtml).not.toContain(
+      "Equally suitable based on recorded information",
+    );
+    expect(actHtml).not.toContain(
+      "Equally suitable based on recorded information",
+    );
+  });
+
   it("refuses unauthenticated and CSRF-less GET/POST requests", async () => {
     const { runtime, cookie, maple, cats } = await boot();
     const slot = slotFor(runtime, maple.venue.id);
