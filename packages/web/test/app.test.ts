@@ -12,8 +12,17 @@ describe("application scaffold", () => {
     );
     const runtime = await createRuntime({ env: {}, dataDirectory });
 
+    const landing = await runtime.request("/");
     const response = await runtime.request("/health");
 
+    expect(landing.status).toBe(200);
+    expect(landing.headers.get("content-type")).toContain("text/html");
+    const landingHtml = await landing.text();
+    expect(landingHtml).toContain('href="/signup/host"');
+    expect(landingHtml).toContain('href="/signup/performer"');
+    expect(landingHtml).toContain('href="/admin"');
+    expect(landingHtml).toContain("Organizer access");
+    expect(landingHtml).not.toContain("/admin/sign-in");
     expect(response.status).toBe(200);
     expect("app" in runtime).toBe(false);
     await expect(response.json()).resolves.toEqual({
@@ -26,6 +35,7 @@ describe("application scaffold", () => {
         .map(({ method, path, tier }) => ({ method, path, tier })),
     ).toEqual([
       { method: "GET", path: "/health", tier: "public" },
+      { method: "GET", path: "/", tier: "public" },
       {
         method: "GET",
         path: "/signup/assets/signup.css",

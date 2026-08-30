@@ -67,6 +67,7 @@ async function makeRuntime(
     publicSiteUrl?: string;
   } = {},
 ) {
+  const announced: string[] = [];
   const dataDirectory = await mkdtemp(join(tmpdir(), "porchfest-signup-"));
   temporaryRoots.push(dataDirectory);
   const runtime = await createTestingRuntime({
@@ -83,6 +84,7 @@ async function makeRuntime(
       options.rateLimit === undefined
         ? undefined
         : { limit: options.rateLimit, windowMs: 60_000 },
+    announce: (message) => announced.push(message),
   });
   runtimes.push(runtime);
 
@@ -99,7 +101,59 @@ async function makeRuntime(
     openSignups: true,
   });
 
-  return { runtime, seasonId: season.id };
+  return { runtime, seasonId: season.id, announced };
+}
+
+async function makeEmptyRuntime() {
+  const announced: string[] = [];
+  const dataDirectory = await mkdtemp(
+    join(tmpdir(), "porchfest-signup-empty-"),
+  );
+  temporaryRoots.push(dataDirectory);
+  const runtime = await createTestingRuntime({
+    dataDirectory,
+    env: {
+      PUBLIC_BASE_URL,
+      PORCHFEST_SESSION_SECRET: "signup-empty-test-session-secret",
+    },
+    announce: (message) => announced.push(message),
+  });
+  runtimes.push(runtime);
+  return { runtime, announced };
+}
+
+function bootstrapTokenFrom(announced: readonly string[]): string {
+  const token = announced.join("\n").match(/token=([A-Za-z0-9_-]+)/)?.[1];
+  expect(token, "a bootstrap link should have been announced").toBeTruthy();
+  return token ?? "";
+}
+
+async function organizerSession(
+  runtime: PorchfestRuntime,
+  announced: readonly string[],
+): Promise<string> {
+  const token = bootstrapTokenFrom(announced);
+  const signInPage = await runtime.request(
+    `${PUBLIC_BASE_URL}/admin/sign-in?token=${token}`,
+  );
+  const html = await signInPage.text();
+  const csrf = html.match(/name="_csrf" value="([^"]+)"/)?.[1] ?? "";
+  expect(csrf).toBeTruthy();
+  const response = await runtime.request(`${PUBLIC_BASE_URL}/admin/sign-in`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/x-www-form-urlencoded",
+      origin: PUBLIC_BASE_URL,
+    },
+    body: new URLSearchParams({
+      _csrf: csrf,
+      token,
+      display_name: "Example Organizer",
+      email: "organizer@example.invalid",
+    }),
+  });
+  expect(response.status).toBe(303);
+  return response.headers.get("set-cookie")?.split(";", 1)[0] ?? "";
 }
 
 async function csrfToken(
@@ -186,6 +240,96 @@ function performerValues(seasonId: number, csrf: string) {
 }
 
 describe("public signup forms", () => {
+  it("takes each landing-page signup link through zero, one, and multiple legal seasons", async () => {
+    const empty = await makeEmptyRuntime();
+    const single = await makeRuntime();
+    const multiple = await makeRuntime();
+    multiple.runtime.core.setup.createSeason({
+      year: 2032,
+      displayName: "Synthetic 2032 Porchfest",
+      timezone: "UTC",
+      eventDate: "2032-07-04",
+      eventCity: "Sample City",
+      eventState: "MN",
+      localityName: "Sample Ward",
+      timeSlots: [],
+      openSignups: true,
+    });
+
+    for (const { runtime } of [empty, single, multiple]) {
+      const landing = await runtime.request(`${PUBLIC_BASE_URL}/`);
+      const landingHtml = await landing.text();
+      expect(landing.status).toBe(200);
+      expect(landingHtml).toContain('href="/signup/host"');
+      expect(landingHtml).toContain('href="/signup/performer"');
+    }
+
+    for (const path of ["/signup/host", "/signup/performer"] as const) {
+      const noSeason = await empty.runtime.request(`${PUBLIC_BASE_URL}${path}`);
+      const noSeasonHtml = await noSeason.text();
+      expect(noSeason.status).toBe(200);
+      expect(noSeasonHtml).toContain("Signups are not open right now");
+      expect(noSeasonHtml).not.toContain("<form");
+
+      const oneSeason = await single.runtime.request(
+        `${PUBLIC_BASE_URL}${path}`,
+      );
+      const oneSeasonHtml = await oneSeason.text();
+      expect(oneSeason.status).toBe(200);
+      expect(oneSeasonHtml).toContain(
+        `data-signup-form="${path.endsWith("host") ? "host" : "performer"}"`,
+      );
+      expect(oneSeasonHtml).not.toContain("Choose a Porchfest season");
+
+      const seasonPicker = await multiple.runtime.request(
+        `${PUBLIC_BASE_URL}${path}`,
+      );
+      const seasonPickerHtml = await seasonPicker.text();
+      expect(seasonPicker.status).toBe(200);
+      expect(seasonPickerHtml).toContain("Choose a Porchfest season");
+      expect(seasonPickerHtml.match(/name="season"/g)).toHaveLength(2);
+      expect(seasonPickerHtml).not.toContain("data-signup-form");
+    }
+  });
+
+  it("takes organizer access to one-use-link instructions or the dashboard", async () => {
+    const { runtime, announced } = await makeRuntime();
+    const landing = await runtime.request(`${PUBLIC_BASE_URL}/`);
+    const landingHtml = await landing.text();
+    expect(landingHtml).toContain('href="/admin"');
+    expect(landingHtml).toContain("Organizer access");
+    expect(landingHtml).not.toContain("/admin/sign-in");
+
+    const cookie = await organizerSession(runtime, announced);
+    expect(cookie).toBeTruthy();
+
+    const signedOut = await runtime.request(`${PUBLIC_BASE_URL}/admin`, {
+      headers: { accept: "text/html" },
+    });
+    expect(signedOut.status).toBe(303);
+    expect(signedOut.headers.get("location")).toBe("/admin/sign-in");
+    const instructions = await runtime.request(
+      `${PUBLIC_BASE_URL}${signedOut.headers.get("location")}`,
+    );
+    const instructionsHtml = await instructions.text();
+    expect(instructions.status).toBe(200);
+    expect(instructionsHtml).toContain("Sign-in links work once");
+    expect(instructionsHtml).toContain("another organizer");
+    expect(instructionsHtml).toContain(
+      "operator with access to the deployment",
+    );
+    expect(instructionsHtml).not.toContain('type="submit"');
+
+    const dashboard = await runtime.request(`${PUBLIC_BASE_URL}/admin`, {
+      headers: { cookie },
+    });
+    const dashboardHtml = await dashboard.text();
+    expect(dashboard.status).toBe(200);
+    expect(dashboardHtml).toContain("Welcome, Example Organizer");
+    expect(dashboardHtml).toContain("Synthetic 2031 Porchfest");
+    expect(dashboardHtml).not.toContain("Your session has ended");
+  });
+
   it("registers both forms and their mutations as public routes", async () => {
     const { runtime } = await makeRuntime();
 

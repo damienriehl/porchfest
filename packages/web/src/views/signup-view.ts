@@ -103,6 +103,46 @@ export function renderOrganizerPage(title: string, body: string): string {
 </html>`;
 }
 
+export function renderPublicLandingPage(options: {
+  readonly organizerPath: string;
+}): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Porchfest</title>
+  <link rel="stylesheet" href="/signup/assets/signup.css">
+</head>
+<body>
+  <main class="signup-page">
+    <header class="signup-header">
+      <p class="eyebrow">Porchfest</p>
+      <h1>Bring music to the neighborhood</h1>
+      <p class="lede">Choose how you want to take part in the next Porchfest.</p>
+    </header>
+    <nav class="signup-single-column" aria-label="Porchfest access">
+      <section class="confirmation-card" aria-labelledby="host-signup-heading">
+        <h2 id="host-signup-heading">Host a porch</h2>
+        <p>Offer your porch, yard, or driveway as a place for performers to play.</p>
+        <p><a class="secondary-action" href="${HOST_SIGNUP_PATH}">Porch signup</a></p>
+      </section>
+      <section class="confirmation-card" aria-labelledby="performer-signup-heading">
+        <h2 id="performer-signup-heading">Play Porchfest</h2>
+        <p>Tell the organizers about your act and when everyone can perform.</p>
+        <p><a class="secondary-action" href="${PERFORMER_SIGNUP_PATH}">Performer signup</a></p>
+      </section>
+      <section class="confirmation-card" aria-labelledby="organizer-access-heading">
+        <h2 id="organizer-access-heading">Organize the festival</h2>
+        <p>Review signups, coordinate the schedule, and manage a Porchfest season.</p>
+        <p><a class="secondary-action" href="${escapeHtml(options.organizerPath)}">Organizer access</a></p>
+      </section>
+    </nav>
+  </main>
+</body>
+</html>`;
+}
+
 export function firstValue(values: SignupValues, name: string): string {
   return values[name]?.[0] ?? "";
 }

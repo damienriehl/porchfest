@@ -3,7 +3,11 @@ import type { CoreRuntime } from "@porchfest/core";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { Hono, type Context } from "hono";
 import { RouteRegistry, type TrustAuthorizer } from "./router/registry.js";
-import { ADMIN_SIGN_IN_PATH, registerAdminRoutes } from "./routes/admin.js";
+import {
+  ADMIN_PATH,
+  ADMIN_SIGN_IN_PATH,
+  registerAdminRoutes,
+} from "./routes/admin.js";
 import { registerAdminRecordRoutes } from "./routes/admin-records.js";
 import { registerAdminRetentionRoutes } from "./routes/admin-retention.js";
 import { registerSeasonLifecycleRoutes } from "./routes/season-lifecycle.js";
@@ -16,6 +20,7 @@ import {
   type SignupRouteOptions,
 } from "./routes/signup.js";
 import { createTrustAuthorizer, type SessionCookieOptions } from "./auth.js";
+import { renderPublicLandingPage } from "./views/signup-view.js";
 
 export interface AppOptions {
   readonly core: CoreRuntime;
@@ -75,6 +80,17 @@ export function createApp(options: AppOptions): PorchfestApp {
     tier: "public",
     handler: (context: Context) =>
       context.json({ ok: true, service: "porchfest" } as const),
+  });
+
+  routes.register({
+    method: "GET",
+    path: "/",
+    tier: "public",
+    handler: () =>
+      new Response(renderPublicLandingPage({ organizerPath: ADMIN_PATH }), {
+        status: 200,
+        headers: { "content-type": "text/html; charset=UTF-8" },
+      }),
   });
 
   registerSignupRoutes({
