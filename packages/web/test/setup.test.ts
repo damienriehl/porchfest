@@ -6,9 +6,11 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { createApp } from "../src/app.js";
 import { createRuntime, type PorchfestRuntime } from "../src/composition.js";
 
 const PUBLIC_BASE_URL = "https://porchfest.example";
+const SESSION_SECRET = "setup-test-session-secret";
 const temporaryRoots: string[] = [];
 const runtimes: PorchfestRuntime[] = [];
 
@@ -29,7 +31,7 @@ async function bootAndSignIn() {
     dataDirectory,
     env: {
       PUBLIC_BASE_URL,
-      PORCHFEST_SESSION_SECRET: "setup-test-session-secret",
+      PORCHFEST_SESSION_SECRET: SESSION_SECRET,
     },
     announce: (message) => announced.push(message),
   });
@@ -130,6 +132,42 @@ function submitSeason(
     method: "POST",
     headers: {
       origin,
+      cookie,
+      "content-type": "application/x-www-form-urlencoded",
+    },
+    body,
+  });
+}
+
+function submitSeasonWithSetupFailure(
+  runtime: PorchfestRuntime,
+  cookie: string,
+  path: "/admin/setup" | "/admin/seasons/new",
+  body: URLSearchParams,
+) {
+  const setup =
+    path === "/admin/setup"
+      ? {
+          ...runtime.core.setup,
+          createFirstSeason: (): never => {
+            throw new Error("synthetic season storage failure");
+          },
+        }
+      : {
+          ...runtime.core.setup,
+          createAdditionalSeason: (): never => {
+            throw new Error("synthetic season storage failure");
+          },
+        };
+  const app = createApp({
+    core: { ...runtime.core, setup },
+    csrfSecret: SESSION_SECRET,
+    publicBaseUrl: PUBLIC_BASE_URL,
+  });
+  return app.request(`${PUBLIC_BASE_URL}${path}`, {
+    method: "POST",
+    headers: {
+      origin: PUBLIC_BASE_URL,
       cookie,
       "content-type": "application/x-www-form-urlencoded",
     },
@@ -258,6 +296,24 @@ describe("first-run setup", () => {
     expect(runtime.core.setup.seasonCount()).toBe(1);
   });
 
+  it("returns a retryable first-season storage refusal without partial creation", async () => {
+    const { runtime, cookie } = await bootAndSignIn();
+    const csrf = await setupCsrf(runtime, cookie);
+
+    const response = await submitSeasonWithSetupFailure(
+      runtime,
+      cookie,
+      "/admin/setup",
+      completeSetup(csrf),
+    );
+    const html = await response.text();
+
+    expect(response.status).toBe(503);
+    expect(html).toContain("try again");
+    expect(html).toContain('value="SAP Porchfest 2027"');
+    expect(runtime.core.setup.seasonCount()).toBe(0);
+  });
+
   it("lists seasons and opens another through a distinct creation route", async () => {
     const { runtime, cookie } = await bootAndSignIn();
     const firstCsrf = await setupCsrf(runtime, cookie);
@@ -331,6 +387,29 @@ describe("first-run setup", () => {
 
     expect(confirmed.status).toBe(303);
     expect(runtime.core.setup.seasonCount()).toBe(2);
+  });
+
+  it("returns a retryable additional-season storage refusal without partial creation", async () => {
+    const { runtime, cookie } = await bootAndSignIn();
+    await createConfiguredSeason(runtime, cookie);
+    const csrf = await csrfFor(runtime, cookie, "/admin/seasons/new");
+
+    const response = await submitSeasonWithSetupFailure(
+      runtime,
+      cookie,
+      "/admin/seasons/new",
+      completeSetup(csrf, {
+        display_name: "Retryable Synthetic Season",
+        year: "2028",
+        event_date: "2028-09-09",
+      }),
+    );
+    const html = await response.text();
+
+    expect(response.status).toBe(503);
+    expect(html).toContain("try again");
+    expect(html).toContain('value="Retryable Synthetic Season"');
+    expect(runtime.core.setup.seasonCount()).toBe(1);
   });
 
   it("protects both season-creation mutations with sign-in, Origin, and CSRF", async () => {

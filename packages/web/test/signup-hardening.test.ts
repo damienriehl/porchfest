@@ -633,7 +633,7 @@ describe("the confirmation page is a receipt", () => {
     }
   });
 
-  it("separates what the public sees from what only organizers see", async () => {
+  it("separates public, organizer-only, and confirmed-match receipt details", async () => {
     const { runtime, seasonId } = await makeRuntime();
     const { token } = await csrfToken(runtime, "/signup/host", seasonId);
     const values = hostBody(seasonId, token);
@@ -644,21 +644,31 @@ describe("the confirmation page is a receipt", () => {
 
     const response = await submit(runtime, "/signup/host", values);
     const html = await response.text();
-    const publicHalf = html.slice(
-      html.indexOf("Shown publicly"),
-      html.indexOf("Kept private"),
+    const publicDetails = html.slice(
+      html.indexOf('id="submission-public-title"'),
+      html.indexOf('id="submission-organizer-title"'),
     );
-    const privateHalf = html.slice(html.indexOf("Kept private"));
+    const organizerDetails = html.slice(
+      html.indexOf('id="submission-organizer-title"'),
+      html.indexOf('id="submission-match-title"'),
+    );
+    const matchDetails = html.slice(
+      html.indexOf('id="submission-match-title"'),
+    );
 
     expect(response.status).toBe(201);
-    expect(publicHalf).toContain("The Test Porch");
+    expect(publicDetails).toContain("The Test Porch");
+    expect(publicDetails).toContain("Synthetic Venue Address");
     // The human label, not the stored value: "pa" alone also matches "space".
-    expect(publicHalf).toContain("PA system");
-    expect(publicHalf).toContain("Water");
-    expect(publicHalf).not.toContain("synthetic-host-phone");
-    expect(privateHalf).toContain("synthetic-host-phone");
-    expect(privateHalf).toContain("host@example.invalid");
-    expect(privateHalf).toContain("Side gate is open");
+    expect(publicDetails).not.toContain("PA system");
+    expect(publicDetails).not.toContain("Water");
+    expect(publicDetails).not.toContain("synthetic-host-phone");
+    expect(organizerDetails).not.toContain("synthetic-host-phone");
+    expect(matchDetails).toContain("PA system");
+    expect(matchDetails).toContain("Water");
+    expect(matchDetails).toContain("synthetic-host-phone");
+    expect(matchDetails).toContain("host@example.invalid");
+    expect(matchDetails).toContain("Side gate is open");
   });
 
   it("persists the performer notes field and keeps it private", async () => {
@@ -677,9 +687,12 @@ describe("the confirmation page is a receipt", () => {
     expect(runtime.coreTesting.readAct(act?.record.id ?? 0)?.notes).toBe(
       "We need a shady spot",
     );
-    expect(html.slice(html.indexOf("Kept private"))).toContain(
-      "We need a shady spot",
-    );
+    expect(
+      html.slice(
+        html.indexOf('id="submission-organizer-title"'),
+        html.indexOf('id="submission-match-title"'),
+      ),
+    ).toContain("We need a shady spot");
   });
 });
 

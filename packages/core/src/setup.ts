@@ -172,7 +172,6 @@ export function createSeasonSetup(
    * The emptiness check and insert share one immediate transaction so two open
    * setup tabs cannot both pass a route-level preflight and create rows. */
   function createFirstSeason(input: SeasonSetupInput): SeasonSetupResult {
-    const validated = validate(input);
     return db.transaction(
       (tx) => {
         if (seasonCountIn(tx) !== 0) {
@@ -181,6 +180,7 @@ export function createSeasonSetup(
             "The first season has already been created. Review the seasons already open before adding another.",
           );
         }
+        const validated = validate(input);
         return insertSeason(tx, validated, input.openSignups);
       },
       { behavior: "immediate" },
@@ -248,7 +248,6 @@ export function createSeasonSetup(
     expectedVersion: number,
     input: SeasonSetupInput,
   ): SeasonSetupResult {
-    const validated = validate(input);
     return db.transaction(
       (tx) => {
         const current = tx
@@ -259,6 +258,10 @@ export function createSeasonSetup(
         if (!current) {
           throw new SeasonLifecycleError(`season ${seasonId} does not exist`);
         }
+        if (current.version !== expectedVersion) {
+          throw new SeasonConflictError("season", seasonId, ["eventDetails"]);
+        }
+        const validated = validate(input);
         if (!isSeasonActionLegal(current.state, "correction")) {
           throw new SeasonActionError(current.state, "correction");
         }

@@ -42,9 +42,11 @@
   if (!copyAction || !copyStatus) return;
   var copyFailure =
     "Could not copy the selected messages. Review and copy each message instead.";
+  var copyPending = false;
 
   copyAction.addEventListener("click", async function (event) {
     event.preventDefault();
+    if (copyPending) return;
     var selected = form.querySelectorAll('input[name="message"]:checked');
     if (selected.length === 0) {
       copyStatus.textContent = "Select at least one message to copy.";
@@ -76,6 +78,9 @@
       return;
     }
 
+    var wasDisabled = copyAction.disabled;
+    copyPending = true;
+    copyAction.disabled = true;
     try {
       await navigator.clipboard.writeText(
         rendered.join("\n\n----- next message -----\n\n"),
@@ -86,6 +91,9 @@
         (selected.length === 1 ? " message." : " messages.");
     } catch {
       copyStatus.textContent = copyFailure;
+    } finally {
+      copyAction.disabled = wasDisabled;
+      copyPending = false;
     }
   });
 })();

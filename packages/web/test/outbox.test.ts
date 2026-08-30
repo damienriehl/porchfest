@@ -187,6 +187,7 @@ function makeAsyncControl() {
     ((event: { preventDefault(): void }) => void | Promise<void>)[]
   > = {};
   return {
+    disabled: false,
     addEventListener(
       name: string,
       handler: (event: { preventDefault(): void }) => void | Promise<void>,
@@ -199,6 +200,16 @@ function makeAsyncControl() {
       }
     },
   };
+}
+
+function deferred() {
+  let resolve!: () => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<void>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }
 
 function slug(value: string): string {
@@ -1058,6 +1069,8 @@ describe("organizer outbox screens", () => {
     const copyAction = makeAsyncControl();
     const copyStatus = { textContent: "" };
     const copied: string[] = [];
+    let writes = 0;
+    let pendingCopy = deferred();
     let requestCount = 0;
     const nodes: Readonly<Record<string, { textContent: string }>> = {
       "copy-subject-1": { textContent: messages[0]!.subject },
@@ -1080,10 +1093,14 @@ describe("organizer outbox screens", () => {
           ? boxes.filter((box) => box.checked)
           : boxes,
     };
-    const navigator = {
+    const navigator: {
+      clipboard?: { writeText(value: string): Promise<void> };
+    } = {
       clipboard: {
-        writeText: async (value: string) => {
+        writeText: (value: string) => {
+          writes += 1;
           copied.push(value);
+          return pendingCopy.promise;
         },
       },
     };
@@ -1098,20 +1115,47 @@ describe("organizer outbox screens", () => {
       },
     );
 
-    await copyAction.fire("click");
+    const firstClick = copyAction.fire("click");
+    const overlappingClick = copyAction.fire("click");
+    await overlappingClick;
+    expect(writes).toBe(1);
+    expect(copyAction.disabled).toBe(true);
+    pendingCopy.resolve();
+    await firstClick;
     expect(copied).toEqual([
       `Subject: ${messages[0]!.subject}\n\n${messages[0]!.textBody}\n\n----- next message -----\n\nSubject: ${messages[1]!.subject}\n\n${messages[1]!.textBody}`,
     ]);
     expect(copyStatus.textContent).toBe("Copied 2 messages.");
+    expect(copyAction.disabled).toBe(false);
     expect(requestCount).toBe(0);
 
-    navigator.clipboard.writeText = async () => {
-      throw new Error("clipboard unavailable");
-    };
+    pendingCopy = deferred();
+    const failedClick = copyAction.fire("click");
+    const overlappingFailure = copyAction.fire("click");
+    await overlappingFailure;
+    expect(writes).toBe(2);
+    expect(copyAction.disabled).toBe(true);
+    pendingCopy.reject(new Error("clipboard unavailable"));
+    await failedClick;
+    expect(copyStatus.textContent).toBe(
+      "Could not copy the selected messages. Review and copy each message instead.",
+    );
+    expect(copyAction.disabled).toBe(false);
+    expect(requestCount).toBe(0);
+
+    for (const box of boxes) box.checked = false;
+    await copyAction.fire("click");
+    expect(copyStatus.textContent).toBe("Select at least one message to copy.");
+    expect(writes).toBe(2);
+    expect(copyAction.disabled).toBe(false);
+
+    boxes[0]!.checked = true;
+    delete navigator.clipboard;
     await copyAction.fire("click");
     expect(copyStatus.textContent).toBe(
       "Could not copy the selected messages. Review and copy each message instead.",
     );
-    expect(requestCount).toBe(0);
+    expect(writes).toBe(2);
+    expect(copyAction.disabled).toBe(false);
   });
 });

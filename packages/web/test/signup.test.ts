@@ -1,4 +1,5 @@
 import type { AntibotPort } from "@porchfest/core";
+import type { VenuesMapDocument } from "@porchfest/map";
 import { TurnstileAntibotAdapter } from "@porchfest/antibot";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -12,6 +13,7 @@ import {
 import { createApp } from "../src/app.js";
 
 const PUBLIC_BASE_URL = "https://porchfest.example";
+const CURRENT_YEAR = new Date().getUTCFullYear();
 const temporaryRoots: string[] = [];
 const runtimes: PorchfestRuntime[] = [];
 
@@ -21,14 +23,14 @@ const EXPECTED_HOST_AUDIENCES = {
   contact_phone: "Shared with a confirmed match",
   venue_title: "Public map",
   venue_address: "Public map",
-  space_description: "Public map",
-  has_power: "Public map",
-  rain_backup: "Public map",
+  space_description: "Shared with a confirmed match",
+  has_power: "Shared with a confirmed match",
+  rain_backup: "Shared with a confirmed match",
   requested_act_names: "Organizer-only",
   genre_preferences: "Organizer-only",
-  gear: "Public map",
-  drinks: "Public map",
-  amenities: "Public map",
+  gear: "Shared with a confirmed match",
+  drinks: "Shared with a confirmed match",
+  amenities: "Shared with a confirmed match",
   notes: "Shared with a confirmed match",
 } as const;
 
@@ -40,8 +42,8 @@ const EXPECTED_PERFORMER_AUDIENCES = {
   genres: "Public map",
   description: "Public map",
   links: "Public map",
-  duration_minutes: "Public map",
-  requires_amplification: "Public map",
+  duration_minutes: "Organizer-only",
+  requires_amplification: "Shared with a confirmed match",
   availability_start: "Organizer-only",
   availability_end: "Organizer-only",
   house_preference: "Organizer-only",
@@ -65,6 +67,13 @@ async function makeRuntime(
     rateLimit?: number;
     timeSlots?: readonly { startsAt: string; endsAt: string }[];
     publicSiteUrl?: string;
+    year?: number;
+    bounds?: {
+      north: number;
+      south: number;
+      east: number;
+      west: number;
+    };
   } = {},
 ) {
   const announced: string[] = [];
@@ -88,14 +97,16 @@ async function makeRuntime(
   });
   runtimes.push(runtime);
 
+  const year = options.year ?? 2031;
   const { season } = runtime.core.setup.createSeason({
-    year: 2031,
-    displayName: "Synthetic 2031 Porchfest",
+    year,
+    displayName: `Synthetic ${year} Porchfest`,
     timezone: "UTC",
-    eventDate: "2031-06-01",
+    eventDate: `${year}-06-01`,
     eventCity: "Exampleton",
     eventState: "WI",
     localityName: "Synthetic Quarter",
+    bounds: options.bounds,
     publicSiteUrl: options.publicSiteUrl,
     timeSlots: options.timeSlots ?? [],
     openSignups: true,
@@ -1010,6 +1021,8 @@ describe("public signup forms", () => {
 
   it("keeps canonical audiences aligned from both forms through receipts and a match message", async () => {
     const { runtime, seasonId } = await makeRuntime({
+      year: CURRENT_YEAR,
+      bounds: { north: 45, south: 44, east: -93, west: -94 },
       timeSlots: [{ startsAt: "14:00", endsAt: "15:00" }],
     });
     const hostForm = await csrfToken(runtime, "/signup/host", seasonId);
@@ -1026,6 +1039,11 @@ describe("public signup forms", () => {
       seasonId,
     );
     const performerInput = performerValues(seasonId, performerForm.token);
+    performerInput.set("duration_minutes", "125");
+    performerInput.delete("availability_start");
+    performerInput.delete("availability_end");
+    performerInput.set("availability_start", `${CURRENT_YEAR}-06-01T12:34`);
+    performerInput.set("availability_end", `${CURRENT_YEAR}-06-01T17:56`);
     performerInput.set(
       "performer_notes",
       "ORGANIZER_ONLY_PERFORMER_NOTE_SENTINEL",
@@ -1072,17 +1090,114 @@ describe("public signup forms", () => {
     });
     const message = generated.messages[0]?.textBody ?? "";
 
-    expect(message).toContain("Synthetic Venue Address");
-    expect(message).toContain("host@example.invalid");
-    expect(message).toContain("performer@example.invalid");
-    expect(message).toContain("Use the side gate & wave.");
-    expect(message).toContain("The Test Fixtures");
-    expect(message).not.toContain("ORGANIZER_ONLY_REQUESTED_ACT_SENTINEL");
-    expect(message).not.toContain("Folk and acoustic rock");
-    expect(message).not.toContain("Near the park");
-    expect(message).not.toContain("Drummer also plays in Fixture Friends");
-    expect(message).not.toContain("ORGANIZER_ONLY_PERFORMER_NOTE_SENTINEL");
-    expect(message).not.toContain("can lend gear");
+    for (const sharedValue of [
+      "Synthetic Host",
+      "host@example.invalid",
+      "synthetic-host-phone",
+      "Synthetic Performer",
+      "performer@example.invalid",
+      "synthetic-performer-phone",
+      "Front porch, yard, and driveway",
+      "Power: Yes",
+      "No indoor backup",
+      "PA",
+      "microphone",
+      "extension cord",
+      "water",
+      "non-alcoholic drinks",
+      "seating",
+      "shade",
+      "accessible entry",
+      "Use the side gate & wave.",
+      "The Test Fixtures requires amplification",
+    ]) {
+      expect(message).toContain(sharedValue);
+    }
+    for (const organizerOnlyValue of [
+      "ORGANIZER_ONLY_REQUESTED_ACT_SENTINEL",
+      "Folk and acoustic rock",
+      "125",
+      "12:34",
+      "17:56",
+      "Near the park",
+      "Drummer also plays in Fixture Friends",
+      "ORGANIZER_ONLY_PERFORMER_NOTE_SENTINEL",
+      "can lend gear",
+    ]) {
+      expect(message).not.toContain(organizerOnlyValue);
+    }
+
+    runtime.core.geocoding.verifyVenueCoordinate(
+      venue.id,
+      { latitude: 44.98, longitude: -93.19 },
+      null,
+      venue.version,
+    );
+    const currentSeason = runtime.core.seasons.getSeason(seasonId);
+    const locked = runtime.core.seasons.transitionSeason(
+      seasonId,
+      currentSeason.version,
+      "locked",
+    );
+    runtime.core.seasons.publishSeasonMap(locked.id, locked.version, {
+      eventCity: locked.eventCity,
+      eventState: locked.eventState,
+    });
+    const mapResponse = await runtime.request(
+      `${PUBLIC_BASE_URL}/map/data.json`,
+    );
+    const mapDocument = (await mapResponse.json()) as VenuesMapDocument;
+    const mapVenue = mapDocument.venues[0];
+    const mapAct = mapVenue?.acts[0];
+    expect(mapResponse.status).toBe(200);
+    expect(mapVenue).toBeDefined();
+    expect(mapAct).toBeDefined();
+    if (!mapVenue || !mapAct) throw new Error("expected a published map match");
+
+    expect(mapVenue).toMatchObject({
+      title: "The Test Porch",
+      address: "Synthetic Venue Address",
+    });
+    expect(mapAct).toMatchObject({
+      name: "The Test Fixtures",
+      genre: "Folk, rock",
+      description: "Songs with harmonies & handclaps.",
+      links: [{ url: "https://example.invalid/the-test-fixtures" }],
+    });
+    for (const nonPublicField of [
+      "space_description",
+      "has_power",
+      "rain_backup",
+      "gear",
+      "drinks",
+      "amenities",
+    ]) {
+      expect(mapVenue).not.toHaveProperty(nonPublicField);
+    }
+    for (const nonPublicField of [
+      "duration_minutes",
+      "requires_amplification",
+    ]) {
+      expect(mapAct).not.toHaveProperty(nonPublicField);
+    }
+    const publicMapJson = JSON.stringify(mapDocument);
+    for (const nonPublicValue of [
+      "Synthetic Host",
+      "host@example.invalid",
+      "synthetic-host-phone",
+      "Synthetic Performer",
+      "performer@example.invalid",
+      "synthetic-performer-phone",
+      "Front porch, yard, and driveway",
+      "Use the side gate & wave.",
+      "ORGANIZER_ONLY_REQUESTED_ACT_SENTINEL",
+      "Folk and acoustic rock",
+      "Near the park",
+      "Drummer also plays in Fixture Friends",
+      "ORGANIZER_ONLY_PERFORMER_NOTE_SENTINEL",
+    ]) {
+      expect(publicMapJson).not.toContain(nonPublicValue);
+    }
   });
 
   it("links both receipts back to another signup for the same season", async () => {

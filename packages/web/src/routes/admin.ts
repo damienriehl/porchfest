@@ -255,13 +255,7 @@ export function registerAdminRoutes(options: AdminRouteOptions): void {
             { field: formFieldFor(error.field), message: error.message },
           ]);
         }
-        return setupRefusal(options, fields, [
-          {
-            field: "display_name",
-            message:
-              "That season could not be created. Your answers are still here.",
-          },
-        ]);
+        return seasonCreationUnavailable(options, fields, "first");
       }
     },
   });
@@ -327,13 +321,7 @@ export function registerAdminRoutes(options: AdminRouteOptions): void {
             { field: formFieldFor(error.field), message: error.message },
           ]);
         }
-        return additionalSeasonRefusal(options, fields, [
-          {
-            field: "display_name",
-            message:
-              "That season could not be created. Your answers are still here.",
-          },
-        ]);
+        return seasonCreationUnavailable(options, fields, "additional");
       }
     },
   });
@@ -662,6 +650,29 @@ function additionalSeasonRefusal(
       mode: "additional",
     }),
     { status: 422, headers: adminHeaders() },
+  );
+}
+
+function seasonCreationUnavailable(
+  options: AdminRouteOptions,
+  values: Readonly<Record<string, string>>,
+  mode: "first" | "additional",
+): Response {
+  const path = mode === "first" ? ADMIN_SETUP_PATH : ADMIN_NEW_SEASON_PATH;
+  return new Response(
+    renderSetupPage({
+      csrfToken: options.csrfTokenFor(path),
+      values,
+      errors: [
+        {
+          field: "display_name",
+          message:
+            "The season service is unavailable right now. Your answers are still here; try again.",
+        },
+      ],
+      mode,
+    }),
+    { status: 503, headers: adminHeaders() },
   );
 }
 

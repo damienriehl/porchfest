@@ -154,6 +154,19 @@ describe("season domain", () => {
     expect(setup.listTimeSlots(first.season.id)).toHaveLength(1);
   });
 
+  it("checks first-run conflict before validating a stale setup form", () => {
+    const setup = createSeasonSetup(database.db, () => pinnedNow);
+    setup.createFirstSeason(seasonSetupInput());
+
+    expect(() =>
+      setup.createFirstSeason({
+        ...seasonSetupInput(2106),
+        timezone: "Mars/Olympus",
+      }),
+    ).toThrow("first season has already been created");
+    expect(setup.seasonCount()).toBe(1);
+  });
+
   it("requires an explicit confirmation before opening another season in the same year", () => {
     const setup = createSeasonSetup(database.db, () => pinnedNow);
     setup.createFirstSeason(seasonSetupInput());
@@ -252,6 +265,51 @@ describe("season domain", () => {
     expect(setup.listTimeSlots(created.season.id)).toMatchObject([
       { position: 1, startsAt: new Date("2105-09-11T19:00:00.000Z") },
     ]);
+  });
+
+  it("gives a stale version precedence over invalid event details", () => {
+    const setup = createSeasonSetup(database.db, () => pinnedNow);
+    const created = setup.createSeason(seasonSetupInput());
+    const winner = setup.updateSeasonDetails(
+      created.season.id,
+      created.season.version,
+      { ...seasonSetupInput(), displayName: "Winning edit" },
+    );
+
+    expect(() =>
+      setup.updateSeasonDetails(created.season.id, created.season.version, {
+        ...seasonSetupInput(),
+        displayName: "Stale invalid edit",
+        timezone: "Mars/Olympus",
+      }),
+    ).toThrowError(SeasonConflictError);
+    expect(setup.listSeasons()[0]).toMatchObject({
+      displayName: "Winning edit",
+      timezone: "America/Chicago",
+      version: winner.season.version,
+    });
+  });
+
+  it("refuses archived-season corrections without changing state", () => {
+    const setup = createSeasonSetup(database.db, () => pinnedNow);
+    const created = setup.createSeason(seasonSetupInput());
+    const archived = seasonRepository.transitionSeason(
+      created.season.id,
+      created.season.version,
+      "archived",
+    );
+
+    expect(() =>
+      setup.updateSeasonDetails(archived.id, archived.version, {
+        ...seasonSetupInput(),
+        displayName: "Forbidden archived edit",
+      }),
+    ).toThrowError(SeasonActionError);
+    expect(setup.listSeasons()[0]).toMatchObject({
+      displayName: created.season.displayName,
+      state: "archived",
+      version: archived.version,
+    });
   });
 
   it.each([
@@ -355,7 +413,7 @@ describe("season domain", () => {
     expect(setup.listSeasons()[0]?.timezone).toBe("America/Chicago");
   });
 
-  it("re-flags coordinates after locality or bounds changes but refuses a published-map edit", () => {
+  it("re-flags coordinates after a bounds-only change", () => {
     const setup = createSeasonSetup(database.db, () => pinnedNow);
     const created = setup.createSeason({
       ...seasonSetupInput(),
@@ -374,7 +432,7 @@ describe("season domain", () => {
       created.season.version,
       {
         ...seasonSetupInput(),
-        localityName: "New Locality",
+        localityName: "Old Locality",
         bounds: { north: 45.1, south: 44.1, east: -93.1, west: -94.1 },
       },
     );
@@ -389,19 +447,39 @@ describe("season domain", () => {
       rejectionCode: "address-changed",
       version: 2,
     });
+    expect(changed.season).toMatchObject({
+      localityName: "Old Locality",
+      boundsNorth: 45.1,
+      boundsSouth: 44.1,
+      version: created.season.version + 1,
+    });
+  });
+
+  it("refuses a bounds-only change while the public map is published", () => {
+    const setup = createSeasonSetup(database.db, () => pinnedNow);
+    const created = setup.createSeason({
+      ...seasonSetupInput(),
+      localityName: "Published Locality",
+      bounds: { north: 45, south: 44, east: -93, west: -94 },
+    });
 
     sqlite
       .prepare("update seasons set map_published_at = ? where id = ?")
       .run(Math.floor(pinnedNow.getTime() / 1000), created.season.id);
     expect(() =>
-      setup.updateSeasonDetails(created.season.id, changed.season.version, {
+      setup.updateSeasonDetails(created.season.id, created.season.version, {
         ...seasonSetupInput(),
-        localityName: "Published-map change",
+        localityName: "Published Locality",
+        bounds: { north: 45.1, south: 44.1, east: -93.1, west: -94.1 },
       }),
     ).toThrowError(/unpublish the public map/i);
     expect(setup.listSeasons()[0]).toMatchObject({
-      localityName: "New Locality",
-      version: changed.season.version,
+      localityName: "Published Locality",
+      boundsNorth: 45,
+      boundsSouth: 44,
+      boundsEast: -93,
+      boundsWest: -94,
+      version: created.season.version,
     });
   });
 
