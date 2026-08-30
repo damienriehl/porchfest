@@ -23,7 +23,7 @@ done
 
 restore_volume="${PORCHFEST_DATA_VOLUME}-rehearsal"
 restore_project="${PORCHFEST_COMPOSE_PROJECT}-rehearsal"
-prev_image="${PORCHFEST_APP_IMAGE%:*}:prev"
+prev_image="$(image_tag_ref "$PORCHFEST_APP_IMAGE" "prev-${PORCHFEST_COMPOSE_PROJECT}")"
 fake_dir=""
 
 cleanup() {

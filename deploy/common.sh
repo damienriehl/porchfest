@@ -134,14 +134,22 @@ wait_for_app_health() {
   wait_for_container_health "$(app_container_id)" "${PORCHFEST_HEALTH_ATTEMPTS:-90}"
 }
 
-rollback_image_ref() {
-  local repository
-  if [[ "$app_image" == *:* ]]; then
-    repository="${app_image%:*}"
+image_tag_ref() {
+  local image="$1"
+  local tag="$2"
+  local prefix final repository
+  final="${image##*/}"
+  if [[ "$image" == */* ]]; then
+    prefix="${image%/*}/"
   else
-    repository="$app_image"
+    prefix=""
   fi
-  printf '%s:prev\n' "$repository"
+  repository="${prefix}${final%%:*}"
+  printf '%s:%s\n' "$repository" "$tag"
+}
+
+rollback_image_ref() {
+  image_tag_ref "$app_image" "prev-${compose_project}"
 }
 
 image_id() {

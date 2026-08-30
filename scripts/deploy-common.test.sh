@@ -66,4 +66,20 @@ if (assert_counts_match_json "$metadata" $'seasons=2\nvenues=1\nacts=1\ncontacts
 fi
 assert_counts_equal_json "$metadata" "$expected_counts"
 
-echo "OK: deploy helpers parse dotenv/JSON safely and tolerate only non-season count growth"
+for image_and_expected in \
+  'porchfest|porchfest:prev-project' \
+  'ghcr.io/x/porchfest|ghcr.io/x/porchfest:prev-project' \
+  'localhost:5000/porchfest|localhost:5000/porchfest:prev-project' \
+  'localhost:5000/porchfest:current|localhost:5000/porchfest:prev-project'; do
+  image_ref="${image_and_expected%%|*}"
+  expected_ref="${image_and_expected#*|}"
+  [[ "$(image_tag_ref "$image_ref" prev-project)" == "$expected_ref" ]] \
+    || fail "tag derivation failed for $image_ref"
+done
+
+app_image="localhost:5000/porchfest:current"
+compose_project="smoke-123"
+[[ "$(rollback_image_ref)" == 'localhost:5000/porchfest:prev-smoke-123' ]] \
+  || fail "rollback tag is not compose-project scoped"
+
+echo "OK: deploy helpers parse dotenv/JSON safely, tolerate count growth, and derive scoped tags"
