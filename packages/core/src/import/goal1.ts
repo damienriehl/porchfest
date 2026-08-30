@@ -1657,6 +1657,17 @@ function importCoordinates(state: ImportState, geocache: JsonObject): void {
   }
   const hitVenueIds = new Set<number>();
   for (const [address, rawCoordinate] of Object.entries(geocache)) {
+    const normalizedAddress = normalizeVenueAddress(address);
+    const venuesAtAddress = canonicalByAddress.get(normalizedAddress);
+    if (!venuesAtAddress) {
+      state.report.geocache.misses.push(address);
+      if (!isStructurallyValidGeocacheEntry(rawCoordinate)) {
+        state.report.warnings.push(
+          `Ignored malformed geocache entry with no matching venue: ${address}`,
+        );
+      }
+      continue;
+    }
     const coordinate = object(rawCoordinate, `geocache entry ${address}`);
     const provider = requiredString(coordinate.source, "geocache source");
     const providerKind = goal1ProviderKind(provider);
@@ -1673,12 +1684,6 @@ function importCoordinates(state: ImportState, geocache: JsonObject): void {
       );
     }
     if (providerKind.warning) state.report.warnings.push(providerKind.warning);
-    const normalizedAddress = normalizeVenueAddress(address);
-    const venuesAtAddress = canonicalByAddress.get(normalizedAddress);
-    if (!venuesAtAddress) {
-      state.report.geocache.misses.push(address);
-      continue;
-    }
     for (const venue of venuesAtAddress) {
       const natural =
         state.venueNaturalKeys.get(venue.id) ?? `venue:${venue.id}`;
@@ -1741,6 +1746,24 @@ function importCoordinates(state: ImportState, geocache: JsonObject): void {
       `Canonical venue has no geocache entry: ${venue.address}`,
     );
   }
+}
+
+function isStructurallyValidGeocacheEntry(value: unknown): boolean {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const entry = value as JsonObject;
+  return (
+    typeof entry.source === "string" &&
+    entry.source.trim().length > 0 &&
+    typeof entry.lat === "number" &&
+    Number.isFinite(entry.lat) &&
+    typeof entry.lng === "number" &&
+    Number.isFinite(entry.lng) &&
+    (entry.crosscheck_m === null ||
+      (typeof entry.crosscheck_m === "number" &&
+        Number.isFinite(entry.crosscheck_m)))
+  );
 }
 
 function goal1ProviderKind(provider: string): {

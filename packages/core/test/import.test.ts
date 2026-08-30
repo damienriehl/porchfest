@@ -326,6 +326,29 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
     }
   });
 
+  it("warns and skips malformed geocache entries that match no venue", async () => {
+    const temporary = await copyFixture("porchfest-unused-malformed-geocache-");
+    try {
+      const path = join(temporary, fixtureArtifactFiles.geocache);
+      const geocache = JSON.parse(await readFile(path, "utf8"));
+      const unusedAddress = "999 Invented Elsewhere Avenue, Fableton, FS";
+      geocache[unusedAddress] = true;
+      await writeFile(path, `${JSON.stringify(geocache, null, 2)}\n`);
+
+      const report = importGoal1Season(core, {
+        ...importOptions,
+        artifactsDirectory: temporary,
+      });
+
+      expect(report.geocache.misses).toContain(unusedAddress);
+      expect(report.warnings).toContain(
+        `Ignored malformed geocache entry with no matching venue: ${unusedAddress}`,
+      );
+    } finally {
+      await rm(temporary, { recursive: true, force: true });
+    }
+  });
+
   it("R26: reach_via host and manual_contact tokens resolve alongside the timestamp fallback", async () => {
     const matches = await readFixture<{
       virtual_performers: Record<
