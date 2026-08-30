@@ -116,12 +116,9 @@ assert_pinned_volume() {
 
 wait_for_container_health() {
   local container="$1"
-  local timeout_seconds="${2:-$CONTAINER_HEALTH_TIMEOUT_SECONDS}"
   local status=""
   local _
-  [[ "$timeout_seconds" =~ ^[0-9]+$ && "$timeout_seconds" -ge "$CONTAINER_HEALTH_TIMEOUT_SECONDS" ]] \
-    || die "container health timeout must be at least $CONTAINER_HEALTH_TIMEOUT_SECONDS seconds"
-  for _ in $(seq 1 "$timeout_seconds"); do
+  for _ in $(seq 1 "$CONTAINER_HEALTH_TIMEOUT_SECONDS"); do
     status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container" 2>/dev/null || true)"
     case "$status" in
       healthy) return 0 ;;
@@ -135,7 +132,7 @@ wait_for_container_health() {
 wait_for_app_health() {
   # 20s start period + three 30s probe intervals = 110s. The 150s budget adds
   # 40s of scheduler/startup margin and cannot under-run two full probes.
-  wait_for_container_health "$(app_container_id)" "$CONTAINER_HEALTH_TIMEOUT_SECONDS"
+  wait_for_container_health "$(app_container_id)"
 }
 
 image_tag_ref() {

@@ -90,10 +90,16 @@ export PORCHFEST_DEPLOY_PROBE_ORGANIZER=organizer@porchfest.example.test
 export TMPDIR="$temp_dir"
 
 probe_output="$temp_dir/probe-output.txt"
-if (external_checks) >"$probe_output" 2>&1; then
+prior_exit_marker="$temp_dir/prior-exit-ran"
+if (
+  trap - EXIT
+  trap ': >"$prior_exit_marker"' EXIT
+  external_checks
+) >"$probe_output" 2>&1; then
   fail "forced post-login probe failure unexpectedly succeeded"
 fi
 [[ -f "$signout_marker" ]] || fail "EXIT cleanup did not sign out the temporary session"
+[[ -f "$prior_exit_marker" ]] || fail "probe EXIT cleanup did not chain the caller trap"
 grep -Fq 'probe cleanup: signed out the temporary organizer session' "$probe_output" \
   || fail "EXIT cleanup did not report the sign-out"
 if find "$temp_dir" -maxdepth 1 -type f -name 'tmp.*' | grep -q .; then
@@ -101,14 +107,22 @@ if find "$temp_dir" -maxdepth 1 -type f -name 'tmp.*' | grep -q .; then
 fi
 
 unset PORCHFEST_DEPLOY_PROBE_ORGANIZER
-skip_output="$(external_checks)"
+skip_file="$temp_dir/skip-output.txt"
+(
+  trap - EXIT
+  external_checks
+) >"$skip_file"
+skip_output="$(<"$skip_file")"
 [[ "$skip_output" == *'probe: skipped — no organizer configured (set PORCHFEST_DEPLOY_PROBE_ORGANIZER)'* ]] \
   || fail "unconfigured organizer probe did not print the required skip"
 
 export PORCHFEST_DEPLOY_PROBE_ORGANIZER=missing
 export FAKE_LINK_FAIL=1
 link_output="$temp_dir/link-output.txt"
-if (external_checks) >"$link_output" 2>&1; then
+if (
+  trap - EXIT
+  external_checks
+) >"$link_output" 2>&1; then
   fail "organizer-link failure unexpectedly succeeded"
 fi
 grep -Fq 'Organizer "missing" was not found.' "$link_output" \

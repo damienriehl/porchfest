@@ -84,7 +84,7 @@ stopped_state="$(docker inspect --format '{{.State.Status}}' "$app_container")"
   exit 1
 }
 docker compose -p "$PORCHFEST_COMPOSE_PROJECT" -f "$project_dir/compose.yaml" start app >/dev/null
-wait_for_container_health "$app_container" 150
+wait_for_container_health "$app_container"
 archive_dir="$PORCHFEST_ARCHIVE_DIR"
 archive="$(newest_archive)"
 [[ -n "$archive" ]] || {

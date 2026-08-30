@@ -106,7 +106,7 @@ else
     compose up -d --no-build app
     wait_for_app_health
     assert_pinned_volume
-    restored_integrity="$(volume_integrity)"
+    volume_integrity >/dev/null
     restored_counts="$(volume_counts)"
     assert_counts_equal_json "$matching_metadata" "$restored_counts"
   ); then
