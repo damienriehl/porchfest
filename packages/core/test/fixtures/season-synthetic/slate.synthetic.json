@@ -30,12 +30,20 @@
       "extra_recipients": [
         "manual_contact: manual-extra-one"
       ],
+      "withdrawn": {
+        "on": "2026-08-10",
+        "reason": "Invented physical venue withdrawal 1."
+      },
       "slots": {
         "6-7": {
-          "performer_ts": "2026-05-01T11:00:00Z"
+          "performer_ts": "2026-05-01T11:00:00Z",
+          "canceled": {
+            "on": "2026-08-10",
+            "reason": "Invented canceled assignment 1."
+          }
         },
         "7-8": {
-          "virtual_performer": "virtual-act-2"
+          "same_as": "6-7"
         }
       }
     },
@@ -53,19 +61,28 @@
       "extra_recipients": [
         "manual_contact: manual-extra-two"
       ],
+      "withdrawn": {
+        "on": "2026-08-11",
+        "reason": "Invented physical venue withdrawal 2."
+      },
       "slots": {
         "6-7": {
-          "performer_ts": "2026-05-03T11:00:00Z"
+          "performer_ts": "2026-05-03T11:00:00Z",
+          "canceled": {
+            "on": "2026-08-11",
+            "reason": "Invented canceled assignment 2."
+          }
         },
         "7-8": {
-          "virtual_performer": "virtual-act-3"
+          "same_as": "6-7"
         }
       }
     },
     {
       "id": "venue-03",
       "host_ts": "2026-05-05T10:00:00Z",
-      "address_check": "105 Lantern Loop, Fableton, FS",
+      "map_address": "702 Storybook Square, Fableton, FS",
+      "address_check": "702 Storybook Square, Fableton, FS",
       "basis": "Invented matching basis 3.",
       "chase": [
         "Invented chase item 3."
@@ -76,17 +93,19 @@
       "extra_recipients": [],
       "slots": {
         "6-7": {
-          "performer_ts": "2026-05-04T11:00:00Z"
+          "performer_ts": "2026-05-04T11:00:00Z",
+          "band_check": "Invented organizer name verification."
         },
         "7-8": {
-          "virtual_performer": "virtual-act-4"
+          "virtual_performer": "virtual-act-2"
         }
       }
     },
     {
       "id": "venue-04",
       "host_ts": "2026-05-06T10:00:00Z",
-      "address_check": "106 Lantern Loop, Fableton, FS",
+      "map_address": "703 Storybook Square, Fableton, FS",
+      "address_check": "703 Storybook Square, Fableton, FS",
       "basis": "Invented matching basis 4.",
       "chase": [
         "Invented chase item 4."
@@ -100,7 +119,8 @@
           "performer_ts": "2026-05-05T11:00:00Z"
         },
         "7-8": {
-          "virtual_performer": "virtual-act-5"
+          "virtual_performer": "virtual-act-3",
+          "note": "Invented virtual performer slot note."
         }
       }
     },
@@ -110,7 +130,8 @@
       "address_check": "107 Lantern Loop, Fableton, FS",
       "basis": "Invented matching basis 5.",
       "chase": [
-        "Invented chase item 5."
+        "Invented chase item 5.",
+        "Please contact virtual-act-4 through this synthetic host."
       ],
       "email_notes": [
         "Invented email note 5."
@@ -121,7 +142,7 @@
           "performer_ts": "2026-05-06T11:00:00Z"
         },
         "7-8": {
-          "virtual_performer": "virtual-act-6"
+          "same_as": "6-7"
         }
       }
     },
@@ -131,7 +152,8 @@
       "address_check": "108 Lantern Loop, Fableton, FS",
       "basis": "Invented matching basis 6.",
       "chase": [
-        "Invented chase item 6."
+        "Invented chase item 6.",
+        "Please contact VIRTUAL-ACT-5 through this synthetic host."
       ],
       "email_notes": [
         "Invented email note 6."
@@ -352,7 +374,7 @@
           "performer_ts": "2026-05-17T11:00:00Z"
         },
         "7-8": {
-          "same_as": "6-7"
+          "open": true
         }
       }
     },
@@ -436,7 +458,7 @@
           "performer_ts": "2026-05-21T11:00:00Z"
         },
         "7-8": {
-          "open": true
+          "same_as": "6-7"
         }
       }
     },
@@ -479,10 +501,14 @@
       },
       "slots": {
         "6-7": {
-          "canceled": true
+          "performer_ts": "2026-05-22T11:00:00Z",
+          "canceled": {
+            "on": "2026-08-15",
+            "reason": "Invented canceled virtual-venue assignment."
+          }
         },
         "7-8": {
-          "canceled": true
+          "same_as": "6-7"
         }
       }
     }
@@ -490,6 +516,7 @@
   "unmatched_venues": [
     {
       "host_ts": "2026-05-23T10:00:00Z",
+      "id_for_fallback": "unmatched-venue-override",
       "address_check": "123 Lantern Loop, Fableton, FS",
       "status": "unmatched",
       "email_note": "Invented unmatched venue note."
@@ -591,12 +618,13 @@
     "virtual-act-5": {
       "display_name": "Porcelain Echo 5",
       "reach_via": "host",
+      "manual_contact": "manual-paper-comet",
       "note": "Invented host-reached placeholder note 5."
     },
     "virtual-act-6": {
       "display_name": "Porcelain Echo 6",
-      "reach_via": "host",
-      "note": "Invented host-reached placeholder note 6."
+      "reach_via": "2026-05-22T11:00:00Z",
+      "note": "Invented timestamp-reached placeholder note 6."
     }
   },
   "virtual_venues": {

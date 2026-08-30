@@ -15,9 +15,10 @@ import type {
 } from "../records.js";
 import type { createSeasonRepository } from "../season.js";
 import type { SeasonSetupRepository } from "../setup.js";
-import { endOfDateInTimeZone } from "../time.js";
+import { endOfDateInTimeZone, parseWallClock } from "../time.js";
 import type {
   Act,
+  Assignment,
   Contact,
   CoordinatePrecision,
   CoordinateRejectionCode,
@@ -26,6 +27,7 @@ import type {
   ImportKey,
   Season,
   SeasonTimeSlot,
+  Slot,
   Venue,
   VenueAmenity,
   VenueDrink,
@@ -122,11 +124,22 @@ export interface ImportGeocacheHit {
   readonly rejectionCode: CoordinateRejectionCode | null;
 }
 
+export type ImportPlaceholderReachVia =
+  "slot" | "chase" | "timestamp" | "manual_contact";
+
+export interface ImportPlaceholderAct {
+  readonly virtualPerformerKey: string;
+  readonly actId: number;
+  readonly reachVia: ImportPlaceholderReachVia;
+  readonly status: "created" | "found";
+}
+
 export interface ImportReport {
   readonly seasonId: number;
   readonly records: Readonly<Record<ImportRecordType, ImportCounts>>;
   readonly supersessions: readonly ImportSupersession[];
   readonly holds: readonly ImportHold[];
+  readonly placeholderActs: readonly ImportPlaceholderAct[];
   readonly geocache: {
     readonly hits: readonly ImportGeocacheHit[];
     readonly misses: readonly string[];
@@ -170,6 +183,10 @@ interface ImportState {
   readonly matchedVenueIds: Map<string, number>;
   readonly importKeys: Map<string, ImportKey>;
   readonly reportedAnnotationKeys: Set<string>;
+  readonly canonicalActIds: Map<number, number>;
+  readonly venueSlots: Map<number, readonly Slot[]>;
+  readonly assignmentsById: Map<number, Assignment>;
+  readonly assignmentsBySlot: Map<number, Assignment>;
 }
 
 interface MutableImportReport {
@@ -177,6 +194,7 @@ interface MutableImportReport {
   records: Record<ImportRecordType, ImportCounts>;
   supersessions: ImportSupersession[];
   holds: ImportHold[];
+  placeholderActs: ImportPlaceholderAct[];
   geocache: { hits: ImportGeocacheHit[]; misses: string[] };
   summary: ImportReport["summary"];
   warnings: string[];
@@ -281,6 +299,10 @@ function importGoal1SeasonInTransaction(
         .map((key) => [importKeyCacheKey(key.source, key.naturalKey), key]),
     ),
     reportedAnnotationKeys: new Set(),
+    canonicalActIds: new Map(),
+    venueSlots: new Map(),
+    assignmentsById: new Map(),
+    assignmentsBySlot: new Map(),
   };
 
   importHosts(state, artifacts.matches);
@@ -295,16 +317,14 @@ function importGoal1SeasonInTransaction(
   annotateUnmatchedAndFloating(state, artifacts.matches);
   importCoordinates(state, artifacts.geocache);
   const approvedActs = new Set(
-    core.seasons
-      .listAssignments(season.id)
-      .map(
-        (assignment) => core.seasons.resolveAct(assignment.actId).canonical.id,
-      ),
+    [...state.assignmentsById.values()].map(
+      (assignment) => canonicalAct(state, assignment.actId).id,
+    ),
   );
   report.summary = {
     slateVenues: new Set(state.matchedVenueIds.values()).size,
     approvedActEntries: approvedActs.size + report.holds.length,
-    placeholderActs: state.virtualActs.size,
+    placeholderActs: report.placeholderActs.length,
     placeholderVenues: state.virtualVenues.size,
     unmatchedVenues: array(artifacts.matches.unmatched_venues).length,
     floatingPerformers: array(artifacts.matches.floating_performers).length,
@@ -455,12 +475,10 @@ function applyPerformerOverrides(
     }
     const existing = findImportKey(state, SOURCE.override, naturalKey);
     const override = object(rawOverride, `performer override ${naturalKey}`);
-    const overrideDate = requiredString(override.on, "override on");
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(overrideDate)) {
-      throw new Error(
-        `Performer override ${naturalKey} on must use YYYY-MM-DD.`,
-      );
-    }
+    const overrideDate = requiredIsoDate(
+      override.on,
+      `Performer override ${naturalKey} on`,
+    );
     const fields = object(
       override.fields,
       `performer override fields ${naturalKey}`,
@@ -605,13 +623,27 @@ function importVirtualActs(state: ImportState, matches: JsonObject): void {
   const matchVenues = array(matches.venues).map((value) =>
     object(value, "venue entry"),
   );
-  for (const [virtualKey, rawVirtual] of entries(matches.virtual_performers)) {
+  const virtualPerformers = entries(matches.virtual_performers);
+  const foundHostReach = indexFoundVirtualHostReach(
+    virtualPerformers.map(([virtualKey]) => virtualKey),
+    matchVenues,
+  );
+  for (const [virtualKey, rawVirtual] of virtualPerformers) {
     const virtual = object(rawVirtual, `virtual performer ${virtualKey}`);
     const found = findImportKey(state, SOURCE.virtualAct, virtualKey);
     if (found !== null) {
       const act = state.core.seasons.getAct(found.recordId);
       state.virtualActs.set(virtualKey, act);
       increment(state.report, "act", "found");
+      state.report.placeholderActs.push({
+        virtualPerformerKey: virtualKey,
+        actId: act.id,
+        reachVia: classifyFoundVirtualReach(
+          optionalString(virtual.reach_via),
+          foundHostReach.get(virtualKey),
+        ),
+        status: "found",
+      });
       const note = optionalString(virtual.note);
       if (note)
         addAnnotation(state, "act", act.id, `virtual-act:${virtualKey}`, note);
@@ -621,34 +653,48 @@ function importVirtualActs(state: ImportState, matches: JsonObject): void {
       virtual.reach_via,
       "virtual performer reach_via",
     );
-    let reach: { reachViaContactId: number } | null = null;
+    const manualKey =
+      reachVia === "manual_contact"
+        ? requiredString(
+            virtual.manual_contact,
+            "virtual performer manual_contact",
+          )
+        : optionalString(virtual.manual_contact);
+    const manual = manualKey ? state.manualContacts.get(manualKey) : null;
+    let resolution: VirtualActReachResolution | null;
     if (reachVia === "manual_contact") {
-      const manualKey = requiredString(
-        virtual.manual_contact,
-        "virtual performer manual_contact",
-      );
-      const manual = state.manualContacts.get(manualKey);
-      if (manual) reach = { reachViaContactId: manual.id };
+      resolution = manual
+        ? { contact: manual, reachVia: "manual_contact" }
+        : null;
     } else {
-      const contact = resolveVirtualActReach(
+      resolution = resolveVirtualActReach(
         state,
         virtualKey,
         reachVia,
         matchVenues,
         matches,
       );
-      if (contact !== null) reach = { reachViaContactId: contact.id };
+      if (resolution === null) {
+        state.report.warnings.push(
+          `Virtual performer reach-via did not resolve: ${virtualKey}`,
+        );
+        resolution = manual
+          ? { contact: manual, reachVia: "manual_contact" }
+          : null;
+      }
     }
-    if (reach === null) {
-      state.report.warnings.push(
-        `Virtual performer reach-via did not resolve: ${virtualKey}`,
-      );
+    if (!resolution) {
+      if (reachVia === "manual_contact") {
+        state.report.warnings.push(
+          `Virtual performer reach-via did not resolve: ${virtualKey}`,
+        );
+      }
       increment(state.report, "act", "skipped");
       continue;
     }
     const act = state.core.seasons.createPlaceholderAct({
       seasonId: state.season.id,
-      reach,
+      reach: { reachViaContactId: resolution.contact.id },
       act: {
         name: requiredString(
           virtual.display_name,
@@ -665,6 +711,12 @@ function importVirtualActs(state: ImportState, matches: JsonObject): void {
     });
     state.virtualActs.set(virtualKey, act);
     increment(state.report, "act", "created");
+    state.report.placeholderActs.push({
+      virtualPerformerKey: virtualKey,
+      actId: act.id,
+      reachVia: resolution.reachVia,
+      status: "created",
+    });
     const note = optionalString(virtual.note);
     if (note)
       addAnnotation(state, "act", act.id, `virtual-act:${virtualKey}`, note);
@@ -768,12 +820,18 @@ function applySupersessionGroup(
       );
       continue;
     }
-    const alreadySuperseded =
-      recordType === "venue"
-        ? state.core.seasons.resolveVenue(source.id).canonical.id ===
-          canonical.id
-        : state.core.seasons.resolveAct(source.id).canonical.id ===
-          canonical.id;
+    let alreadySuperseded: boolean;
+    if (recordType === "venue") {
+      const sourceVenue = state.hostVenues.get(sourceKey)!;
+      alreadySuperseded =
+        state.core.seasons.resolveVenue(sourceVenue.id).canonical.id ===
+        canonical.id;
+    } else {
+      const sourceAct = state.performerActs.get(sourceKey)!;
+      alreadySuperseded =
+        sourceAct.canonicalActId !== null &&
+        canonicalAct(state, sourceAct.id).id === canonical.id;
+    }
     if (!alreadySuperseded) {
       if (recordType === "venue") {
         const supersededVenue = state.core.seasons.supersedeVenue(
@@ -788,6 +846,7 @@ function applySupersessionGroup(
           source.version,
           canonical.id,
         );
+        state.canonicalActIds.clear();
         state.performerActs.set(sourceKey, supersededAct);
       }
     }
@@ -837,6 +896,7 @@ function bindVenueSlots(state: ImportState): void {
     const natural = state.venueNaturalKeys.get(venue.id);
     if (!natural) continue;
     const slots = state.core.seasons.ensureVenueSlots(venue.id);
+    state.venueSlots.set(venue.id, slots);
     for (const [index, slot] of slots.entries()) {
       const slotLabel = GOAL1_SLOT_DEFINITIONS[index]?.artifactLabel;
       if (!slotLabel) continue;
@@ -874,16 +934,40 @@ function importVenueSlate(state: ImportState, matches: JsonObject): void {
       continue;
     }
     const mapAddress = optionalString(venueEntry.map_address);
-    if (
-      mapAddress &&
-      normalizeVenueAddress(venue.address) !== normalizeVenueAddress(mapAddress)
-    ) {
+    const organizerOnlyNotes = withoutHostFormAddressNotes(venue.notes);
+    const notesChanged = organizerOnlyNotes !== venue.notes;
+    const addressChanged =
+      mapAddress !== null &&
+      normalizeVenueAddress(venue.address) !==
+        normalizeVenueAddress(mapAddress);
+    if (addressChanged || notesChanged) {
       venue = state.core.seasons.updateVenue(venue.id, venue.version, {
-        address: mapAddress,
+        ...(addressChanged ? { address: mapAddress } : {}),
+        ...(notesChanged ? { notes: organizerOnlyNotes } : {}),
       });
-      if (hostKey) state.hostVenues.set(hostKey, venue);
-      if (virtualKey) state.virtualVenues.set(virtualKey, venue);
     }
+    if (mapAddress) {
+      const hostFormAddress = hostKey
+        ? optionalString(state.hostRows.get(hostKey)?.address)
+        : null;
+      const privateAddressLine =
+        hostFormAddress &&
+        normalizeVenueAddress(hostFormAddress) !==
+          normalizeVenueAddress(mapAddress)
+          ? `[host-form address] ${hostFormAddress}`
+          : null;
+      if (privateAddressLine) {
+        addAnnotation(
+          state,
+          "venue",
+          venue.id,
+          `${entryId}:host-form-address`,
+          privateAddressLine,
+        );
+      }
+    }
+    if (hostKey) state.hostVenues.set(hostKey, venue);
+    if (virtualKey) state.virtualVenues.set(virtualKey, venue);
     venue = applyVenueWithdrawal(state, venue, venueEntry.withdrawn);
     if (hostKey) state.hostVenues.set(hostKey, venue);
     if (virtualKey) state.virtualVenues.set(virtualKey, venue);
@@ -891,13 +975,15 @@ function importVenueSlate(state: ImportState, matches: JsonObject): void {
     annotateVenueEntry(state, venue, entryId, venueEntry);
   }
 
+  refreshAssignments(state);
+
   for (const rawVenue of array(matches.venues)) {
     const venueEntry = object(rawVenue, "venue entry");
     const entryId = requiredString(venueEntry.id, "venue id");
     const venueId = state.matchedVenueIds.get(entryId);
     if (venueId === undefined) continue;
     const natural = state.venueNaturalKeys.get(venueId) ?? entryId;
-    const slots = state.core.seasons.listVenueSlots(venueId);
+    const slots = venueSlotsFor(state, venueId);
     const configuredSlots = object(venueEntry.slots, `slots for ${entryId}`);
     for (const [index, definition] of GOAL1_SLOT_DEFINITIONS.entries()) {
       const slotLabel = definition.artifactLabel;
@@ -914,22 +1000,21 @@ function importVenueSlate(state: ImportState, matches: JsonObject): void {
       );
       annotateSlotProse(state, venueId, entryId, slotLabel, configuration);
       const assignmentNaturalKey = `${natural}:${slotLabel}`;
-      if (configuration.open === true || "canceled" in configuration) {
+      if (configuration.open === true) {
         increment(state.report, "assignment", "skipped");
         continue;
       }
       if ("same_as" in configuration) {
-        const sameAs = requiredString(
-          configuration.same_as,
-          `${entryId} ${slotLabel} same_as`,
-        );
-        addAnnotation(
-          state,
-          "venue",
-          venueId,
-          `${entryId}:${slotLabel}:same-as`,
-          `Slot ${slotLabel}: same assignment as ${sameAs}`,
-        );
+        const sameAs = optionalString(configuration.same_as);
+        if (sameAs) {
+          addAnnotation(
+            state,
+            "venue",
+            venueId,
+            `${entryId}:${slotLabel}:same-as`,
+            `Slot ${slotLabel}: same assignment as ${sameAs}`,
+          );
+        }
         continue;
       }
       const heldVirtualKey = optionalString(
@@ -1017,7 +1102,12 @@ function importVenueSlate(state: ImportState, matches: JsonObject): void {
         SOURCE.assignment,
         assignmentNaturalKey,
       );
-      if (existingAssignment !== null) {
+      const liveAssignment = liveAssignmentImportKey(state, existingAssignment);
+      if (
+        liveAssignment !== null ||
+        (existingAssignment !== null &&
+          slotFamilyIsCanceled(configuredSlots, slotLabel))
+      ) {
         increment(state.report, "assignment", "found");
         continue;
       }
@@ -1037,6 +1127,9 @@ function importVenueSlate(state: ImportState, matches: JsonObject): void {
         increment(state.report, "assignment", "skipped");
         continue;
       }
+      if (existingAssignment !== null) {
+        restoreImporterCanceledAct(state, act, entryId, slotLabel);
+      }
       const assignment = state.core.seasons.assignSlot(
         slot.id,
         slot.version,
@@ -1048,6 +1141,7 @@ function importVenueSlate(state: ImportState, matches: JsonObject): void {
         recordType: "assignment",
         recordId: assignment.id,
       });
+      cacheAssignment(state, assignment);
       increment(state.report, "assignment", "created");
     }
 
@@ -1060,17 +1154,25 @@ function importVenueSlate(state: ImportState, matches: JsonObject): void {
         `${entryId} ${slotLabel} slot`,
       );
       if (!("same_as" in configuration)) continue;
-      const sameAs = requiredString(
-        configuration.same_as,
-        `${entryId} ${slotLabel} same_as`,
-      );
+      const sameAs = optionalString(configuration.same_as);
+      if (!sameAs) {
+        state.report.warnings.push(
+          `Malformed same_as assignment: ${entryId} ${slotLabel}`,
+        );
+        increment(state.report, "assignment", "skipped");
+        continue;
+      }
       const assignmentNaturalKey = `${natural}:${slotLabel}`;
       const existingAssignment = findImportKey(
         state,
         SOURCE.assignment,
         assignmentNaturalKey,
       );
-      if (existingAssignment !== null) {
+      if (
+        liveAssignmentImportKey(state, existingAssignment) !== null ||
+        (existingAssignment !== null &&
+          slotFamilyIsCanceled(configuredSlots, slotLabel))
+      ) {
         increment(state.report, "assignment", "found");
         continue;
       }
@@ -1079,9 +1181,7 @@ function importVenueSlate(state: ImportState, matches: JsonObject): void {
       );
       const sourceSlot = slots[sourceIndex];
       const sourceAssignment = sourceSlot
-        ? state.core.seasons
-            .listAssignments(state.season.id)
-            .find((assignment) => assignment.slotId === sourceSlot.id)
+        ? state.assignmentsBySlot.get(sourceSlot.id)
         : undefined;
       if (!sourceSlot || !sourceAssignment) {
         state.report.warnings.push(
@@ -1102,9 +1202,285 @@ function importVenueSlate(state: ImportState, matches: JsonObject): void {
         recordType: "assignment",
         recordId: assignment.id,
       });
+      cacheAssignment(state, assignment);
       increment(state.report, "assignment", "created");
     }
   }
+  applySlotCancellations(state, matches);
+}
+
+function applySlotCancellations(state: ImportState, matches: JsonObject): void {
+  const cancellationsByAct = new Map<
+    number,
+    {
+      act: Act;
+      cancellations: {
+        entryId: string;
+        slotLabel: string;
+        note: string;
+        propagatedFrom?: string;
+      }[];
+    }
+  >();
+  for (const rawVenue of array(matches.venues)) {
+    const venueEntry = object(rawVenue, "venue entry");
+    const entryId = requiredString(venueEntry.id, "venue id");
+    const venueId = state.matchedVenueIds.get(entryId);
+    if (venueId === undefined) continue;
+    const slots = venueSlotsFor(state, venueId);
+    const configuredSlots = object(venueEntry.slots, `slots for ${entryId}`);
+    for (const [index, definition] of GOAL1_SLOT_DEFINITIONS.entries()) {
+      const slotLabel = definition.artifactLabel;
+      const configuration = object(
+        configuredSlots[slotLabel],
+        `${entryId} ${slotLabel} slot`,
+      );
+      if (!("canceled" in configuration)) continue;
+      if (configuration.canceled === false) continue;
+      let note: string;
+      if (configuration.canceled === true) {
+        note = "Canceled (no date recorded)";
+        state.report.warnings.push(
+          `Boolean cancellation has no date or reason: ${entryId} ${slotLabel}`,
+        );
+      } else {
+        const cancellation = object(
+          configuration.canceled,
+          `${entryId} ${slotLabel} cancellation`,
+        );
+        const on = requiredIsoDate(cancellation.on, "Slot cancellation on");
+        const reason = requiredString(
+          cancellation.reason,
+          "slot cancellation reason",
+        );
+        note = `Canceled on ${on}: ${reason}`;
+      }
+      const slot = slots[index];
+      if (!slot) continue;
+      const assignment = state.assignmentsBySlot.get(slot.id);
+      const assignedAct = assignment
+        ? state.core.seasons.getAct(assignment.actId)
+        : null;
+      const act = assignedAct
+        ? canonicalAct(state, assignedAct.id)
+        : resolveConfiguredSlotAct(state, configuration, configuredSlots);
+      if (!act) {
+        state.report.warnings.push(
+          `Canceled slot assignment did not resolve: ${entryId} ${slotLabel}`,
+        );
+        continue;
+      }
+      const grouped = cancellationsByAct.get(act.id) ?? {
+        act,
+        cancellations: [],
+      };
+      grouped.cancellations.push({ entryId, slotLabel, note });
+      const partnerLabels = new Set<string>();
+      const sourceLabel = optionalString(configuration.same_as);
+      if (sourceLabel) partnerLabels.add(sourceLabel);
+      for (const [partnerLabel, rawPartner] of Object.entries(
+        configuredSlots,
+      )) {
+        const partner = optionalObject(rawPartner);
+        if (!partner) continue;
+        if (optionalString(partner.same_as) === slotLabel) {
+          partnerLabels.add(partnerLabel);
+        }
+      }
+      for (const partnerLabel of partnerLabels) {
+        grouped.cancellations.push({
+          entryId,
+          slotLabel: partnerLabel,
+          note,
+          propagatedFrom: slotLabel,
+        });
+      }
+      cancellationsByAct.set(act.id, grouped);
+      const sourceIndex = sourceLabel
+        ? GOAL1_SLOT_DEFINITIONS.findIndex(
+            ({ artifactLabel }) => artifactLabel === sourceLabel,
+          )
+        : -1;
+      const sourceSlot = sourceIndex >= 0 ? slots[sourceIndex] : undefined;
+      const assignmentToUnassign =
+        (sourceSlot ? state.assignmentsBySlot.get(sourceSlot.id) : undefined) ??
+        assignment;
+      if (assignmentToUnassign) {
+        state.core.seasons.unassignSlot(
+          assignmentToUnassign.id,
+          assignmentToUnassign.version,
+        );
+        for (const candidate of state.assignmentsBySlot.values()) {
+          if (
+            candidate.id === assignmentToUnassign.id ||
+            candidate.continuationOfAssignmentId === assignmentToUnassign.id
+          ) {
+            uncacheAssignment(state, candidate);
+          }
+        }
+      }
+    }
+  }
+
+  for (const {
+    act: importedAct,
+    cancellations,
+  } of cancellationsByAct.values()) {
+    for (const cancellation of cancellations) {
+      addAnnotation(
+        state,
+        "act",
+        importedAct.id,
+        `cancellation:${cancellation.entryId}:${cancellation.slotLabel}`,
+        `${cancellation.note}${
+          cancellation.propagatedFrom
+            ? ` (same_as partner of ${cancellation.propagatedFrom})`
+            : ""
+        }`,
+      );
+    }
+    const act = state.core.seasons.getAct(importedAct.id);
+    const hasRemainingAssignment = [...state.assignmentsById.values()].some(
+      (assignment) => canonicalAct(state, assignment.actId).id === act.id,
+    );
+    if (!hasRemainingAssignment && act.status !== "withdrawn") {
+      state.core.seasons.setRecordStatus(
+        "act",
+        act.id,
+        act.version,
+        "withdrawn",
+      );
+    }
+  }
+}
+
+function liveAssignmentImportKey(
+  state: ImportState,
+  key: ImportKey | null,
+): ImportKey | null {
+  if (key === null) return null;
+  return state.assignmentsById.has(key.recordId) ? key : null;
+}
+
+function refreshAssignments(state: ImportState): void {
+  state.assignmentsById.clear();
+  state.assignmentsBySlot.clear();
+  for (const assignment of state.core.seasons.listAssignments(
+    state.season.id,
+  )) {
+    cacheAssignment(state, assignment);
+  }
+}
+
+function cacheAssignment(state: ImportState, assignment: Assignment): void {
+  state.assignmentsById.set(assignment.id, assignment);
+  state.assignmentsBySlot.set(assignment.slotId, assignment);
+}
+
+function uncacheAssignment(state: ImportState, assignment: Assignment): void {
+  state.assignmentsById.delete(assignment.id);
+  state.assignmentsBySlot.delete(assignment.slotId);
+}
+
+function canonicalAct(state: ImportState, actId: number): Act {
+  const cachedId = state.canonicalActIds.get(actId);
+  if (cachedId !== undefined) return state.core.seasons.getAct(cachedId);
+  const resolution = state.core.seasons.resolveAct(actId);
+  state.canonicalActIds.set(resolution.canonical.id, resolution.canonical.id);
+  state.canonicalActIds.set(actId, resolution.canonical.id);
+  for (const superseded of resolution.superseded) {
+    state.canonicalActIds.set(superseded.id, resolution.canonical.id);
+  }
+  return resolution.canonical;
+}
+
+function venueSlotsFor(state: ImportState, venueId: number): readonly Slot[] {
+  const cached = state.venueSlots.get(venueId);
+  if (cached) return cached;
+  const slots = state.core.seasons.listVenueSlots(venueId);
+  state.venueSlots.set(venueId, slots);
+  return slots;
+}
+
+function slotFamilyIsCanceled(
+  configuredSlots: JsonObject,
+  slotLabel: string,
+): boolean {
+  const configuration = optionalObject(configuredSlots[slotLabel]);
+  if (!configuration) return false;
+  if (
+    configuration.canceled !== undefined &&
+    configuration.canceled !== false
+  ) {
+    return true;
+  }
+  const sourceLabel = optionalString(configuration.same_as);
+  if (sourceLabel) {
+    const source = optionalObject(configuredSlots[sourceLabel]);
+    if (source && source.canceled !== undefined && source.canceled !== false) {
+      return true;
+    }
+  }
+  return Object.entries(configuredSlots).some(([partnerLabel, rawPartner]) => {
+    if (partnerLabel === slotLabel) return false;
+    const partner = optionalObject(rawPartner);
+    return (
+      partner !== null &&
+      optionalString(partner.same_as) === slotLabel &&
+      partner.canceled !== undefined &&
+      partner.canceled !== false
+    );
+  });
+}
+
+function restoreImporterCanceledAct(
+  state: ImportState,
+  act: Act,
+  entryId: string,
+  slotLabel: string,
+): void {
+  if (
+    findImportKey(
+      state,
+      SOURCE.annotation,
+      `cancellation:${entryId}:${slotLabel}`,
+    ) === null
+  ) {
+    return;
+  }
+  const canonical = canonicalAct(state, act.id);
+  if (canonical.status !== "withdrawn") return;
+  state.core.seasons.setRecordStatus(
+    "act",
+    canonical.id,
+    canonical.version,
+    "tentative",
+  );
+}
+
+function resolveConfiguredSlotAct(
+  state: ImportState,
+  configuration: JsonObject,
+  configuredSlots: JsonObject,
+  seenLabels: Set<string> = new Set(),
+): Act | null {
+  const performerKey = optionalString(configuration.performer_ts);
+  if (performerKey) {
+    const act = state.performerActs.get(performerKey);
+    return act ? canonicalAct(state, act.id) : null;
+  }
+  const virtualKey = optionalString(configuration.virtual_performer);
+  if (virtualKey) {
+    const act = state.virtualActs.get(virtualKey);
+    return act ? canonicalAct(state, act.id) : null;
+  }
+  const sameAs = optionalString(configuration.same_as);
+  if (!sameAs) return null;
+  if (seenLabels.has(sameAs)) return null;
+  seenLabels.add(sameAs);
+  const source = optionalObject(configuredSlots[sameAs]);
+  if (!source) return null;
+  return resolveConfiguredSlotAct(state, source, configuredSlots, seenLabels);
 }
 
 function applyVenueWithdrawal(
@@ -1122,10 +1498,7 @@ function applyVenueWithdrawal(
   let note = "Withdrawn";
   if (rawWithdrawal !== true) {
     const withdrawal = object(rawWithdrawal, "venue withdrawal");
-    const on = requiredString(withdrawal.on, "venue withdrawal on");
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(on)) {
-      throw new Error("Venue withdrawal on must use YYYY-MM-DD.");
-    }
+    const on = requiredIsoDate(withdrawal.on, "Venue withdrawal on");
     note = `Withdrawn on ${on}: ${requiredString(withdrawal.reason, "venue withdrawal reason")}`;
   }
   addAnnotation(state, "venue", venue.id, `venue:${venue.id}:withdrawal`, note);
@@ -1227,6 +1600,16 @@ function annotateSlotProse(
       venueId,
       `${entryId}:${slotLabel}:chase:${index}`,
       `Slot ${slotLabel} chase: ${chase}`,
+    );
+  }
+  const bandCheck = optionalString(slot.band_check);
+  if (bandCheck) {
+    addAnnotation(
+      state,
+      "venue",
+      venueId,
+      `${entryId}:${slotLabel}:band-check`,
+      `Band check: ${bandCheck}`,
     );
   }
 }
@@ -1336,11 +1719,28 @@ function importCoordinates(state: ImportState, geocache: JsonObject): void {
     const venuesAtAddress = canonicalByAddress.get(normalizedAddress);
     if (!venuesAtAddress) {
       state.report.geocache.misses.push(address);
+      if (!isStructurallyValidGeocacheEntry(rawCoordinate)) {
+        state.report.warnings.push(
+          `Ignored malformed geocache entry with no matching venue: ${address}`,
+        );
+      }
       continue;
     }
     const coordinate = object(rawCoordinate, `geocache entry ${address}`);
     const provider = requiredString(coordinate.source, "geocache source");
     const providerKind = goal1ProviderKind(provider);
+    const rawRef = coordinate.ref;
+    const ref = typeof rawRef === "string" ? rawRef : "";
+    const validRef = /^(node|way|relation)\/\d+$/.test(ref);
+    if (!validRef) {
+      const warningRef =
+        typeof rawRef === "string" && rawRef.length > 0
+          ? rawRef
+          : (JSON.stringify(rawRef) ?? "<missing>");
+      state.report.warnings.push(
+        `Malformed geocache ref requires review: ${warningRef}`,
+      );
+    }
     if (providerKind.warning) state.report.warnings.push(providerKind.warning);
     for (const venue of venuesAtAddress) {
       const natural =
@@ -1351,14 +1751,16 @@ function importCoordinates(state: ImportState, geocache: JsonObject): void {
         latitude: requiredNumber(coordinate.lat, "geocache latitude"),
         longitude: requiredNumber(coordinate.lng, "geocache longitude"),
         provider,
-        ref: requiredString(coordinate.ref, "geocache ref"),
+        ref,
         crossCheckDistanceM: nullableNumber(
           coordinate.crosscheck_m,
           "geocache crosscheck_m",
         ),
         precision: providerKind.precision,
         interpolated: providerKind.interpolated,
-        forcedRejectionCode: providerKind.forcedRejectionCode,
+        forcedRejectionCode: validRef
+          ? providerKind.forcedRejectionCode
+          : "missing-ref",
       });
       const stored = imported.coordinate;
       const status =
@@ -1404,26 +1806,42 @@ function importCoordinates(state: ImportState, geocache: JsonObject): void {
   }
 }
 
+function isStructurallyValidGeocacheEntry(value: unknown): boolean {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const entry = value as JsonObject;
+  return (
+    typeof entry.source === "string" &&
+    entry.source.trim().length > 0 &&
+    typeof entry.lat === "number" &&
+    Number.isFinite(entry.lat) &&
+    typeof entry.lng === "number" &&
+    Number.isFinite(entry.lng) &&
+    (entry.crosscheck_m === null ||
+      (typeof entry.crosscheck_m === "number" &&
+        Number.isFinite(entry.crosscheck_m)))
+  );
+}
+
 function goal1ProviderKind(provider: string): {
   readonly precision: CoordinatePrecision;
   readonly interpolated: boolean;
   readonly forcedRejectionCode?: CoordinateRejectionCode;
   readonly warning?: string;
 } {
-  const normalized = provider.toLowerCase();
-  if (normalized.includes("census") || normalized.includes("unimproved")) {
-    return { precision: "street", interpolated: true };
-  }
-  if (normalized.includes("house") || normalized.includes("nominatim")) {
-    return { precision: "house", interpolated: false };
-  }
-  if (normalized.includes("parcel")) {
-    return { precision: "parcel", interpolated: false };
+  switch (provider) {
+    case "osm-address-point":
+      return { precision: "parcel", interpolated: false };
+    case "nominatim-house":
+      return { precision: "house", interpolated: false };
+    case "us-census-unimproved":
+      return { precision: "street", interpolated: true };
   }
   return {
     precision: "parcel",
     interpolated: false,
-    forcedRejectionCode: "refused",
+    forcedRejectionCode: "imprecise",
     warning: `Unknown geocache source label requires review: ${provider}`,
   };
 }
@@ -1457,21 +1875,67 @@ function addAnnotation(
   increment(state.report, "annotation", result.created ? "created" : "found");
 }
 
+interface VirtualActReachResolution {
+  readonly contact: Contact;
+  readonly reachVia: ImportPlaceholderReachVia;
+}
+
+function classifyFoundVirtualReach(
+  reachVia: string | null,
+  hostReach: "slot" | "chase" | undefined,
+): ImportPlaceholderReachVia {
+  if (reachVia === "manual_contact") return "manual_contact";
+  if (reachVia !== "host") return "timestamp";
+  return hostReach ?? "slot";
+}
+
+function indexFoundVirtualHostReach(
+  virtualKeys: readonly string[],
+  venues: readonly JsonObject[],
+): Map<string, "slot" | "chase"> {
+  const originalKeyByNormalized = new Map(
+    virtualKeys.map((key) => [key.toLocaleLowerCase("en"), key]),
+  );
+  const reachByKey = new Map<string, "slot" | "chase">();
+  for (const venue of venues) {
+    for (const rawSlot of Object.values(objectOrEmpty(venue.slots))) {
+      const slot = object(rawSlot, "virtual performer slot");
+      for (const value of [
+        slot.virtual_performer,
+        slot.held_for_virtual_performer,
+      ]) {
+        if (typeof value !== "string") continue;
+        const key = originalKeyByNormalized.get(value.toLocaleLowerCase("en"));
+        if (key) reachByKey.set(key, "slot");
+      }
+    }
+  }
+  for (const venue of venues) {
+    for (const chase of stringList(venue.chase)) {
+      for (const token of chaseTokens(chase)) {
+        const key = originalKeyByNormalized.get(token.toLocaleLowerCase("en"));
+        if (key && reachByKey.get(key) !== "slot") {
+          reachByKey.set(key, "chase");
+        }
+      }
+    }
+  }
+  return reachByKey;
+}
+
 function resolveVirtualActReach(
   state: ImportState,
   virtualKey: string,
   reachVia: string,
   venues: readonly JsonObject[],
   matches: JsonObject,
-): Contact | null {
+): VirtualActReachResolution | null {
   if (reachVia !== "host") {
-    return (
-      state.hostContacts.get(reachVia) ??
-      state.performerContacts.get(reachVia) ??
-      null
-    );
+    const contact =
+      state.hostContacts.get(reachVia) ?? state.performerContacts.get(reachVia);
+    return contact ? { contact, reachVia: "timestamp" } : null;
   }
-  const venueEntry = venues.find((entry) =>
+  const slotVenue = venues.find((entry) =>
     Object.values(objectOrEmpty(entry.slots)).some((rawSlot) => {
       const slot = object(rawSlot, "virtual performer slot");
       return (
@@ -1480,7 +1944,35 @@ function resolveVirtualActReach(
       );
     }),
   );
-  if (!venueEntry) return null;
+  if (slotVenue) {
+    const contact = resolveVenueEntryContact(state, slotVenue, matches);
+    if (contact) return { contact, reachVia: "slot" };
+  }
+
+  const chaseVenues = venues.filter((entry) =>
+    stringList(entry.chase).some((chase) =>
+      chaseHasExactVirtualKey(chase, virtualKey),
+    ),
+  );
+  if (chaseVenues.length > 1) {
+    state.report.warnings.push(
+      `Virtual performer chase matched multiple venues; using first: ${virtualKey}`,
+    );
+  }
+  const chaseVenue = chaseVenues[0];
+  if (chaseVenue) {
+    const contact = resolveVenueEntryContact(state, chaseVenue, matches);
+    if (contact) return { contact, reachVia: "chase" };
+  }
+
+  return null;
+}
+
+function resolveVenueEntryContact(
+  state: ImportState,
+  venueEntry: JsonObject,
+  matches: JsonObject,
+): Contact | null {
   const hostKey = optionalString(venueEntry.host_ts);
   if (hostKey) return state.hostContacts.get(hostKey) ?? null;
   const virtualVenueKey = optionalString(venueEntry.virtual_venue);
@@ -1493,6 +1985,17 @@ function resolveVirtualActReach(
   return performerKey
     ? (state.performerContacts.get(performerKey) ?? null)
     : null;
+}
+
+function chaseHasExactVirtualKey(chase: string, virtualKey: string): boolean {
+  const normalizedKey = virtualKey.toLocaleLowerCase("en");
+  return chaseTokens(chase).some(
+    (token) => token.toLocaleLowerCase("en") === normalizedKey,
+  );
+}
+
+function chaseTokens(chase: string): string[] {
+  return chase.split(/[^\p{L}\p{N}_-]+/u).filter(Boolean);
 }
 
 function mapHost(row: JsonObject) {
@@ -1918,11 +2421,25 @@ function joinedNotes(values: readonly (string | null)[]): string | null {
   return useful.length > 0 ? useful.join("\n") : null;
 }
 
+function withoutHostFormAddressNotes(notes: string | null): string | null {
+  if (notes === null) return null;
+  const kept = notes
+    .split("\n")
+    .filter((line) => !line.startsWith("[host-form address] "));
+  return kept.length === 0 ? null : kept.join("\n");
+}
+
 function object(value: unknown, label: string): JsonObject {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`${label} must be an object.`);
   }
   return value as JsonObject;
+}
+
+function optionalObject(value: unknown): JsonObject | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as JsonObject)
+    : null;
 }
 
 function objectOrEmpty(value: unknown): JsonObject {
@@ -1951,6 +2468,14 @@ function requiredString(value: unknown, label: string): string {
   if (normalized === null)
     throw new Error(`${label} must be a non-empty string.`);
   return normalized;
+}
+
+function requiredIsoDate(value: unknown, label: string): string {
+  const date = requiredString(value, label);
+  if (!parseWallClock(`${date}T12:00`)) {
+    throw new Error(`${label} must use YYYY-MM-DD.`);
+  }
+  return date;
 }
 
 function manualContactKey(reference: string): string | null {
@@ -1998,6 +2523,7 @@ function emptyReport(): MutableImportReport {
     },
     supersessions: [],
     holds: [],
+    placeholderActs: [],
     geocache: { hits: [], misses: [] },
     summary: {
       slateVenues: 0,
@@ -2035,14 +2561,19 @@ function bindImportKey(
   state: ImportState,
   input: Omit<BindImportKeyInput, "seasonId">,
 ): ImportKey {
-  const result = state.core.importKeys.bind({
+  const cacheKey = importKeyCacheKey(input.source, input.naturalKey);
+  const previous = state.importKeys.get(cacheKey);
+  const binding = {
     seasonId: state.season.id,
     ...input,
-  });
-  state.importKeys.set(
-    importKeyCacheKey(result.key.source, result.key.naturalKey),
-    result.key,
-  );
+  };
+  const result =
+    previous !== undefined &&
+    (previous.recordType !== input.recordType ||
+      previous.recordId !== input.recordId)
+      ? { key: state.core.importKeys.rebind(binding) }
+      : state.core.importKeys.bind(binding);
+  state.importKeys.set(cacheKey, result.key);
   return result.key;
 }
 
@@ -2061,6 +2592,7 @@ function freezeReport(report: MutableImportReport): ImportReport {
     ),
     supersessions: Object.freeze([...report.supersessions]),
     holds: Object.freeze([...report.holds]),
+    placeholderActs: Object.freeze([...report.placeholderActs]),
     geocache: Object.freeze({
       hits: Object.freeze([...report.geocache.hits]),
       misses: Object.freeze([...new Set(report.geocache.misses)]),

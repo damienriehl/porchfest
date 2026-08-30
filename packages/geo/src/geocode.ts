@@ -1,10 +1,11 @@
-import type {
-  BoundingBox,
-  Coordinates,
-  GeocodeRequest,
-  GeoPort,
-  LocateOutcome,
-  LocateRequest,
+import {
+  escapeRegex,
+  type BoundingBox,
+  type Coordinates,
+  type GeocodeRequest,
+  type GeoPort,
+  type LocateOutcome,
+  type LocateRequest,
 } from "@porchfest/core";
 import { assertBoundingBox, boundingBoxContains } from "./verify.js";
 
@@ -957,11 +958,7 @@ function localityGrammar(
 function localityTokenPattern(token: string): string {
   return /^(?:saint|st\.?)$/i.test(token)
     ? String.raw`(?:saint|st\.?)`
-    : escapeRegExp(token);
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    : escapeRegex(token);
 }
 
 function tuplesEqual(

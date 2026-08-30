@@ -264,6 +264,7 @@ export {
   zonedWallClockToUtc,
   type WallClockParts,
 } from "./time.js";
+export { escapeRegex } from "./strings.js";
 export {
   goal1ArtifactFiles,
   importGoal1Season,
@@ -273,6 +274,8 @@ export {
   type ImportCounts,
   type ImportGeocacheHit,
   type ImportHold,
+  type ImportPlaceholderAct,
+  type ImportPlaceholderReachVia,
   type ImportReport,
   type ImportSupersession,
 } from "./import/goal1.js";

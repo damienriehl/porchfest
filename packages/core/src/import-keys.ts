@@ -72,7 +72,7 @@ export function createImportKeyRepository(
     );
   }
 
-  function bind(input: BindImportKeyInput): BoundImportKey {
+  function normalizedInput(input: BindImportKeyInput): BindImportKeyInput {
     const source = input.source.trim();
     const naturalKey = input.naturalKey.trim();
     if (!source || !naturalKey) {
@@ -80,13 +80,16 @@ export function createImportKeyRepository(
         "import source and natural key must be non-empty",
       );
     }
+    return { ...input, source, naturalKey };
+  }
+
+  function bind(input: BindImportKeyInput): BoundImportKey {
+    const normalized = normalizedInput(input);
     const stamp = now();
     const key = db
       .insert(importKeys)
       .values({
-        ...input,
-        source,
-        naturalKey,
+        ...normalized,
         createdAt: stamp,
         updatedAt: stamp,
       })
@@ -96,16 +99,57 @@ export function createImportKeyRepository(
       .returning()
       .get();
     if (key !== undefined) return { key, created: true };
-    const existing = find(input.seasonId, source, naturalKey)!;
+    const existing = find(
+      normalized.seasonId,
+      normalized.source,
+      normalized.naturalKey,
+    )!;
     if (
-      existing.recordType !== input.recordType ||
-      existing.recordId !== input.recordId
+      existing.recordType !== normalized.recordType ||
+      existing.recordId !== normalized.recordId
     ) {
       throw new ImportKeyLifecycleError(
-        `import key ${source}/${naturalKey} is already bound to ${existing.recordType} ${existing.recordId}`,
+        `import key ${normalized.source}/${normalized.naturalKey} is already bound to ${existing.recordType} ${existing.recordId}`,
       );
     }
     return { key: existing, created: false };
+  }
+
+  function rebind(input: BindImportKeyInput): ImportKey {
+    const normalized = normalizedInput(input);
+    const existing = find(
+      normalized.seasonId,
+      normalized.source,
+      normalized.naturalKey,
+    );
+    if (existing === null) return bind(normalized).key;
+    if (existing.recordType !== normalized.recordType) {
+      throw new ImportKeyLifecycleError(
+        `import key ${normalized.source}/${normalized.naturalKey} is already bound to ${existing.recordType} ${existing.recordId}`,
+      );
+    }
+    if (existing.recordId === normalized.recordId) return existing;
+    const rebound = db
+      .update(importKeys)
+      .set({
+        recordId: normalized.recordId,
+        version: existing.version + 1,
+        updatedAt: now(),
+      })
+      .where(
+        and(
+          eq(importKeys.id, existing.id),
+          eq(importKeys.version, existing.version),
+        ),
+      )
+      .returning()
+      .get();
+    if (rebound === undefined) {
+      throw new ImportKeyLifecycleError(
+        `import key ${normalized.source}/${normalized.naturalKey} changed while it was being rebound`,
+      );
+    }
+    return rebound;
   }
 
   function list(seasonId: number): ImportKey[] {
@@ -117,7 +161,7 @@ export function createImportKeyRepository(
       .all();
   }
 
-  return Object.freeze({ bind, find, findSeason, list });
+  return Object.freeze({ bind, rebind, find, findSeason, list });
 }
 
 export type ImportKeyRepository = ReturnType<typeof createImportKeyRepository>;

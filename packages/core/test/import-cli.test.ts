@@ -137,7 +137,7 @@ describe("Goal-1 import CLI", () => {
     await cp(fixtureDirectory, copiedArtifacts, { recursive: true });
     const geocachePath = join(copiedArtifacts, "synthetic.geocache.json");
     const geocache = JSON.parse(await readFile(geocachePath, "utf8"));
-    const activeAddress = Object.keys(geocache)[0]!;
+    const activeAddress = Object.keys(geocache)[2]!;
     geocache[activeAddress].lat = "not-a-coordinate";
     await writeFile(geocachePath, `${JSON.stringify(geocache, null, 2)}\n`);
 

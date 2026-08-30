@@ -2,155 +2,162 @@
   "101 Lantern Loop, Fableton, FS": {
     "lat": 10,
     "lng": 20,
-    "source": "synthetic-parcel",
-    "ref": "synthetic/ref/01",
+    "source": "osm-address-point",
+    "ref": "way/1000",
     "crosscheck_m": 4.2
   },
   "103 Lantern Loop, Fableton, FS": {
     "lat": 10.01,
     "lng": 20.01,
-    "source": "synthetic-parcel",
-    "ref": "synthetic/ref/02",
-    "crosscheck_m": null
+    "source": "osm-address-point",
+    "ref": "way/1001",
+    "crosscheck_m": 4.2
   },
-  "105 Lantern Loop, Fableton, FS": {
+  "702 Storybook Square, Fableton, FS": {
     "lat": 10.02,
     "lng": 20.02,
-    "source": "synthetic-parcel",
-    "ref": "synthetic/ref/03",
+    "source": "nominatim-house",
+    "ref": "way/1002",
     "crosscheck_m": null
   },
-  "106 Lantern Loop, Fableton, FS": {
+  "703 Storybook Square, Fableton, FS": {
     "lat": 10.03,
     "lng": 20.03,
-    "source": "synthetic-parcel",
-    "ref": "synthetic/ref/04",
+    "source": "nominatim-house",
+    "ref": "way/1003",
     "crosscheck_m": null
   },
   "107 Lantern Loop, Fableton, FS": {
     "lat": 10.04,
     "lng": 20.04,
-    "source": "synthetic-parcel",
-    "ref": "synthetic/ref/05",
-    "crosscheck_m": 4.2
+    "source": "nominatim-house",
+    "ref": "way/1004",
+    "crosscheck_m": null
   },
   "108 Lantern Loop, Fableton, FS": {
     "lat": 10.05,
     "lng": 20.05,
-    "source": "synthetic-parcel",
-    "ref": "synthetic/ref/06",
-    "crosscheck_m": null
+    "source": "osm-address-point",
+    "ref": "way/1005",
+    "crosscheck_m": 4.2
   },
   "109 Lantern Loop, Fableton, FS": {
     "lat": 10.06,
     "lng": 20.06,
-    "source": "synthetic-parcel",
-    "ref": "synthetic/ref/07",
-    "crosscheck_m": null
+    "source": "osm-address-point",
+    "ref": "way/1006",
+    "crosscheck_m": 4.2
   },
   "110 Lantern Loop, Fableton, FS": {
     "lat": 10.07,
     "lng": 20.07,
-    "source": "synthetic-parcel",
-    "ref": "synthetic/ref/08",
-    "crosscheck_m": null
+    "source": "osm-address-point",
+    "ref": "way/1007",
+    "crosscheck_m": 4.2
   },
   "111 Lantern Loop, Fableton, FS": {
     "lat": 10.08,
     "lng": 20.08,
-    "source": "synthetic-parcel",
-    "ref": "synthetic/ref/09",
+    "source": "osm-address-point",
+    "ref": "way/1008",
     "crosscheck_m": 4.2
   },
   "112 Lantern Loop, Fableton, FS": {
     "lat": 10.09,
     "lng": 20.09,
-    "source": "synthetic-parcel",
-    "ref": "synthetic/ref/10",
-    "crosscheck_m": null
+    "source": "osm-address-point",
+    "ref": "way/1009",
+    "crosscheck_m": 4.2
   },
   "113 Lantern Loop, Fableton, FS": {
     "lat": 10.1,
     "lng": 20.1,
-    "source": "synthetic-parcel",
-    "ref": "synthetic/ref/11",
-    "crosscheck_m": null
+    "source": "osm-address-point",
+    "ref": "way/1010",
+    "crosscheck_m": 4.2
   },
   "114 Lantern Loop, Fableton, FS": {
     "lat": 10.11,
     "lng": 20.11,
-    "source": "synthetic-parcel",
-    "ref": "synthetic/ref/12",
-    "crosscheck_m": null
+    "source": "osm-address-point",
+    "ref": "way/1011",
+    "crosscheck_m": 4.2
   },
   "115 Lantern Loop, Fableton, FS": {
     "lat": 10.12,
     "lng": 20.12,
-    "source": "synthetic-parcel",
-    "ref": "synthetic/ref/13",
+    "source": "osm-address-point",
+    "ref": "way/1012",
     "crosscheck_m": 4.2
   },
   "116 Lantern Loop, Fableton, FS": {
     "lat": 10.13,
     "lng": 20.13,
-    "source": "synthetic-parcel",
-    "ref": "synthetic/ref/14",
-    "crosscheck_m": null
+    "source": "osm-address-point",
+    "ref": "way/1013",
+    "crosscheck_m": 4.2
   },
   "117 Lantern Loop, Fableton, FS": {
     "lat": 10.14,
     "lng": 20.14,
-    "source": "synthetic-parcel",
-    "ref": "synthetic/ref/15",
-    "crosscheck_m": null
+    "source": "osm-address-point",
+    "ref": "way/1014",
+    "crosscheck_m": 4.2
   },
   "118 Lantern Loop, Fableton, FS": {
     "lat": 10.15,
     "lng": 20.15,
-    "source": "synthetic-parcel",
-    "ref": "synthetic/ref/16",
-    "crosscheck_m": null
+    "source": "osm-address-point",
+    "ref": "way/1015",
+    "crosscheck_m": 4.2
   },
   "119 Lantern Loop, Fableton, FS": {
     "lat": 10.16,
     "lng": 20.16,
-    "source": "synthetic-parcel",
-    "ref": "synthetic/ref/17",
+    "source": "osm-address-point",
+    "ref": "way/1016",
     "crosscheck_m": 4.2
   },
   "120 Lantern Loop, Fableton, FS": {
     "lat": 10.17,
     "lng": 20.17,
-    "source": "synthetic-parcel",
-    "ref": "synthetic/ref/18",
-    "crosscheck_m": null
+    "source": "osm-address-point",
+    "ref": "way/1017",
+    "crosscheck_m": 4.2
   },
   "121 Lantern Loop, Fableton, FS": {
     "lat": 10.18,
     "lng": 20.18,
-    "source": "synthetic-parcel",
-    "ref": "synthetic/ref/19",
-    "crosscheck_m": null
+    "source": "osm-address-point",
+    "ref": "way/1018",
+    "crosscheck_m": 4.2
   },
   "122 Lantern Loop, Fableton, FS": {
     "lat": 10.19,
     "lng": 20.19,
-    "source": "synthetic-parcel",
-    "ref": "synthetic/ref/20",
-    "crosscheck_m": null
+    "source": "osm-address-point",
+    "ref": "way/1019",
+    "crosscheck_m": 4.2
   },
   "901 Moonbeam Mews, Fableton, FS": {
     "lat": 10.2,
     "lng": 20.2,
-    "source": "synthetic-parcel",
-    "ref": "synthetic/ref/21",
+    "source": "osm-address-point",
+    "ref": "way/1020",
     "crosscheck_m": 4.2
   },
   "902 Moonbeam Mews, Fableton, FS": {
     "lat": 10.21,
     "lng": 20.21,
-    "source": "synthetic-parcel",
-    "ref": "synthetic/ref/22",
-    "crosscheck_m": null
+    "source": "us-census-unimproved",
+    "ref": "way/1021",
+    "crosscheck_m": 4.2
+  },
+  "123 Lantern Loop, Fableton, FS": {
+    "lat": 10.22,
+    "lng": 20.22,
+    "source": "osm-address-point",
+    "ref": "way/1022",
+    "crosscheck_m": 4.2
   }
 }

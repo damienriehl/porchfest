@@ -63,22 +63,50 @@ The real artifact's display date omits its year, so the fidelity run requires
 `--event-year 2026` (or `PORCHFEST_GOAL1_EVENT_YEAR=2026`). The importer never
 infers that year from the current date or host timezone.
 
-The plan's expected fidelity summary is:
+The current artifact's expected fidelity summary is:
 
-- `summary.slateVenues`: 22
-- `summary.approvedActEntries`: 26
+- slate venues: 22
+- approved act entries: 26 (20 canonical acts and 6 placeholders)
 - host supersessions: 2
 - performer supersessions: 1
 - placeholder acts: 6
 - placeholder venues: 2
-- holds: 1
-- geocache hits: 22
+- holds: 0
+- imported coordinates: 20
+- coordinate review queue: 3, all `nominatim-house` entries with
+  `cross-check-missing`
+- reach-via warnings: 0
+- warnings: exactly 1 — `Canonical venue has no geocache entry` for the
+  unmatched venue, which was never geocoded because it had no assignment
 
 The raw physical-row counts are intentionally larger than 22/26: superseded
 submissions remain as rows so both identities resolve to the canonical record,
 placeholder rows remain as history, and an approved act that continues into the
-next adjacent slot has one assignment row per occupied slot. Do not delete those
-rows to make the raw table totals resemble the fidelity summary.
+next adjacent slot has one assignment row per occupied slot. A canceled
+assignment is created for report and import-key history, then `unassignSlot`
+removes its current row while cancellation annotations remain and the act is
+marked withdrawn. Do not discard that history to make the raw totals resemble
+the fidelity summary.
+
+The current 2026 artifact carries no act-side hold: no slot has
+`held_for_virtual_performer` or a slot-level `id_for_fallback`, so `holds: 0` is
+the clean result. The importer still supports that older/renderable shape, and
+the synthetic fixture keeps it covered. An `id_for_fallback` on an
+`unmatched_venues` entry is an ID override, not a hold.
+
+The three `nominatim-house` coordinates intentionally remain in review because
+their `crosscheck_m` values are null. That `needs-review` /
+`cross-check-missing` result is the KTD11 fail-closed path, not an import warning.
+Imported points with a malformed or missing element reference enter the same
+review queue as `missing-ref`; an unknown source label enters it as `imprecise`.
+The `refused` code remains reserved for the live-provider outcome where no point
+was returned, which is stored as rejected rather than as reviewable point
+evidence.
+Likewise, deliberately open slots and canceled assignment history do not produce
+warnings. A clean fidelity report has exactly the one expected unmatched-venue
+warning above, not an empty `warnings` array. Stop for any reach-via warning or
+additional warning, including an unknown geocache label or another canonical
+venue without a geocache entry.
 
 If any fidelity number differs, stop before the real import. Regenerate and
 validate the Goal-1 artifacts, inspect the report's warnings and skipped counts,
@@ -103,14 +131,17 @@ proof of idempotence.
 
 Goal-1 prose appears as ordinary organizer annotations, readable through the
 same core annotation reader used by admin surfaces. Prefixes make the source
-legible: `Basis:`, `Chase:`, `Email note:`, `Address check:`, `Override`, and
-`Contact sourced from 2025`. Virtual-record and supersession notes are preserved
-there too. A withdrawn virtual venue is retained with withdrawn status and a
-withdrawal annotation, so its history remains inspectable. Where the source
-names an additional recipient but the current schema has no recipient edge, the
-importer creates the contact and records the intended recipient on the venue as
-an annotation. These annotations are private organizer data and never enter the
-public map payload.
+legible: `Basis:`, `Chase:`, `Email note:`, `Address check:`, `Band check:`,
+`Override`, and `Contact sourced from 2025`. Virtual-record, cancellation, and
+supersession notes are preserved there too. A withdrawn venue is retained with
+withdrawn status and a dated withdrawal annotation, so its history remains
+inspectable. When `map_address` differs from the submitted host-form address,
+the map address becomes the venue address and the submitted address is retained
+privately with a `[host-form address]` prefix and matching annotation. Where the
+source names an additional recipient but the current schema has no recipient
+edge, the importer creates the contact and records the intended recipient on the
+venue as an annotation. These annotations are private organizer data and never
+enter the public map payload.
 
 ## Retention
 
