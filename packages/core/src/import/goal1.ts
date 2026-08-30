@@ -1542,9 +1542,17 @@ function importCoordinates(state: ImportState, geocache: JsonObject): void {
     const coordinate = object(rawCoordinate, `geocache entry ${address}`);
     const provider = requiredString(coordinate.source, "geocache source");
     const providerKind = goal1ProviderKind(provider);
-    const ref = requiredString(coordinate.ref, "geocache ref");
-    if (!/^[A-Za-z]\/\d+$/.test(ref)) {
-      throw new Error("Geocache ref must use <letter>/<digits>.");
+    const rawRef = coordinate.ref;
+    const ref = typeof rawRef === "string" ? rawRef : "";
+    const validRef = /^(node|way|relation)\/\d+$/.test(ref);
+    if (!validRef) {
+      const warningRef =
+        typeof rawRef === "string" && rawRef.length > 0
+          ? rawRef
+          : (JSON.stringify(rawRef) ?? "<missing>");
+      state.report.warnings.push(
+        `Malformed geocache ref requires review: ${warningRef}`,
+      );
     }
     if (providerKind.warning) state.report.warnings.push(providerKind.warning);
     const normalizedAddress = normalizeVenueAddress(address);
@@ -1569,7 +1577,9 @@ function importCoordinates(state: ImportState, geocache: JsonObject): void {
         ),
         precision: providerKind.precision,
         interpolated: providerKind.interpolated,
-        forcedRejectionCode: providerKind.forcedRejectionCode,
+        forcedRejectionCode: validRef
+          ? providerKind.forcedRejectionCode
+          : "refused",
       });
       const stored = imported.coordinate;
       const status =

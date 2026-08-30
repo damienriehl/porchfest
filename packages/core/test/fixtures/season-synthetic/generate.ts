@@ -363,7 +363,7 @@ export function generateSeasonFixture(outputDirectory = here): void {
             : index >= 2 && index <= 4
               ? "nominatim-house"
               : "osm-address-point",
-        ref: `${index % 2 === 0 ? "n" : "w"}/${1000 + index}`,
+        ref: `way/${1000 + index}`,
         crosscheck_m: index >= 2 && index <= 4 ? null : 4.2,
       },
     ]),

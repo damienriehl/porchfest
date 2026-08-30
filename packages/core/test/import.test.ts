@@ -1151,7 +1151,7 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
         ({ source, provider, ref }) =>
           source === "geocoded" &&
           ["osm-address-point", "nominatim-house"].includes(provider) &&
-          /^[nw]\/\d+$/.test(ref ?? ""),
+          /^way\/\d+$/.test(ref ?? ""),
       ),
     ).toBe(true);
     expect(
@@ -1201,21 +1201,76 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
     }
   });
 
-  it("R29: malformed geocache refs fail closed and roll back", async () => {
+  it("R29: OSM element refs import", async () => {
+    const temporary = await copyFixture("porchfest-osm-geocache-ref-");
+    try {
+      const path = join(temporary, fixtureArtifactFiles.geocache);
+      const geocache = JSON.parse(await readFile(path, "utf8"));
+      const addresses = Object.keys(geocache).slice(5, 8);
+      for (const [index, kind] of ["node", "way", "relation"].entries()) {
+        geocache[addresses[index]!].ref = `${kind}/${123 + index}`;
+      }
+      await writeFile(path, `${JSON.stringify(geocache, null, 2)}\n`);
+
+      const report = importGoal1Season(core, {
+        ...importOptions,
+        artifactsDirectory: temporary,
+      });
+      const hits = new Map(
+        report.geocache.hits.map((hit) => [hit.address, hit]),
+      );
+
+      for (const address of addresses) {
+        expect(hits.get(address)).toMatchObject({
+          reviewStatus: "verified",
+          rejectionCode: null,
+        });
+      }
+      expect(report.warnings).toEqual([]);
+    } finally {
+      await rm(temporary, { recursive: true, force: true });
+    }
+  });
+
+  it("R29: malformed geocache refs enter review with warnings", async () => {
     const temporary = await copyFixture("porchfest-malformed-geocache-ref-");
     try {
       const path = join(temporary, fixtureArtifactFiles.geocache);
       const geocache = JSON.parse(await readFile(path, "utf8"));
-      geocache[Object.keys(geocache)[0]!].ref = "node/12345";
+      const addresses = Object.keys(geocache).slice(5, 11);
+      geocache[addresses[0]!].ref = "n/123";
+      geocache[addresses[1]!].ref = "way/abc";
+      delete geocache[addresses[2]!].ref;
+      geocache[addresses[3]!].ref = 123;
+      geocache[addresses[4]!].ref = "";
+      geocache[addresses[5]!].ref = " way/123 ";
       await writeFile(path, `${JSON.stringify(geocache, null, 2)}\n`);
 
-      expect(() =>
-        importGoal1Season(core, {
-          ...importOptions,
-          artifactsDirectory: temporary,
-        }),
-      ).toThrow("Geocache ref must use <letter>/<digits>.");
-      expect(database.db.select().from(seasons).all()).toEqual([]);
+      const report = importGoal1Season(core, {
+        ...importOptions,
+        artifactsDirectory: temporary,
+      });
+      const hits = new Map(
+        report.geocache.hits.map((hit) => [hit.address, hit]),
+      );
+
+      for (const address of addresses) {
+        expect(hits.get(address)).toMatchObject({
+          reviewStatus: "needs-review",
+          rejectionCode: "refused",
+        });
+      }
+      expect(report.warnings).toContain(
+        "Malformed geocache ref requires review: n/123",
+      );
+      expect(report.warnings).toContain(
+        "Malformed geocache ref requires review: way/abc",
+      );
+      expect(
+        report.warnings.filter((warning) =>
+          warning.startsWith("Malformed geocache ref requires review:"),
+        ),
+      ).toHaveLength(addresses.length);
     } finally {
       await rm(temporary, { recursive: true, force: true });
     }
