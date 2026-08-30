@@ -9,6 +9,7 @@ data_volume="${compose_project}-data"
 caddy_data_volume="${compose_project}-caddy-data"
 caddy_config_volume="${compose_project}-caddy-config"
 tls_response_file=""
+archive_dir=""
 
 compose() {
   env \
@@ -85,6 +86,9 @@ assert_schema_ready() {
 cleanup() {
   if [[ -n "$tls_response_file" ]]; then
     rm -f -- "$tls_response_file"
+  fi
+  if [[ -n "$archive_dir" ]]; then
+    rm -rf -- "$archive_dir"
   fi
   docker rm -fv "$container" >/dev/null 2>&1 || true
   compose down --volumes --remove-orphans >/dev/null 2>&1 || true
@@ -241,3 +245,15 @@ if ((tls_curl_status != 0)) || \
 fi
 
 echo "OK: container migrates an empty data volume, contains all workspaces, and serves TLS health"
+
+archive_dir="$(mktemp -d)"
+export PORCHFEST_COMPOSE_PROJECT="$compose_project"
+export PORCHFEST_APP_IMAGE="$image"
+export PORCHFEST_DATA_VOLUME="$data_volume"
+export PORCHFEST_CADDY_DATA_VOLUME="$caddy_data_volume"
+export PORCHFEST_CADDY_CONFIG_VOLUME="$caddy_config_volume"
+export PORCHFEST_ARCHIVE_DIR="$archive_dir"
+export PUBLIC_BASE_URL=
+bash scripts/restore-rehearsal.sh
+rm -rf -- "$archive_dir"
+archive_dir=""
