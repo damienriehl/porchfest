@@ -491,6 +491,37 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
     }
   });
 
+  it("a previously imported placeholder stays found when its reach no longer resolves", async () => {
+    const temporary = await copyFixture("porchfest-virtual-found-rerun-");
+    try {
+      const path = join(temporary, fixtureArtifactFiles.slate);
+      const matches = JSON.parse(await readFile(path, "utf8"));
+      const options = { ...importOptions, artifactsDirectory: temporary };
+      const first = importGoal1Season(core, options);
+      const original = first.placeholderActs.find(
+        ({ virtualPerformerKey }) => virtualPerformerKey === "virtual-act-2",
+      )!;
+
+      matches.venues[2].slots["7-8"] = { open: true };
+      await writeFile(path, `${JSON.stringify(matches, null, 2)}\n`);
+      const second = importGoal1Season(core, options);
+
+      expect(second.placeholderActs).toContainEqual(
+        expect.objectContaining({
+          virtualPerformerKey: "virtual-act-2",
+          actId: original.actId,
+          status: "found",
+        }),
+      );
+      expect(second.records.act.skipped).toBe(0);
+      expect(second.warnings).not.toContain(
+        "Virtual performer reach-via did not resolve: virtual-act-2",
+      );
+    } finally {
+      await rm(temporary, { recursive: true, force: true });
+    }
+  });
+
   it("a chase key in two venues uses the first exact whole-token match and warns", async () => {
     const temporary = await copyFixture("porchfest-virtual-chase-ambiguous-");
     try {

@@ -617,6 +617,26 @@ function importVirtualActs(state: ImportState, matches: JsonObject): void {
   );
   for (const [virtualKey, rawVirtual] of entries(matches.virtual_performers)) {
     const virtual = object(rawVirtual, `virtual performer ${virtualKey}`);
+    const found = findImportKey(state, SOURCE.virtualAct, virtualKey);
+    if (found !== null) {
+      const act = state.core.seasons.getAct(found.recordId);
+      state.virtualActs.set(virtualKey, act);
+      increment(state.report, "act", "found");
+      state.report.placeholderActs.push({
+        virtualPerformerKey: virtualKey,
+        actId: act.id,
+        reachVia: classifyFoundVirtualReach(
+          virtualKey,
+          optionalString(virtual.reach_via),
+          matchVenues,
+        ),
+        status: "found",
+      });
+      const note = optionalString(virtual.note);
+      if (note)
+        addAnnotation(state, "act", act.id, `virtual-act:${virtualKey}`, note);
+      continue;
+    }
     const reachVia = requiredString(
       virtual.reach_via,
       "virtual performer reach_via",
@@ -660,39 +680,30 @@ function importVirtualActs(state: ImportState, matches: JsonObject): void {
       increment(state.report, "act", "skipped");
       continue;
     }
-    const found = findImportKey(state, SOURCE.virtualAct, virtualKey);
-    let act: Act;
-    let status: ImportPlaceholderAct["status"];
-    if (found !== null) {
-      act = state.core.seasons.getAct(found.recordId);
-      status = "found";
-    } else {
-      act = state.core.seasons.createPlaceholderAct({
-        seasonId: state.season.id,
-        reach: { reachViaContactId: resolution.contact.id },
-        act: {
-          name: requiredString(
-            virtual.display_name,
-            "virtual performer display_name",
-          ),
-          notes: null,
-        },
-      });
-      bindImportKey(state, {
-        source: SOURCE.virtualAct,
-        naturalKey: virtualKey,
-        recordType: "act",
-        recordId: act.id,
-      });
-      status = "created";
-    }
+    const act = state.core.seasons.createPlaceholderAct({
+      seasonId: state.season.id,
+      reach: { reachViaContactId: resolution.contact.id },
+      act: {
+        name: requiredString(
+          virtual.display_name,
+          "virtual performer display_name",
+        ),
+        notes: null,
+      },
+    });
+    bindImportKey(state, {
+      source: SOURCE.virtualAct,
+      naturalKey: virtualKey,
+      recordType: "act",
+      recordId: act.id,
+    });
     state.virtualActs.set(virtualKey, act);
-    increment(state.report, "act", status);
+    increment(state.report, "act", "created");
     state.report.placeholderActs.push({
       virtualPerformerKey: virtualKey,
       actId: act.id,
       reachVia: resolution.reachVia,
-      status,
+      status: "created",
     });
     const note = optionalString(virtual.note);
     if (note)
@@ -1791,6 +1802,31 @@ interface VirtualActReachResolution {
   readonly reachVia: ImportPlaceholderReachVia;
 }
 
+function classifyFoundVirtualReach(
+  virtualKey: string,
+  reachVia: string | null,
+  venues: readonly JsonObject[],
+): ImportPlaceholderReachVia {
+  if (reachVia === "manual_contact") return "manual_contact";
+  if (reachVia !== "host") return "timestamp";
+  const slotNamed = venues.some((entry) =>
+    Object.values(objectOrEmpty(entry.slots)).some((rawSlot) => {
+      const slot = object(rawSlot, "virtual performer slot");
+      return (
+        slot.virtual_performer === virtualKey ||
+        slot.held_for_virtual_performer === virtualKey
+      );
+    }),
+  );
+  if (slotNamed) return "slot";
+  const keyPattern = new RegExp(`\\b${escapeRegex(virtualKey)}\\b`, "i");
+  return venues.some((entry) =>
+    stringList(entry.chase).some((chase) => keyPattern.test(chase)),
+  )
+    ? "chase"
+    : "slot";
+}
+
 function resolveVirtualActReach(
   state: ImportState,
   virtualKey: string,
@@ -1832,11 +1868,7 @@ function resolveVirtualActReach(
     if (contact) return { contact, reachVia: "chase" };
   }
 
-  const timestampContact =
-    state.hostContacts.get(reachVia) ?? state.performerContacts.get(reachVia);
-  return timestampContact
-    ? { contact: timestampContact, reachVia: "timestamp" }
-    : null;
+  return null;
 }
 
 function resolveVenueEntryContact(
