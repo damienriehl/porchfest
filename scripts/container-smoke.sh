@@ -108,6 +108,9 @@ if [[ "$compose_project" == "porchfest-reference" || \
   exit 1
 fi
 
+bash scripts/deploy-common.test.sh
+bash scripts/deploy-probe.test.sh
+
 docker build -t "$image" .
 
 # No --env or --env-file flags: this proves the image's unconfigured boot path.
