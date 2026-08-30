@@ -1191,8 +1191,7 @@ function applySlotCancellations(state: ImportState, matches: JsonObject): void {
       cancellations: {
         entryId: string;
         slotLabel: string;
-        on: string;
-        reason: string;
+        note: string;
         propagatedFrom?: string;
       }[];
     }
@@ -1217,15 +1216,25 @@ function applySlotCancellations(state: ImportState, matches: JsonObject): void {
         `${entryId} ${slotLabel} slot`,
       );
       if (!("canceled" in configuration)) continue;
-      const cancellation = object(
-        configuration.canceled,
-        `${entryId} ${slotLabel} cancellation`,
-      );
-      const on = requiredIsoDate(cancellation.on, "Slot cancellation on");
-      const reason = requiredString(
-        cancellation.reason,
-        "slot cancellation reason",
-      );
+      if (configuration.canceled === false) continue;
+      let note: string;
+      if (configuration.canceled === true) {
+        note = "Canceled (no date recorded)";
+        state.report.warnings.push(
+          `Boolean cancellation has no date or reason: ${entryId} ${slotLabel}`,
+        );
+      } else {
+        const cancellation = object(
+          configuration.canceled,
+          `${entryId} ${slotLabel} cancellation`,
+        );
+        const on = requiredIsoDate(cancellation.on, "Slot cancellation on");
+        const reason = requiredString(
+          cancellation.reason,
+          "slot cancellation reason",
+        );
+        note = `Canceled on ${on}: ${reason}`;
+      }
       const slot = slots[index];
       if (!slot) continue;
       const assignment = assignmentsBySlot.get(slot.id);
@@ -1245,7 +1254,7 @@ function applySlotCancellations(state: ImportState, matches: JsonObject): void {
         act,
         cancellations: [],
       };
-      grouped.cancellations.push({ entryId, slotLabel, on, reason });
+      grouped.cancellations.push({ entryId, slotLabel, note });
       const partnerLabels = new Set<string>();
       const sourceLabel = optionalString(configuration.same_as);
       if (sourceLabel) partnerLabels.add(sourceLabel);
@@ -1261,8 +1270,7 @@ function applySlotCancellations(state: ImportState, matches: JsonObject): void {
         grouped.cancellations.push({
           entryId,
           slotLabel: partnerLabel,
-          on,
-          reason,
+          note,
           propagatedFrom: slotLabel,
         });
       }
@@ -1303,7 +1311,7 @@ function applySlotCancellations(state: ImportState, matches: JsonObject): void {
         "act",
         importedAct.id,
         `cancellation:${cancellation.entryId}:${cancellation.slotLabel}`,
-        `Canceled on ${cancellation.on}: ${cancellation.reason}${
+        `${cancellation.note}${
           cancellation.propagatedFrom
             ? ` (same_as partner of ${cancellation.propagatedFrom})`
             : ""
@@ -1417,9 +1425,7 @@ function resolveConfiguredSlotAct(
   }
   const sameAs = optionalString(configuration.same_as);
   if (!sameAs) return null;
-  if (seenLabels.has(sameAs)) {
-    throw new Error(`Slot same_as cycle includes ${sameAs}.`);
-  }
+  if (seenLabels.has(sameAs)) return null;
   seenLabels.add(sameAs);
   const source = object(configuredSlots[sameAs], `${sameAs} source slot`);
   return resolveConfiguredSlotAct(state, source, configuredSlots, seenLabels);

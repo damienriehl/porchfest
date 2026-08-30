@@ -952,7 +952,7 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
     }
   });
 
-  it("a canceled same_as cycle fails explicitly and rolls back", async () => {
+  it("a canceled same_as cycle warns and skips in both assignment passes", async () => {
     const temporary = await copyFixture("porchfest-canceled-cycle-");
     try {
       const path = join(temporary, fixtureArtifactFiles.slate);
@@ -968,13 +968,53 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
       venue.slots["7-8"] = { same_as: "6-7" };
       await writeFile(path, `${JSON.stringify(matches, null, 2)}\n`);
 
-      expect(() =>
-        importGoal1Season(core, {
-          ...importOptions,
-          artifactsDirectory: temporary,
-        }),
-      ).toThrow("Slot same_as cycle includes 7-8.");
-      expect(database.db.select().from(seasons).all()).toEqual([]);
+      const report = importGoal1Season(core, {
+        ...importOptions,
+        artifactsDirectory: temporary,
+      });
+
+      expect(report.warnings).toContain(
+        `Continuation assignment did not resolve: ${venue.id} 6-7 -> 7-8`,
+      );
+      expect(report.warnings).toContain(
+        `Continuation assignment did not resolve: ${venue.id} 7-8 -> 6-7`,
+      );
+      expect(report.warnings).toContain(
+        `Canceled slot assignment did not resolve: ${venue.id} 6-7`,
+      );
+      expect(database.db.select().from(seasons).all()).toHaveLength(1);
+    } finally {
+      await rm(temporary, { recursive: true, force: true });
+    }
+  });
+
+  it("boolean canceled slots warn and annotate the missing date", async () => {
+    const temporary = await copyFixture("porchfest-boolean-cancellation-");
+    try {
+      const path = join(temporary, fixtureArtifactFiles.slate);
+      const matches = JSON.parse(await readFile(path, "utf8"));
+      const venue = matches.venues[4];
+      venue.slots["6-7"].canceled = true;
+      await writeFile(path, `${JSON.stringify(matches, null, 2)}\n`);
+
+      const report = importGoal1Season(core, {
+        ...importOptions,
+        artifactsDirectory: temporary,
+      });
+      const actId = core.importKeys.find(
+        report.seasonId,
+        "goal1:performer-act",
+        venue.slots["6-7"].performer_ts,
+      )!.recordId;
+      const notes = core.annotations
+        .listAnnotations(report.seasonId, "act", actId)
+        .map(({ note }) => note);
+
+      expect(notes).toContain("Canceled (no date recorded)");
+      expect(report.warnings).toContain(
+        `Boolean cancellation has no date or reason: ${venue.id} 6-7`,
+      );
+      expect(core.seasons.getAct(actId).status).toBe("withdrawn");
     } finally {
       await rm(temporary, { recursive: true, force: true });
     }
