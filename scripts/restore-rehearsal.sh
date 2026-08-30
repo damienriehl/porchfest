@@ -54,7 +54,6 @@ docker exec "$app_container" node -e '
   db.close();
 '
 
-export PORCHFEST_SQLITE_IMAGE="${PORCHFEST_SQLITE_IMAGE:-keinos/sqlite3:3.50.4}"
 export PORCHFEST_UTILITY_IMAGE="${PORCHFEST_UTILITY_IMAGE:-alpine:3.22}"
 export PORCHFEST_ARCHIVE_KEEP=2
 export PORCHFEST_HEALTH_ATTEMPTS=45

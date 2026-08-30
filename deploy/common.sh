@@ -43,7 +43,7 @@ load_dotenv_if_present() {
         PORCHFEST_DEPLOY_HOST | PORCHFEST_DEPLOY_OFFSITE | PORCHFEST_DEPLOY_ORGANIZER_SELECTOR | \
         PORCHFEST_EXTERNAL_CONNECT_TIMEOUT | PORCHFEST_EXTERNAL_MAX_TIME | PORCHFEST_HEALTH_ATTEMPTS | \
         PORCHFEST_RESTORE_IDENTITY | PORCHFEST_RESTORE_PROJECT | PORCHFEST_RESTORE_VOLUME | \
-        PORCHFEST_SQLITE_IMAGE | PORCHFEST_UTILITY_IMAGE)
+        PORCHFEST_UTILITY_IMAGE)
         ;;
       *) continue ;;
     esac
@@ -80,7 +80,6 @@ init_deploy_config() {
   archive_dir="${PORCHFEST_ARCHIVE_DIR:-/var/backups/porchfest}"
   archive_keep="${PORCHFEST_ARCHIVE_KEEP:-7}"
   backup_keep="${PORCHFEST_BACKUP_KEEP:-30}"
-  sqlite_image="${PORCHFEST_SQLITE_IMAGE:-keinos/sqlite3:3.50.4}"
   utility_image="${PORCHFEST_UTILITY_IMAGE:-alpine:3.22}"
 
   [[ "$archive_keep" =~ ^[1-9][0-9]*$ ]] || die "PORCHFEST_ARCHIVE_KEEP must be a positive integer"
@@ -182,9 +181,25 @@ volume_sqlite() {
   local sql="$1"
   docker run --rm --read-only \
     --volume "$data_volume:/data:ro" \
-    --entrypoint sqlite3 \
-    "$sqlite_image" \
-    -batch -noheader -readonly /data/porchfest.db "$sql"
+    --env PORCHFEST_SQL="$sql" \
+    --entrypoint node \
+    "$app_image" \
+    -e '
+      const Database = require("better-sqlite3");
+      const database = new Database("/data/porchfest.db", {
+        readonly: true,
+        fileMustExist: true,
+      });
+      try {
+        for (const row of database.prepare(process.env.PORCHFEST_SQL).all()) {
+          const values = Object.values(row);
+          if (values.length !== 1) process.exit(2);
+          process.stdout.write(`${values[0]}\n`);
+        }
+      } finally {
+        database.close();
+      }
+    '
 }
 
 volume_integrity() {

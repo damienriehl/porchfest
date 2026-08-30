@@ -6,9 +6,10 @@ remote, age identity, IP, or credentials.
 
 ## Host and instance preparation
 
-Install Docker with Compose v2, `age`, `rclone`, `sha256sum`, and `tar`. The deploy scripts run
-SQLite in a throwaway Alpine-based SQLite container; the host does not need `sqlite3`. The source
-machine that ships releases also needs Git, SSH, rsync, and tar.
+Install Docker with Compose v2, `age`, `rclone`, `sha256sum`, and `tar`. The deploy scripts use the
+app image's installed `better-sqlite3` for read-only integrity and count checks; the host does not
+need `sqlite3` or a third-party SQLite image. The source machine that ships releases also needs Git,
+SSH, rsync, and tar.
 
 Create the target directory, its deployment-root sentinel, and a backup directory outside it. Give
 the deploy user ownership. The sentinel fences the later `rsync --delete` to this dedicated tree:
