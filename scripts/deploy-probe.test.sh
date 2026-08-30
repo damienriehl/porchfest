@@ -66,7 +66,11 @@ curl() {
     : >"$dump_header"
     printf '%s\n' '<form><input name="_csrf" value="sign-in-csrf"></form>'
   elif [[ "$url" == 'https://porchfest.example.test/admin/sign-in' ]]; then
-    printf 'HTTP/2 303\r\nSet-Cookie: porchfest_session=session-token; Path=/; Secure; HttpOnly; SameSite=Lax\r\n\r\n' >"$dump_header"
+    if [[ "${FAKE_BAD_COOKIE_FLAGS:-0}" == 1 ]]; then
+      printf 'HTTP/2 303\r\nSet-Cookie: porchfest_session=session-token; Path=/; Secure; SameSite=Lax\r\n\r\n' >"$dump_header"
+    else
+      printf 'HTTP/2 303\r\nSet-Cookie: porchfest_session=session-token; Path=/; Secure; HttpOnly; SameSite=Lax\r\n\r\n' >"$dump_header"
+    fi
   elif [[ "$url" == 'https://porchfest.example.test/admin' ]]; then
     attempts=0
     [[ ! -f "$fake_state" ]] || attempts="$(<"$fake_state")"
@@ -78,6 +82,7 @@ curl() {
     printf '%s\n' '<input name="_csrf" value="sign-out-csrf">'
   elif [[ "$url" == 'https://porchfest.example.test/admin/sign-out' ]]; then
     : >"$signout_marker"
+    printf '%s' "${FAKE_SIGNOUT_STATUS:-303}"
   else
     return 93
   fi
@@ -106,6 +111,33 @@ if find "$temp_dir" -maxdepth 1 -type f -name 'tmp.*' | grep -q .; then
   fail "probe EXIT cleanup left temporary files behind"
 fi
 
+printf '%s\n' 1 >"$fake_state"
+rm -f -- "$signout_marker"
+bad_cookie_output="$temp_dir/bad-cookie-output.txt"
+if (
+  trap - EXIT
+  export FAKE_BAD_COOKIE_FLAGS=1
+  external_checks
+) >"$bad_cookie_output" 2>&1; then
+  fail "probe accepted a session cookie with a missing flag"
+fi
+[[ -f "$signout_marker" ]] || fail "bad-cookie failure did not sign out the temporary session"
+grep -Fq 'probe cleanup: signed out the temporary organizer session' "$bad_cookie_output" \
+  || fail "bad-cookie cleanup did not report the sign-out"
+
+printf '%s\n' 1 >"$fake_state"
+rm -f -- "$signout_marker"
+signout_error_output="$temp_dir/signout-error-output.txt"
+if (
+  trap - EXIT
+  export FAKE_SIGNOUT_STATUS=500
+  external_checks
+) >"$signout_error_output" 2>&1; then
+  fail "probe treated an HTTP 500 sign-out as success"
+fi
+grep -Fq 'ERROR: probe cleanup could not sign out the temporary organizer session' "$signout_error_output" \
+  || fail "HTTP-error sign-out cleanup did not report the active session"
+
 unset PORCHFEST_DEPLOY_PROBE_ORGANIZER
 skip_file="$temp_dir/skip-output.txt"
 (
@@ -128,4 +160,4 @@ fi
 grep -Fq 'Organizer "missing" was not found.' "$link_output" \
   || fail "organizer-link stderr was not surfaced"
 
-echo "OK: deploy probe normalizes origins, skips fresh installs, surfaces link errors, and signs out on failure"
+echo "OK: deploy probe normalizes origins, skips fresh installs, surfaces link errors, and signs out every established session"

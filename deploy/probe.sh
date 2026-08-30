@@ -32,7 +32,7 @@ probe_cookie_has_required_flags() {
 
 attempt_probe_sign_out() {
   ((probe_session_active)) || return 0
-  local admin_page sign_out_csrf auth_config
+  local admin_page sign_out_csrf sign_out_status auth_config
   auth_config="$probe_temp_dir/curl-config"
   printf 'silent\nshow-error\nheader = "Cookie: %s"\nurl = "%s/admin"\n' \
     "$probe_cookie" "$probe_origin" >"$auth_config"
@@ -46,8 +46,9 @@ attempt_probe_sign_out() {
     printf 'header = "Content-Type: application/x-www-form-urlencoded"\n'
     printf 'data-urlencode = "_csrf=%s"\nurl = "%s/admin/sign-out"\n' "$sign_out_csrf" "$probe_origin"
   } >"$auth_config"
-  curl --connect-timeout "$probe_connect_timeout" --max-time "$probe_max_time" \
-    --config "$auth_config" || return 1
+  sign_out_status="$(curl --connect-timeout "$probe_connect_timeout" --max-time "$probe_max_time" \
+    --write-out '%{http_code}' --config "$auth_config")" || return 1
+  [[ "$sign_out_status" == 303 ]] || return 1
   probe_session_active=0
 }
 
@@ -164,11 +165,12 @@ external_checks() {
   } >"$auth_config"
   curl "${curl_limits[@]}" --config "$auth_config"
   cookie_header="$(awk 'BEGIN{IGNORECASE=1} /^set-cookie:[[:space:]]*porchfest_session=/ {sub(/^[^:]*:[[:space:]]*/, ""); sub(/\r$/, ""); print; exit}' "$headers_file")"
+  [[ -n "$cookie_header" ]] || die "sign-in response did not set a session cookie"
+  probe_cookie="${cookie_header%%;*}"
+  probe_session_active=1
   probe_cookie_has_required_flags "$cookie_header" \
     || die "sign-in cookie is missing Secure, HttpOnly, or SameSite=Lax"
-  probe_cookie="${cookie_header%%;*}"
   probe_cookie_result="Secure,HttpOnly,SameSite=Lax"
-  probe_session_active=1
   attempt_probe_sign_out || die "could not sign out the cookie-check session"
   finish_external_probe
 }
