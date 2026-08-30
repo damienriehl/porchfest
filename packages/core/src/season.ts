@@ -325,6 +325,18 @@ export function createSeasonRepository(
     );
   }
 
+  function createManualContact(
+    input: Parameters<typeof records.createManualContact>[0],
+  ): Contact {
+    return db.transaction(
+      (tx) => {
+        assertCorrectionLegal(input.seasonId, tx);
+        return createRecordRepository(tx, options).createManualContact(input);
+      },
+      { behavior: "immediate" },
+    );
+  }
+
   function createPlaceholderAct(input: CreatePlaceholderActInput): Act {
     // Organizer-created records are corrections, not participant signups. Keep
     // the legality check and both contact/record writes in one immediate unit.
@@ -1300,7 +1312,10 @@ export function createSeasonRepository(
     slotId: number,
     expectedVersion: number,
     actId: number,
-    options: { sharedMemberOverride?: string | null } = {},
+    options: {
+      sharedMemberOverride?: string | null;
+      continuesAssignmentFromSlotId?: number;
+    } = {},
   ): Assignment {
     return db.transaction(
       (tx) => {
@@ -1390,10 +1405,17 @@ export function createSeasonRepository(
             );
           }
           const conflictingVenue = getVenue(conflictingSlot.venueId, tx);
-          throw new AssignmentConflictError(
-            "act_already_assigned",
-            `${canonicalRecord.name} are already assigned to ${conflictingVenue.title}, ${formatZonedWindow(conflictingSlot, season.timezone)}`,
-          );
+          const isAdjacentContinuation =
+            options.continuesAssignmentFromSlotId === conflictingSlot.id &&
+            conflictingSlot.venueId === slot.venueId &&
+            (conflictingSlot.endsAt.getTime() === slot.startsAt.getTime() ||
+              slot.endsAt.getTime() === conflictingSlot.startsAt.getTime());
+          if (!isAdjacentContinuation) {
+            throw new AssignmentConflictError(
+              "act_already_assigned",
+              `${canonicalRecord.name} are already assigned to ${conflictingVenue.title}, ${formatZonedWindow(conflictingSlot, season.timezone)}`,
+            );
+          }
         }
 
         const linkedCanonicalIds = new Set<number>();
@@ -1801,12 +1823,14 @@ export function createSeasonRepository(
     getSeason,
     getAct,
     getVenue,
+    getContact,
     getSlot,
     getAssignment,
     getActLink,
     setRecordStatus,
     createHostSignup,
     createPerformerSignup,
+    createManualContact,
     createPlaceholderAct,
     createPlaceholderVenue,
     updateAct,
@@ -1817,6 +1841,9 @@ export function createSeasonRepository(
     supersedeAct,
     supersedeVenue,
     supersedeContact,
+    resolveAct: records.resolveAct,
+    resolveVenue: records.resolveVenue,
+    resolveContact: records.resolveContact,
     transitionSeason,
     publishSeasonMap,
     unpublishSeasonMap,
