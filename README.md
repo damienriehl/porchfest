@@ -28,8 +28,7 @@ The shortest stranger path uses the reference Caddy topology and its local devel
 git clone https://github.com/example/porchfest.git
 cd porchfest
 cp .env.example .env
-# In .env, remove the external-proxy COMPOSE_FILE line for this local path and
-# keep PUBLIC_BASE_URL=https://localhost.
+# The copied file already leaves COMPOSE_FILE and PUBLIC_BASE_URL unset for this path.
 docker compose up --build -d
 curl --insecure https://localhost/health
 docker compose logs app
@@ -53,9 +52,9 @@ reference Caddy topology:
 
 1. Copy `.env.example` to `.env`.
 2. Replace `PUBLIC_BASE_URL` with the canonical HTTPS origin whose DNS points at the host.
-3. Either delete the `PORCHFEST_SESSION_SECRET` line (recommended, so first boot creates one in the
-   data volume) or replace its placeholder with a unique high-entropy value.
-4. Remove the external-proxy `COMPOSE_FILE` override and run `docker compose up --build -d`.
+3. Leave `PORCHFEST_SESSION_SECRET` commented (recommended, so first boot creates one in the data
+   volume) or set it to a unique high-entropy value.
+4. Keep `COMPOSE_FILE` commented for Caddy and run `docker compose up --build -d`.
 
 The application refuses to start when the configured session secret is still the public example
 placeholder. With the variable absent or empty, first boot creates a unique key at
