@@ -1006,20 +1006,15 @@ function importVenueSlate(state: ImportState, matches: JsonObject): void {
       }
       if ("same_as" in configuration) {
         const sameAs = optionalString(configuration.same_as);
-        if (!sameAs) {
-          state.report.warnings.push(
-            `Malformed same_as assignment: ${entryId} ${slotLabel}`,
+        if (sameAs) {
+          addAnnotation(
+            state,
+            "venue",
+            venueId,
+            `${entryId}:${slotLabel}:same-as`,
+            `Slot ${slotLabel}: same assignment as ${sameAs}`,
           );
-          increment(state.report, "assignment", "skipped");
-          continue;
         }
-        addAnnotation(
-          state,
-          "venue",
-          venueId,
-          `${entryId}:${slotLabel}:same-as`,
-          `Slot ${slotLabel}: same assignment as ${sameAs}`,
-        );
         continue;
       }
       const heldVirtualKey = optionalString(

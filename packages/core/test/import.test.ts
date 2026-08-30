@@ -1173,6 +1173,32 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
     }
   });
 
+  it("a malformed same_as value warns only in the continuation pass", async () => {
+    const temporary = await copyFixture("porchfest-malformed-same-as-");
+    try {
+      const path = join(temporary, fixtureArtifactFiles.slate);
+      const matches = JSON.parse(await readFile(path, "utf8"));
+      const venue = matches.venues[4];
+      venue.slots["7-8"] = { same_as: true };
+      await writeFile(path, `${JSON.stringify(matches, null, 2)}\n`);
+
+      const report = importGoal1Season(core, {
+        ...importOptions,
+        artifactsDirectory: temporary,
+      });
+
+      expect(
+        report.warnings.filter(
+          (warning) =>
+            warning === `Malformed same_as assignment: ${venue.id} 7-8`,
+        ),
+      ).toHaveLength(1);
+      expect(database.db.select().from(seasons).all()).toHaveLength(1);
+    } finally {
+      await rm(temporary, { recursive: true, force: true });
+    }
+  });
+
   it("boolean canceled slots warn and annotate the missing date", async () => {
     const temporary = await copyFixture("porchfest-boolean-cancellation-");
     try {
@@ -1200,6 +1226,46 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
         `Boolean cancellation has no date or reason: ${venue.id} 6-7`,
       );
       expect(core.seasons.getAct(actId).status).toBe("withdrawn");
+    } finally {
+      await rm(temporary, { recursive: true, force: true });
+    }
+  });
+
+  it("canceled false preserves the assignment without an annotation", async () => {
+    const temporary = await copyFixture("porchfest-false-cancellation-");
+    try {
+      const path = join(temporary, fixtureArtifactFiles.slate);
+      const matches = JSON.parse(await readFile(path, "utf8"));
+      const venue = matches.venues[4];
+      venue.slots["6-7"].canceled = false;
+      await writeFile(path, `${JSON.stringify(matches, null, 2)}\n`);
+
+      const report = importGoal1Season(core, {
+        ...importOptions,
+        artifactsDirectory: temporary,
+      });
+      const actId = core.importKeys.find(
+        report.seasonId,
+        "goal1:performer-act",
+        venue.slots["6-7"].performer_ts,
+      )!.recordId;
+      const assignmentKey = core.importKeys.find(
+        report.seasonId,
+        "goal1:assignment",
+        `host:${venue.host_ts}:6-7`,
+      );
+
+      expect(assignmentKey).not.toBeNull();
+      expect(core.seasons.getAssignment(assignmentKey!.recordId).actId).toBe(
+        actId,
+      );
+      expect(core.seasons.getAct(actId).status).not.toBe("withdrawn");
+      expect(
+        core.annotations
+          .listAnnotations(report.seasonId, "act", actId)
+          .map(({ note }) => note)
+          .some((note) => note.startsWith("Canceled")),
+      ).toBe(false);
     } finally {
       await rm(temporary, { recursive: true, force: true });
     }
