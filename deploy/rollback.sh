@@ -44,7 +44,7 @@ else
 
   matching_metadata=""
   while IFS= read -r candidate; do
-    if [[ "$(json_number "$candidate" when)" == "$previous_when" ]]; then
+    if [[ "$(json_number "$candidate" schema.when)" == "$previous_when" ]]; then
       matching_metadata="$candidate"
       break
     fi

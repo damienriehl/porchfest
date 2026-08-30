@@ -45,7 +45,7 @@ fi
 metadata="$(archive_metadata_path "$archive")"
 [[ -f "$metadata" ]] || die "archive metadata is missing: $metadata"
 archive_sha="$(verify_archive_sha "$archive")"
-archive_schema_when="$(json_number "$metadata" when)"
+archive_schema_when="$(json_number "$metadata" schema.when)"
 [[ -n "$archive_schema_when" ]] || die "archive metadata has no schema journal timestamp"
 IFS=$'\t' read -r image_schema_when image_schema_tag _image_schema_idx < <(image_schema_entry "$app_image")
 ((archive_schema_when <= image_schema_when)) || die "restore image is older than the archive schema"
@@ -81,7 +81,7 @@ assert_counts_match_json "$metadata" "$counts"
 database_schema_when="$(volume_schema_when)"
 [[ "$database_schema_when" == "$image_schema_when" ]] || die "restored database did not reach the restore image's schema journal"
 
-archive_mode="$(json_string "$metadata" mode)"
+archive_mode="$(json_string "$metadata" archive.mode)"
 printf 'restore_project=%s\n' "$restore_project"
 printf 'restore_volume=%s\n' "$restore_volume"
 printf 'archive_schema=%s\n' "$archive_schema_when"

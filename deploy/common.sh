@@ -5,6 +5,7 @@
 
 deploy_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 project_dir="$(cd -- "$deploy_dir/.." && pwd -P)"
+readonly COUNT_TABLES="seasons venues acts contacts assignments outbox_messages"
 
 die() {
   printf 'ERROR: %s\n' "$*" >&2
@@ -27,13 +28,13 @@ load_dotenv_if_present() {
   local dotenv_path="${1:-$project_dir/.env}"
   [[ -f "$dotenv_path" ]] || return 0
 
-  local line key value
+  local line key value quote
   while IFS= read -r line || [[ -n "$line" ]]; do
     line="${line%$'\r'}"
     [[ "$line" =~ ^[[:space:]]*(#.*)?$ ]] && continue
-    [[ "$line" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] \
+    [[ "$line" =~ ^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] \
       || die "unsupported .env line (expected KEY=VALUE)"
-    key="${BASH_REMATCH[1]}"
+    key="${BASH_REMATCH[2]}"
 
     case "$key" in
       PUBLIC_BASE_URL | PORCHFEST_APP_IMAGE | PORCHFEST_ARCHIVE_DIR | PORCHFEST_ARCHIVE_KEEP | \
@@ -48,13 +49,18 @@ load_dotenv_if_present() {
     esac
     [[ -z "${!key+x}" ]] || continue
 
-    value="${BASH_REMATCH[2]}"
+    value="${BASH_REMATCH[3]}"
     value="${value#"${value%%[![:space:]]*}"}"
     value="${value%"${value##*[![:space:]]}"}"
     if [[ "$value" == \"* || "$value" == \'* ]]; then
-      [[ ${#value} -ge 2 && "${value: -1}" == "${value:0:1}" ]] \
-        || die "unclosed quote for $key in .env"
-      value="${value:1:${#value}-2}"
+      quote="${value:0:1}"
+      if [[ "$quote" == '"' && "$value" =~ ^\"([^\"]*)\"[[:space:]]*(#.*)?$ ]]; then
+        value="${BASH_REMATCH[1]}"
+      elif [[ "$quote" == "'" && "$value" =~ ^\'([^\']*)\'[[:space:]]*(#.*)?$ ]]; then
+        value="${BASH_REMATCH[1]}"
+      else
+        die "unclosed quote or unsupported text after quoted value for $key in .env"
+      fi
     elif [[ "$value" =~ ^(.*[^[:space:]])[[:space:]]+#.*$ ]]; then
       value="${BASH_REMATCH[1]}"
     fi
@@ -210,15 +216,77 @@ count_value() {
   sed -n "s/^${key}=//p" <<<"$counts"
 }
 
+json_extract() {
+  local path="$1"
+  local operation="$2"
+  local key="${3:-}"
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c '
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    document = json.load(source)
+operation = sys.argv[2]
+key = sys.argv[3]
+if operation == "counts":
+    counts = document["counts"]
+    for table in ("seasons", "venues", "acts", "contacts", "assignments", "outbox_messages"):
+        value = counts[table]
+        if type(value) is not int or value < 0:
+            raise ValueError(f"invalid count: {table}")
+        print(f"{table}={value}")
+else:
+    value = document
+    for component in key.split("."):
+        value = value[component]
+    if operation == "number":
+        if type(value) is not int or value < 0:
+            raise ValueError(f"invalid non-negative integer: {key}")
+    elif operation == "string":
+        if not isinstance(value, str) or "\n" in value or "\r" in value:
+            raise ValueError(f"invalid string: {key}")
+    else:
+        raise ValueError(f"unknown operation: {operation}")
+    print(value)
+' "$path" "$operation" "$key"
+    return
+  fi
+
+  local evidence_dir evidence_name
+  evidence_dir="$(cd -- "$(dirname -- "$path")" && pwd -P)"
+  evidence_name="$(basename -- "$path")"
+  docker run --rm --read-only \
+    --volume "$evidence_dir:/evidence:ro" \
+    --entrypoint node \
+    "$app_image" \
+    -e '
+      const fs = require("node:fs");
+      const document = JSON.parse(fs.readFileSync(`/evidence/${process.argv[1]}`, "utf8"));
+      const operation = process.argv[2];
+      const key = process.argv[3];
+      if (operation === "counts") {
+        for (const table of ["seasons", "venues", "acts", "contacts", "assignments", "outbox_messages"]) {
+          const value = document.counts?.[table];
+          if (!Number.isSafeInteger(value) || value < 0) process.exit(2);
+          process.stdout.write(`${table}=${value}\n`);
+        }
+      } else {
+        let value = document;
+        for (const component of key.split(".")) value = value?.[component];
+        if (operation === "number" && (!Number.isSafeInteger(value) || value < 0)) process.exit(2);
+        if (operation === "string" && (typeof value !== "string" || /[\r\n]/.test(value))) process.exit(2);
+        if (operation !== "number" && operation !== "string") process.exit(2);
+        process.stdout.write(`${value}\n`);
+      }
+    ' "$evidence_name" "$operation" "$key"
+}
+
 counts_from_json() {
   local path="$1"
   local counts table count
-  counts="$(
-    sed -n -E \
-      's/^[[:space:]]*"(seasons|venues|acts|contacts|assignments|outbox_messages)": ([0-9]+),?$/\1=\2/p' \
-      "$path"
-  )"
-  for table in seasons venues acts contacts assignments outbox_messages; do
+  counts="$(json_extract "$path" counts)" || die "archive metadata counts are not valid JSON values"
+  for table in $COUNT_TABLES; do
     count="$(count_value "$counts" "$table")"
     [[ "$count" =~ ^[0-9]+$ ]] || die "archive metadata has no valid $table count"
   done
@@ -280,13 +348,13 @@ write_evidence_json() {
 json_number() {
   local path="$1"
   local key="$2"
-  sed -n "s/.*\"${key}\": \([0-9][0-9]*\).*/\1/p" "$path" | head -n 1
+  json_extract "$path" number "$key" || die "archive metadata has no valid $key number"
 }
 
 json_string() {
   local path="$1"
   local key="$2"
-  sed -n "s/.*\"${key}\": \"\([^\"]*\)\".*/\1/p" "$path" | head -n 1
+  json_extract "$path" string "$key" || die "archive metadata has no valid $key string"
 }
 
 assert_counts_match_json() {
@@ -294,10 +362,11 @@ assert_counts_match_json() {
   local actual="$2"
   local expected_counts table wanted got
   expected_counts="$(counts_from_json "$expected")"
-  for table in seasons venues acts contacts assignments outbox_messages; do
+  for table in $COUNT_TABLES; do
     wanted="$(count_value "$expected_counts" "$table")"
     got="$(count_value "$actual" "$table")"
-    [[ -n "$wanted" && "$wanted" == "$got" ]] || die "row count mismatch for $table (expected ${wanted:-missing}, got $got)"
+    [[ -n "$wanted" && "$wanted" == "$got" ]] \
+      || die "row count mismatch for $table (expected ${wanted:-missing}, got ${got:-missing})"
   done
 }
 
