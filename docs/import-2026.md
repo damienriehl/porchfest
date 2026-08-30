@@ -69,12 +69,15 @@ The current artifact's expected fidelity summary is:
 - approved act entries: 26 (20 canonical acts and 6 placeholders)
 - host supersessions: 2
 - performer supersessions: 1
+- placeholder acts: 6
 - placeholder venues: 2
 - holds: 0
 - imported coordinates: 20
 - coordinate review queue: 3, all `nominatim-house` entries with
   `cross-check-missing`
-- warnings: none
+- reach-via warnings: 0
+- warnings: exactly 1 — `Canonical venue has no geocache entry` for the
+  unmatched venue, which was never geocoded because it had no assignment
 
 The raw physical-row counts are intentionally larger than 22/26: superseded
 submissions remain as rows so both identities resolve to the canonical record,
@@ -95,9 +98,10 @@ The three `nominatim-house` coordinates intentionally remain in review because
 their `crosscheck_m` values are null. That `needs-review` /
 `cross-check-missing` result is the KTD11 fail-closed path, not an import warning.
 Likewise, deliberately open slots and canceled assignment history do not produce
-warnings. A clean fidelity report has an empty `warnings` array; stop for any
-warning, including an unknown geocache label, unresolved virtual-performer
-reach-via, or canonical venue without a geocache entry.
+warnings. A clean fidelity report has exactly the one expected unmatched-venue
+warning above, not an empty `warnings` array. Stop for any reach-via warning or
+additional warning, including an unknown geocache label or another canonical
+venue without a geocache entry.
 
 If any fidelity number differs, stop before the real import. Regenerate and
 validate the Goal-1 artifacts, inspect the report's warnings and skipped counts,

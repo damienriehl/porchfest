@@ -122,11 +122,22 @@ export interface ImportGeocacheHit {
   readonly rejectionCode: CoordinateRejectionCode | null;
 }
 
+export type ImportPlaceholderReachVia =
+  "slot" | "chase" | "timestamp" | "manual_contact";
+
+export interface ImportPlaceholderAct {
+  readonly virtualPerformerKey: string;
+  readonly actId: number;
+  readonly reachVia: ImportPlaceholderReachVia;
+  readonly status: "created" | "found";
+}
+
 export interface ImportReport {
   readonly seasonId: number;
   readonly records: Readonly<Record<ImportRecordType, ImportCounts>>;
   readonly supersessions: readonly ImportSupersession[];
   readonly holds: readonly ImportHold[];
+  readonly placeholderActs: readonly ImportPlaceholderAct[];
   readonly geocache: {
     readonly hits: readonly ImportGeocacheHit[];
     readonly misses: readonly string[];
@@ -177,6 +188,7 @@ interface MutableImportReport {
   records: Record<ImportRecordType, ImportCounts>;
   supersessions: ImportSupersession[];
   holds: ImportHold[];
+  placeholderActs: ImportPlaceholderAct[];
   geocache: { hits: ImportGeocacheHit[]; misses: string[] };
   summary: ImportReport["summary"];
   warnings: string[];
@@ -304,7 +316,7 @@ function importGoal1SeasonInTransaction(
   report.summary = {
     slateVenues: new Set(state.matchedVenueIds.values()).size,
     approvedActEntries: approvedActs.size + report.holds.length,
-    placeholderActs: state.virtualActs.size,
+    placeholderActs: report.placeholderActs.length,
     placeholderVenues: state.virtualVenues.size,
     unmatchedVenues: array(artifacts.matches.unmatched_venues).length,
     floatingPerformers: array(artifacts.matches.floating_performers).length,
@@ -605,16 +617,6 @@ function importVirtualActs(state: ImportState, matches: JsonObject): void {
   );
   for (const [virtualKey, rawVirtual] of entries(matches.virtual_performers)) {
     const virtual = object(rawVirtual, `virtual performer ${virtualKey}`);
-    const found = findImportKey(state, SOURCE.virtualAct, virtualKey);
-    if (found !== null) {
-      const act = state.core.seasons.getAct(found.recordId);
-      state.virtualActs.set(virtualKey, act);
-      increment(state.report, "act", "found");
-      const note = optionalString(virtual.note);
-      if (note)
-        addAnnotation(state, "act", act.id, `virtual-act:${virtualKey}`, note);
-      continue;
-    }
     const reachVia = requiredString(
       virtual.reach_via,
       "virtual performer reach_via",
@@ -627,26 +629,30 @@ function importVirtualActs(state: ImportState, matches: JsonObject): void {
           )
         : optionalString(virtual.manual_contact);
     const manual = manualKey ? state.manualContacts.get(manualKey) : null;
-    let contact = manual;
-    let reachWarningEmitted = false;
-    if (reachVia !== "manual_contact") {
-      contact = resolveVirtualActReach(
+    let resolution: VirtualActReachResolution | null;
+    if (reachVia === "manual_contact") {
+      resolution = manual
+        ? { contact: manual, reachVia: "manual_contact" }
+        : null;
+    } else {
+      resolution = resolveVirtualActReach(
         state,
         virtualKey,
         reachVia,
         matchVenues,
         matches,
       );
-      if (contact === null) {
+      if (resolution === null) {
         state.report.warnings.push(
           `Virtual performer reach-via did not resolve: ${virtualKey}`,
         );
-        reachWarningEmitted = true;
-        contact = manual;
+        resolution = manual
+          ? { contact: manual, reachVia: "manual_contact" }
+          : null;
       }
     }
-    if (!contact) {
-      if (!reachWarningEmitted) {
+    if (!resolution) {
+      if (reachVia === "manual_contact") {
         state.report.warnings.push(
           `Virtual performer reach-via did not resolve: ${virtualKey}`,
         );
@@ -654,25 +660,40 @@ function importVirtualActs(state: ImportState, matches: JsonObject): void {
       increment(state.report, "act", "skipped");
       continue;
     }
-    const act = state.core.seasons.createPlaceholderAct({
-      seasonId: state.season.id,
-      reach: { reachViaContactId: contact.id },
-      act: {
-        name: requiredString(
-          virtual.display_name,
-          "virtual performer display_name",
-        ),
-        notes: null,
-      },
-    });
-    bindImportKey(state, {
-      source: SOURCE.virtualAct,
-      naturalKey: virtualKey,
-      recordType: "act",
-      recordId: act.id,
-    });
+    const found = findImportKey(state, SOURCE.virtualAct, virtualKey);
+    let act: Act;
+    let status: ImportPlaceholderAct["status"];
+    if (found !== null) {
+      act = state.core.seasons.getAct(found.recordId);
+      status = "found";
+    } else {
+      act = state.core.seasons.createPlaceholderAct({
+        seasonId: state.season.id,
+        reach: { reachViaContactId: resolution.contact.id },
+        act: {
+          name: requiredString(
+            virtual.display_name,
+            "virtual performer display_name",
+          ),
+          notes: null,
+        },
+      });
+      bindImportKey(state, {
+        source: SOURCE.virtualAct,
+        naturalKey: virtualKey,
+        recordType: "act",
+        recordId: act.id,
+      });
+      status = "created";
+    }
     state.virtualActs.set(virtualKey, act);
-    increment(state.report, "act", "created");
+    increment(state.report, "act", status);
+    state.report.placeholderActs.push({
+      virtualPerformerKey: virtualKey,
+      actId: act.id,
+      reachVia: resolution.reachVia,
+      status,
+    });
     const note = optionalString(virtual.note);
     if (note)
       addAnnotation(state, "act", act.id, `virtual-act:${virtualKey}`, note);
@@ -1676,21 +1697,24 @@ function addAnnotation(
   increment(state.report, "annotation", result.created ? "created" : "found");
 }
 
+interface VirtualActReachResolution {
+  readonly contact: Contact;
+  readonly reachVia: ImportPlaceholderReachVia;
+}
+
 function resolveVirtualActReach(
   state: ImportState,
   virtualKey: string,
   reachVia: string,
   venues: readonly JsonObject[],
   matches: JsonObject,
-): Contact | null {
+): VirtualActReachResolution | null {
   if (reachVia !== "host") {
-    return (
-      state.hostContacts.get(reachVia) ??
-      state.performerContacts.get(reachVia) ??
-      null
-    );
+    const contact =
+      state.hostContacts.get(reachVia) ?? state.performerContacts.get(reachVia);
+    return contact ? { contact, reachVia: "timestamp" } : null;
   }
-  const venueEntry = venues.find((entry) =>
+  const slotVenue = venues.find((entry) =>
     Object.values(objectOrEmpty(entry.slots)).some((rawSlot) => {
       const slot = object(rawSlot, "virtual performer slot");
       return (
@@ -1699,7 +1723,38 @@ function resolveVirtualActReach(
       );
     }),
   );
-  if (!venueEntry) return null;
+  if (slotVenue) {
+    const contact = resolveVenueEntryContact(state, slotVenue, matches);
+    if (contact) return { contact, reachVia: "slot" };
+  }
+
+  const keyPattern = new RegExp(`\\b${escapeRegex(virtualKey)}\\b`, "i");
+  const chaseVenues = venues.filter((entry) =>
+    stringList(entry.chase).some((chase) => keyPattern.test(chase)),
+  );
+  if (chaseVenues.length > 1) {
+    state.report.warnings.push(
+      `Virtual performer chase matched multiple venues; using first: ${virtualKey}`,
+    );
+  }
+  const chaseVenue = chaseVenues[0];
+  if (chaseVenue) {
+    const contact = resolveVenueEntryContact(state, chaseVenue, matches);
+    if (contact) return { contact, reachVia: "chase" };
+  }
+
+  const timestampContact =
+    state.hostContacts.get(reachVia) ?? state.performerContacts.get(reachVia);
+  return timestampContact
+    ? { contact: timestampContact, reachVia: "timestamp" }
+    : null;
+}
+
+function resolveVenueEntryContact(
+  state: ImportState,
+  venueEntry: JsonObject,
+  matches: JsonObject,
+): Contact | null {
   const hostKey = optionalString(venueEntry.host_ts);
   if (hostKey) return state.hostContacts.get(hostKey) ?? null;
   const virtualVenueKey = optionalString(venueEntry.virtual_venue);
@@ -1712,6 +1767,10 @@ function resolveVirtualActReach(
   return performerKey
     ? (state.performerContacts.get(performerKey) ?? null)
     : null;
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function mapHost(row: JsonObject) {
@@ -2225,6 +2284,7 @@ function emptyReport(): MutableImportReport {
     },
     supersessions: [],
     holds: [],
+    placeholderActs: [],
     geocache: { hits: [], misses: [] },
     summary: {
       slateVenues: 0,
@@ -2288,6 +2348,7 @@ function freezeReport(report: MutableImportReport): ImportReport {
     ),
     supersessions: Object.freeze([...report.supersessions]),
     holds: Object.freeze([...report.holds]),
+    placeholderActs: Object.freeze([...report.placeholderActs]),
     geocache: Object.freeze({
       hits: Object.freeze([...report.geocache.hits]),
       misses: Object.freeze([...new Set(report.geocache.misses)]),

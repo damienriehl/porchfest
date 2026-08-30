@@ -130,7 +130,14 @@ export function generateSeasonFixture(outputDirectory = here): void {
       ...(mapAddress ? { map_address: mapAddress } : {}),
       address_check: mapAddress ?? hostRow.address,
       basis: `Invented matching basis ${position + 1}.`,
-      chase: [`Invented chase item ${position + 1}.`],
+      chase: [
+        `Invented chase item ${position + 1}.`,
+        ...(position === 4
+          ? ["Please contact virtual-act-4 through this synthetic host."]
+          : position === 5
+            ? ["Please contact VIRTUAL-ACT-5 through this synthetic host."]
+            : []),
+      ],
       email_notes: [`Invented email note ${position + 1}.`],
       extra_recipients:
         position === 0
@@ -228,10 +235,13 @@ export function generateSeasonFixture(outputDirectory = here): void {
               manual_contact: "manual-paper-comet",
               note: "Invented manual-contact placeholder note.",
             }
-          : number <= 3
+          : number <= 5
             ? {
                 display_name: `Porcelain Echo ${number}`,
                 reach_via: "host",
+                ...(number === 5
+                  ? { manual_contact: "manual-paper-comet" }
+                  : {}),
                 note: `Invented host-reached placeholder note ${number}.`,
               }
             : {

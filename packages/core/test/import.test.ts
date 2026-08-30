@@ -165,6 +165,22 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
     expect(second.holds).toEqual([
       expect.objectContaining({ status: "found" }),
     ]);
+    expect(
+      second.placeholderActs.map(
+        ({ virtualPerformerKey, reachVia, status }) => [
+          virtualPerformerKey,
+          reachVia,
+          status,
+        ],
+      ),
+    ).toEqual([
+      ["virtual-act-1", "manual_contact", "found"],
+      ["virtual-act-2", "slot", "found"],
+      ["virtual-act-3", "slot", "found"],
+      ["virtual-act-4", "chase", "found"],
+      ["virtual-act-5", "chase", "found"],
+      ["virtual-act-6", "timestamp", "found"],
+    ]);
   });
 
   it("R29: re-running an invalid geocache entry preserves its null-normalized row version", async () => {
@@ -308,10 +324,12 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
       >;
       venues: {
         host_ts?: string;
+        chase: string[];
         slots: Record<string, { virtual_performer?: string }>;
       }[];
     }>(fixtureArtifactFiles.slate);
-    const { seasonId } = runImport();
+    const report = runImport();
+    const { seasonId } = report;
     const placeholders = database.db
       .select()
       .from(acts)
@@ -339,10 +357,11 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
           performer.manual_contact!,
         )!.recordId;
       } else if (performer.reach_via === "host") {
-        const venue = matches.venues.find(({ slots }) =>
-          Object.values(slots).some(
-            ({ virtual_performer }) => virtual_performer === virtualKey,
-          ),
+        const venue = matches.venues.find(
+          ({ chase, slots }) =>
+            Object.values(slots).some(
+              ({ virtual_performer }) => virtual_performer === virtualKey,
+            ) || chase.some((entry) => containsWholeToken(entry, virtualKey)),
         )!;
         expectedContactId = core.importKeys.find(
           seasonId,
@@ -358,6 +377,19 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
       }
       expect(act.reachViaContactId, virtualKey).toBe(expectedContactId);
     }
+    expect(
+      report.placeholderActs.map(({ virtualPerformerKey, reachVia }) => [
+        virtualPerformerKey,
+        reachVia,
+      ]),
+    ).toEqual([
+      ["virtual-act-1", "manual_contact"],
+      ["virtual-act-2", "slot"],
+      ["virtual-act-3", "slot"],
+      ["virtual-act-4", "chase"],
+      ["virtual-act-5", "chase"],
+      ["virtual-act-6", "timestamp"],
+    ]);
     for (const manualKey of [
       "manual-paper-comet",
       "manual-extra-one",
@@ -444,9 +476,99 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
       )!;
 
       expect(act.reachViaContactId).toBe(manual.recordId);
+      expect(report.placeholderActs).toContainEqual(
+        expect.objectContaining({
+          virtualPerformerKey: "virtual-act-2",
+          reachVia: "manual_contact",
+        }),
+      );
       expect(report.summary.placeholderActs).toBe(6);
       expect(report.warnings).toContain(
         "Virtual performer reach-via did not resolve: virtual-act-2",
+      );
+    } finally {
+      await rm(temporary, { recursive: true, force: true });
+    }
+  });
+
+  it("a chase key in two venues uses the first exact whole-token match and warns", async () => {
+    const temporary = await copyFixture("porchfest-virtual-chase-ambiguous-");
+    try {
+      const path = join(temporary, fixtureArtifactFiles.slate);
+      const matches = JSON.parse(await readFile(path, "utf8"));
+      matches.venues[0].chase.push(
+        "Do not confuse virtual-act-4ville with the requested placeholder.",
+      );
+      matches.venues[1].chase.push(
+        "Please contact VIRTUAL-ACT-4 through this earlier synthetic host.",
+      );
+      await writeFile(path, `${JSON.stringify(matches, null, 2)}\n`);
+
+      const report = importGoal1Season(core, {
+        ...importOptions,
+        artifactsDirectory: temporary,
+      });
+      const act = core.seasons.getAct(
+        core.importKeys.find(
+          report.seasonId,
+          "goal1:virtual-performer",
+          "virtual-act-4",
+        )!.recordId,
+      );
+      const firstExactHost = core.importKeys.find(
+        report.seasonId,
+        "goal1:host-contact",
+        matches.venues[1].host_ts,
+      )!;
+
+      expect(act.reachViaContactId).toBe(firstExactHost.recordId);
+      expect(report.warnings).toContain(
+        "Virtual performer chase matched multiple venues; using first: virtual-act-4",
+      );
+      expect(report.placeholderActs).toContainEqual(
+        expect.objectContaining({
+          virtualPerformerKey: "virtual-act-4",
+          reachVia: "chase",
+        }),
+      );
+    } finally {
+      await rm(temporary, { recursive: true, force: true });
+    }
+  });
+
+  it("a naming slot takes precedence over an earlier chase mention", async () => {
+    const temporary = await copyFixture("porchfest-virtual-slot-first-");
+    try {
+      const path = join(temporary, fixtureArtifactFiles.slate);
+      const matches = JSON.parse(await readFile(path, "utf8"));
+      matches.venues[0].chase.push(
+        "Please contact virtual-act-2 through this synthetic host.",
+      );
+      await writeFile(path, `${JSON.stringify(matches, null, 2)}\n`);
+
+      const report = importGoal1Season(core, {
+        ...importOptions,
+        artifactsDirectory: temporary,
+      });
+      const act = core.seasons.getAct(
+        core.importKeys.find(
+          report.seasonId,
+          "goal1:virtual-performer",
+          "virtual-act-2",
+        )!.recordId,
+      );
+      const slotHost = core.importKeys.find(
+        report.seasonId,
+        "goal1:host-contact",
+        matches.venues[2].host_ts,
+      )!;
+
+      expect(act.reachViaContactId).toBe(slotHost.recordId);
+      expect(report.placeholderActs).toContainEqual(
+        expect.objectContaining({
+          virtualPerformerKey: "virtual-act-2",
+          reachVia: "slot",
+        }),
       );
     } finally {
       await rm(temporary, { recursive: true, force: true });
@@ -1678,6 +1800,11 @@ interface MatchesFixture {
 
 async function readFixture<T>(path: string): Promise<T> {
   return JSON.parse(await readFile(join(fixtureDirectory, path), "utf8")) as T;
+}
+
+function containsWholeToken(value: string, token: string): boolean {
+  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`\\b${escaped}\\b`, "i").test(value);
 }
 
 async function copyFixture(prefix: string): Promise<string> {

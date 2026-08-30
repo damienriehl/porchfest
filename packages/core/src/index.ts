@@ -273,6 +273,8 @@ export {
   type ImportCounts,
   type ImportGeocacheHit,
   type ImportHold,
+  type ImportPlaceholderAct,
+  type ImportPlaceholderReachVia,
   type ImportReport,
   type ImportSupersession,
 } from "./import/goal1.js";

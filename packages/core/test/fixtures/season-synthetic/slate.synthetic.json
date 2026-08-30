@@ -130,7 +130,8 @@
       "address_check": "107 Lantern Loop, Fableton, FS",
       "basis": "Invented matching basis 5.",
       "chase": [
-        "Invented chase item 5."
+        "Invented chase item 5.",
+        "Please contact virtual-act-4 through this synthetic host."
       ],
       "email_notes": [
         "Invented email note 5."
@@ -151,7 +152,8 @@
       "address_check": "108 Lantern Loop, Fableton, FS",
       "basis": "Invented matching basis 6.",
       "chase": [
-        "Invented chase item 6."
+        "Invented chase item 6.",
+        "Please contact VIRTUAL-ACT-5 through this synthetic host."
       ],
       "email_notes": [
         "Invented email note 6."
@@ -610,13 +612,14 @@
     },
     "virtual-act-4": {
       "display_name": "Porcelain Echo 4",
-      "reach_via": "2026-05-20T11:00:00Z",
-      "note": "Invented timestamp-reached placeholder note 4."
+      "reach_via": "host",
+      "note": "Invented host-reached placeholder note 4."
     },
     "virtual-act-5": {
       "display_name": "Porcelain Echo 5",
-      "reach_via": "2026-05-21T11:00:00Z",
-      "note": "Invented timestamp-reached placeholder note 5."
+      "reach_via": "host",
+      "manual_contact": "manual-paper-comet",
+      "note": "Invented host-reached placeholder note 5."
     },
     "virtual-act-6": {
       "display_name": "Porcelain Echo 6",
