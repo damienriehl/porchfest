@@ -99,9 +99,12 @@ function transitionForm(
     (action) => SEASON_ACTION_LABELS[action],
   );
   const irreversible = target === "locked" || target === "archived";
+  const actionLabel =
+    target === "archived" ? "Close and archive season" : `Move to ${target}`;
   return `<li class="queue-item">
     <div class="queue-item-body">
-      <h3>Move to ${escapeHtml(target)}</h3>
+      <h3>${escapeHtml(actionLabel)}</h3>
+      ${target === "archived" ? `<p class="help">Internal state: ${escapeHtml(target)}</p>` : ""}
       <p>Moving to ${escapeHtml(target)} stops allowing: ${stopped.length ? escapeHtml(stopped.join(", ")) : "nothing new"}.</p>
       ${target === "archived" && options.heldSlotCount > 0 ? `<p class="help">${options.heldSlotCount === 1 ? "1 slot is still held; release it before archiving." : `${options.heldSlotCount} slots are still held; release them before archiving.`}</p>` : ""}
     </div>
@@ -110,7 +113,7 @@ function transitionForm(
       <input type="hidden" name="version" value="${options.season.version}">
       <input type="hidden" name="target_state" value="${escapeHtml(target)}">
       ${irreversible ? `<div class="field"><label class="choice" for="confirmation-${escapeHtml(target)}"><input id="confirmation-${escapeHtml(target)}" name="confirmation" type="checkbox" value="confirmed" required> I confirm moving this season to ${escapeHtml(target)}</label></div>` : ""}
-      <button class="${irreversible ? "primary-action" : "secondary-action"}" type="submit">Move to ${escapeHtml(target)}</button>
+      <button class="${irreversible ? "primary-action" : "secondary-action"}" type="submit">${escapeHtml(actionLabel)}</button>
     </form>
   </li>`;
 }

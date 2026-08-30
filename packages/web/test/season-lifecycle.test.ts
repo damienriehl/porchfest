@@ -203,6 +203,9 @@ describe("organizer season lifecycle", () => {
     expect(html).toMatch(
       /Moving to signups_closed stops allowing:[\s\S]*public signups/,
     );
+    expect(html).toMatch(
+      /<h3>Close and archive season<\/h3>[\s\S]*Internal state: archived[\s\S]*Moving to archived stops allowing:[\s\S]*public signups[\s\S]*name="version" value="1"[\s\S]*name="target_state" value="archived"[\s\S]*name="confirmation"[\s\S]*required>[\s\S]*I confirm moving this season to archived[\s\S]*<button[^>]*>Close and archive season<\/button>/,
+    );
 
     for (const target of [
       "signups_closed",
@@ -233,6 +236,13 @@ describe("organizer season lifecycle", () => {
         );
       }
     }
+
+    expect(runtime.core.seasons.getSeason(season.id).state).toBe("archived");
+    expect(html).toContain(
+      "This season is archived. No further transitions are available.",
+    );
+    expect(html).not.toContain('name="target_state"');
+    expect(html).not.toContain("Close and archive season");
   });
 
   it("names backwards, stale, missing-confirmation, and unknown-state refusals", async () => {
@@ -374,7 +384,7 @@ describe("organizer season lifecycle", () => {
     const current = runtime.core.seasons.getSeason(season.id);
     const page = await get(runtime, `/admin/seasons/${season.id}`, cookie);
     expect(await page.text()).toMatch(
-      /Move to archived[\s\S]*1 slot is still held/,
+      /Close and archive season[\s\S]*1 slot is still held/,
     );
 
     const response = await transition(
