@@ -77,6 +77,8 @@ async function makeRuntime(
     state?: SeasonState;
     socketPeer?: string | ((count: number) => string);
     trustedProxyHops?: string;
+    publicSiteUrl?: string;
+    senderEmail?: string;
   } = {},
 ) {
   const dataDirectory = await mkdtemp(join(tmpdir(), "porchfest-harden-"));
@@ -114,6 +116,8 @@ async function makeRuntime(
     eventDate: "2031-06-01",
     eventCity: "Exampleton",
     eventState: "WI",
+    publicSiteUrl: options.publicSiteUrl,
+    senderEmail: options.senderEmail,
     timeSlots: [],
     openSignups: requestedState === "signups_open",
   });
@@ -582,6 +586,53 @@ describe("participant responses and the challenge contract", () => {
 });
 
 describe("the confirmation page is a receipt", () => {
+  it("keeps receipt references free of secrets, private addresses, and mutable record links", async () => {
+    const operationalSender = "operations@example.invalid";
+    const { runtime, seasonId } = await makeRuntime({
+      publicSiteUrl: "https://festival.example.invalid/contact",
+      senderEmail: operationalSender,
+    });
+    const hostForm = await csrfToken(runtime, "/signup/host", seasonId);
+    const hostValues = hostBody(seasonId, hostForm.token);
+    const participantAddress = "private-host@example.invalid";
+    hostValues.set("contact_email", participantAddress);
+    const hostReceipt = await submit(runtime, "/signup/host", hostValues);
+    const performerForm = await csrfToken(
+      runtime,
+      "/signup/performer",
+      seasonId,
+    );
+    const performerReceipt = await submit(
+      runtime,
+      "/signup/performer",
+      performerBody(seasonId, performerForm.token),
+    );
+    expect(hostReceipt.headers.get("set-cookie")).toBeNull();
+    expect(performerReceipt.headers.get("set-cookie")).toBeNull();
+
+    for (const [html, csrf, participantEmail] of [
+      [await hostReceipt.text(), hostForm.token, participantAddress],
+      [
+        await performerReceipt.text(),
+        performerForm.token,
+        "performer@example.invalid",
+      ],
+    ] as const) {
+      const reference = html.match(/data-submission-reference="([^"]+)"/)?.[1];
+      expect(reference).toBeTruthy();
+      expect(reference).not.toContain(csrf);
+      expect(reference).not.toContain(participantEmail);
+      expect(reference).not.toContain(operationalSender);
+      expect(reference).not.toMatch(/https?:|\//);
+      expect(html).not.toContain(csrf);
+      expect(html).not.toContain('name="_csrf"');
+      expect(html).not.toContain("hardening-test-session-secret");
+      expect(html).not.toContain(operationalSender);
+      expect(html).not.toContain(`href="mailto:${participantEmail}"`);
+      expect(html).not.toContain('href="/admin/');
+    }
+  });
+
   it("separates what the public sees from what only organizers see", async () => {
     const { runtime, seasonId } = await makeRuntime();
     const { token } = await csrfToken(runtime, "/signup/host", seasonId);

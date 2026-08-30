@@ -269,6 +269,8 @@ export function renderConfirmationPage(options: {
   readonly title: string;
   readonly kind: "host" | "performer";
   readonly seasonId: number;
+  readonly recordId: number;
+  readonly publicSiteUrl: string | null;
   readonly emailConfigured: boolean;
   readonly preview: string;
   readonly submission: string;
@@ -277,6 +279,10 @@ export function renderConfirmationPage(options: {
   const formPath =
     options.kind === "host" ? HOST_SIGNUP_PATH : PERFORMER_SIGNUP_PATH;
   const formHref = escapeHtml(`${formPath}?season=${options.seasonId}`);
+  const submissionReference = `${options.kind === "host" ? "HOST" : "PERFORMER"}-${options.recordId}`;
+  const organizerContact = options.publicSiteUrl
+    ? `<p>Use the <a href="${escapeHtml(options.publicSiteUrl)}">Porchfest public site</a> to find the organizer's public contact channel.</p>`
+    : "<p>Keep this reference and use the same public organizer channel that supplied this form.</p>";
   const emailNotice = options.emailConfigured
     ? "If the organizers send confirmation by email, it will go to the address you provided."
     : "No confirmation email will follow because email delivery is not configured for this deployment.";
@@ -295,6 +301,13 @@ export function renderConfirmationPage(options: {
       <h1 id="confirmation-title">${escapeHtml(options.title)}</h1>
       <p>The organizer will review your ${kindLabel} details and contact you when matching and scheduling move forward.</p>
       <p class="email-notice">${escapeHtml(emailNotice)}</p>
+    </section>
+    <section class="confirmation-card" aria-labelledby="submission-reference-title">
+      <h2 id="submission-reference-title">Submission reference</h2>
+      <p><strong data-submission-reference="${escapeHtml(submissionReference)}">${escapeHtml(submissionReference)}</strong></p>
+      <p>Quote this reference when contacting the organizers about your signup.</p>
+      <p>This receipt cannot be reopened to edit or withdraw your signup, or to check its status. Participant self-service is not available yet.</p>
+      ${organizerContact}
     </section>
     <section class="confirmation-card" aria-labelledby="confirmation-card-title">
       <h2 id="confirmation-card-title">Your public map card</h2>

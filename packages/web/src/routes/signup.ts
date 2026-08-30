@@ -276,11 +276,18 @@ export function registerSignupRoutes(options: SignupRouteOptions): void {
           );
         }
 
+        let recordId: number;
         try {
           if (validation.kind === "host") {
-            options.core.seasons.createHostSignup(validation.input);
+            const signup = options.core.seasons.createHostSignup(
+              validation.input,
+            );
+            recordId = signup.venue.id;
           } else {
-            options.core.seasons.createPerformerSignup(validation.input);
+            const signup = options.core.seasons.createPerformerSignup(
+              validation.input,
+            );
+            recordId = signup.act.id;
           }
         } catch (error) {
           return persistenceRefusal(
@@ -301,6 +308,8 @@ export function registerSignupRoutes(options: SignupRouteOptions): void {
                 : "Your performer signup is in.",
             kind,
             seasonId: season.id,
+            recordId,
+            publicSiteUrl: season.publicSiteUrl,
             emailConfigured: options.core.ports.email.configured,
             preview:
               kind === "host"

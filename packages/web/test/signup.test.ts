@@ -64,6 +64,7 @@ async function makeRuntime(
     antibot?: AntibotPort;
     rateLimit?: number;
     timeSlots?: readonly { startsAt: string; endsAt: string }[];
+    publicSiteUrl?: string;
   } = {},
 ) {
   const dataDirectory = await mkdtemp(join(tmpdir(), "porchfest-signup-"));
@@ -93,6 +94,7 @@ async function makeRuntime(
     eventCity: "Exampleton",
     eventState: "WI",
     localityName: "Synthetic Quarter",
+    publicSiteUrl: options.publicSiteUrl,
     timeSlots: options.timeSlots ?? [],
     openSignups: true,
   });
@@ -786,6 +788,80 @@ describe("public signup forms", () => {
     expect(html).toMatch(/organizer.*review/i);
     expect(html).toMatch(/no confirmation email will follow/i);
     expect(html).toContain("The Test Porch");
+  });
+
+  it("gives both receipts distinct non-secret references and links the configured public site", async () => {
+    const publicSiteUrl = "https://festival.example.invalid/contact";
+    const { runtime, seasonId } = await makeRuntime({ publicSiteUrl });
+    const hostForm = await csrfToken(runtime, "/signup/host", seasonId);
+    const hostReceipt = await submit(
+      runtime,
+      "/signup/host",
+      hostValues(seasonId, hostForm.token),
+    );
+    const performerForm = await csrfToken(
+      runtime,
+      "/signup/performer",
+      seasonId,
+    );
+    const performerReceipt = await submit(
+      runtime,
+      "/signup/performer",
+      performerValues(seasonId, performerForm.token),
+    );
+    const hostHtml = await hostReceipt.text();
+    const performerHtml = await performerReceipt.text();
+    const hostReference = hostHtml.match(
+      /data-submission-reference="([^"]+)"/,
+    )?.[1];
+    const performerReference = performerHtml.match(
+      /data-submission-reference="([^"]+)"/,
+    )?.[1];
+
+    expect(hostReceipt.status).toBe(201);
+    expect(performerReceipt.status).toBe(201);
+    expect(hostReference).toMatch(/^HOST-\d+$/);
+    expect(performerReference).toMatch(/^PERFORMER-\d+$/);
+    expect(hostReference).not.toBe(performerReference);
+    for (const html of [hostHtml, performerHtml]) {
+      expect(html).toContain(
+        "Quote this reference when contacting the organizers",
+      );
+      expect(html).toContain(
+        "cannot be reopened to edit or withdraw your signup, or to check its status",
+      );
+      expect(html).toContain("Participant self-service is not available yet");
+      expect(html).toContain(`href="${publicSiteUrl}"`);
+    }
+  });
+
+  it("directs both receipts back to the original public organizer channel when no public site is configured", async () => {
+    const { runtime, seasonId } = await makeRuntime();
+    const hostForm = await csrfToken(runtime, "/signup/host", seasonId);
+    const hostReceipt = await submit(
+      runtime,
+      "/signup/host",
+      hostValues(seasonId, hostForm.token),
+    );
+    const performerForm = await csrfToken(
+      runtime,
+      "/signup/performer",
+      seasonId,
+    );
+    const performerReceipt = await submit(
+      runtime,
+      "/signup/performer",
+      performerValues(seasonId, performerForm.token),
+    );
+
+    for (const response of [hostReceipt, performerReceipt]) {
+      const html = await response.text();
+      expect(response.status).toBe(201);
+      expect(html).toContain(
+        "Keep this reference and use the same public organizer channel that supplied this form",
+      );
+      expect(html).not.toContain("festival.example.invalid");
+    }
   });
 
   it("keeps canonical audiences aligned from both forms through receipts and a match message", async () => {
