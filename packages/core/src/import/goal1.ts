@@ -1072,7 +1072,12 @@ function importVenueSlate(state: ImportState, matches: JsonObject): void {
         SOURCE.assignment,
         assignmentNaturalKey,
       );
-      if (existingAssignment !== null) {
+      const liveAssignment = liveAssignmentImportKey(state, existingAssignment);
+      if (
+        liveAssignment !== null ||
+        (existingAssignment !== null &&
+          slotFamilyIsCanceled(configuredSlots, slotLabel))
+      ) {
         increment(state.report, "assignment", "found");
         continue;
       }
@@ -1091,6 +1096,9 @@ function importVenueSlate(state: ImportState, matches: JsonObject): void {
         );
         increment(state.report, "assignment", "skipped");
         continue;
+      }
+      if (existingAssignment !== null) {
+        restoreImporterCanceledAct(state, act, entryId, slotLabel);
       }
       const assignment = state.core.seasons.assignSlot(
         slot.id,
@@ -1125,7 +1133,11 @@ function importVenueSlate(state: ImportState, matches: JsonObject): void {
         SOURCE.assignment,
         assignmentNaturalKey,
       );
-      if (existingAssignment !== null) {
+      if (
+        liveAssignmentImportKey(state, existingAssignment) !== null ||
+        (existingAssignment !== null &&
+          slotFamilyIsCanceled(configuredSlots, slotLabel))
+      ) {
         increment(state.report, "assignment", "found");
         continue;
       }
@@ -1291,7 +1303,14 @@ function applySlotCancellations(state: ImportState, matches: JsonObject): void {
       );
     }
     const act = state.core.seasons.getAct(importedAct.id);
-    if (act.status !== "withdrawn") {
+    const hasRemainingAssignment = state.core.seasons
+      .listAssignments(state.season.id)
+      .some(
+        (assignment) =>
+          state.core.seasons.resolveAct(assignment.actId).canonical.id ===
+          act.id,
+      );
+    if (!hasRemainingAssignment && act.status !== "withdrawn") {
       state.core.seasons.setRecordStatus(
         "act",
         act.id,
@@ -1300,6 +1319,76 @@ function applySlotCancellations(state: ImportState, matches: JsonObject): void {
       );
     }
   }
+}
+
+function liveAssignmentImportKey(
+  state: ImportState,
+  key: ImportKey | null,
+): ImportKey | null {
+  if (key === null) return null;
+  return state.core.seasons
+    .listAssignments(state.season.id)
+    .some((assignment) => assignment.id === key.recordId)
+    ? key
+    : null;
+}
+
+function slotFamilyIsCanceled(
+  configuredSlots: JsonObject,
+  slotLabel: string,
+): boolean {
+  const configuration = object(
+    configuredSlots[slotLabel],
+    `${slotLabel} cancellation lookup`,
+  );
+  if (
+    configuration.canceled !== undefined &&
+    configuration.canceled !== false
+  ) {
+    return true;
+  }
+  const sourceLabel = optionalString(configuration.same_as);
+  if (sourceLabel) {
+    const source = object(
+      configuredSlots[sourceLabel],
+      `${sourceLabel} cancellation source`,
+    );
+    if (source.canceled !== undefined && source.canceled !== false) return true;
+  }
+  return Object.entries(configuredSlots).some(([partnerLabel, rawPartner]) => {
+    if (partnerLabel === slotLabel) return false;
+    const partner = object(rawPartner, `${partnerLabel} cancellation partner`);
+    return (
+      optionalString(partner.same_as) === slotLabel &&
+      partner.canceled !== undefined &&
+      partner.canceled !== false
+    );
+  });
+}
+
+function restoreImporterCanceledAct(
+  state: ImportState,
+  act: Act,
+  entryId: string,
+  slotLabel: string,
+): void {
+  if (
+    findImportKey(
+      state,
+      SOURCE.annotation,
+      `cancellation:${entryId}:${slotLabel}`,
+    ) === null
+  ) {
+    return;
+  }
+  const canonical = state.core.seasons.resolveAct(act.id).canonical;
+  if (canonical.status !== "withdrawn") return;
+  state.core.seasons.setRecordStatus(
+    "act",
+    canonical.id,
+    canonical.version,
+    "tentative",
+  );
 }
 
 function resolveConfiguredSlotAct(
@@ -2322,14 +2411,19 @@ function bindImportKey(
   state: ImportState,
   input: Omit<BindImportKeyInput, "seasonId">,
 ): ImportKey {
-  const result = state.core.importKeys.bind({
+  const cacheKey = importKeyCacheKey(input.source, input.naturalKey);
+  const previous = state.importKeys.get(cacheKey);
+  const binding = {
     seasonId: state.season.id,
     ...input,
-  });
-  state.importKeys.set(
-    importKeyCacheKey(result.key.source, result.key.naturalKey),
-    result.key,
-  );
+  };
+  const result =
+    previous !== undefined &&
+    (previous.recordType !== input.recordType ||
+      previous.recordId !== input.recordId)
+      ? { key: state.core.importKeys.rebind(binding) }
+      : state.core.importKeys.bind(binding);
+  state.importKeys.set(cacheKey, result.key);
   return result.key;
 }
 

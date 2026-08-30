@@ -108,6 +108,45 @@ export function createImportKeyRepository(
     return { key: existing, created: false };
   }
 
+  function rebind(input: BindImportKeyInput): ImportKey {
+    const source = input.source.trim();
+    const naturalKey = input.naturalKey.trim();
+    if (!source || !naturalKey) {
+      throw new ImportKeyLifecycleError(
+        "import source and natural key must be non-empty",
+      );
+    }
+    const existing = find(input.seasonId, source, naturalKey);
+    if (existing === null) return bind(input).key;
+    if (existing.recordType !== input.recordType) {
+      throw new ImportKeyLifecycleError(
+        `import key ${source}/${naturalKey} is already bound to ${existing.recordType} ${existing.recordId}`,
+      );
+    }
+    if (existing.recordId === input.recordId) return existing;
+    const rebound = db
+      .update(importKeys)
+      .set({
+        recordId: input.recordId,
+        version: existing.version + 1,
+        updatedAt: now(),
+      })
+      .where(
+        and(
+          eq(importKeys.id, existing.id),
+          eq(importKeys.version, existing.version),
+        ),
+      )
+      .returning()
+      .get();
+    if (rebound === undefined) {
+      throw new ImportKeyLifecycleError(
+        `import key ${source}/${naturalKey} changed while it was being rebound`,
+      );
+    }
+    return rebound;
+  }
+
   function list(seasonId: number): ImportKey[] {
     return db
       .select()
@@ -117,7 +156,7 @@ export function createImportKeyRepository(
       .all();
   }
 
-  return Object.freeze({ bind, find, findSeason, list });
+  return Object.freeze({ bind, rebind, find, findSeason, list });
 }
 
 export type ImportKeyRepository = ReturnType<typeof createImportKeyRepository>;

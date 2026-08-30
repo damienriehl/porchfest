@@ -706,6 +706,140 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
     }
   });
 
+  it("a canceled slot family preserves another live booking for the canonical act", async () => {
+    const temporary = await copyFixture("porchfest-canceled-multi-venue-");
+    try {
+      const path = join(temporary, fixtureArtifactFiles.slate);
+      const matches = JSON.parse(await readFile(path, "utf8")) as {
+        venues: {
+          host_ts?: string;
+          virtual_venue?: string;
+          slots: Record<
+            string,
+            {
+              open?: boolean;
+              performer_ts?: string;
+              canceled?: { on: string; reason: string };
+            }
+          >;
+        }[];
+      };
+      const canceledVenue = matches.venues[0];
+      const cancellation = canceledVenue!.slots["6-7"]!.canceled;
+      delete canceledVenue!.slots["6-7"]!.canceled;
+      await writeFile(path, `${JSON.stringify(matches, null, 2)}\n`);
+
+      const first = importGoal1Season(core, {
+        ...importOptions,
+        artifactsDirectory: temporary,
+      });
+      const actId = core.importKeys.find(
+        first.seasonId,
+        "goal1:performer-act",
+        canceledVenue!.slots["6-7"]!.performer_ts!,
+      )!.recordId;
+      const openEntry = matches.venues.find((venue) =>
+        Object.values(venue.slots).some((slot) => slot.open === true),
+      )!;
+      const openLabel = Object.entries(openEntry.slots).find(
+        ([, slot]) => slot.open === true,
+      )![0];
+      const openVenueSource = openEntry.host_ts
+        ? "goal1:host-venue"
+        : "goal1:virtual-venue";
+      const openVenueKey = openEntry.host_ts ?? openEntry.virtual_venue;
+      const openVenueId = core.importKeys.find(
+        first.seasonId,
+        openVenueSource,
+        openVenueKey!,
+      )!.recordId;
+      const openSlot =
+        core.seasons.listVenueSlots(openVenueId)[openLabel === "6-7" ? 0 : 1]!;
+      const otherAssignment = database.db
+        .insert(assignments)
+        .values({
+          seasonId: first.seasonId,
+          actId,
+          slotId: openSlot.id,
+          continuationOfAssignmentId: null,
+        })
+        .returning()
+        .get();
+      database.db
+        .update(slots)
+        .set({ state: "assigned" })
+        .where(eq(slots.id, openSlot.id))
+        .run();
+      const statusBefore = core.seasons.getAct(actId).status;
+
+      canceledVenue!.slots["6-7"]!.canceled = cancellation;
+      await writeFile(path, `${JSON.stringify(matches, null, 2)}\n`);
+      importGoal1Season(core, {
+        ...importOptions,
+        artifactsDirectory: temporary,
+      });
+
+      expect(core.seasons.getAssignment(otherAssignment.id)).toMatchObject({
+        actId,
+        slotId: openSlot.id,
+      });
+      expect(core.seasons.getAct(actId).status).toBe(statusBefore);
+    } finally {
+      await rm(temporary, { recursive: true, force: true });
+    }
+  });
+
+  it("removing a cancellation recreates and rebinds its deleted assignment", async () => {
+    const temporary = await copyFixture("porchfest-uncanceled-rerun-");
+    try {
+      const path = join(temporary, fixtureArtifactFiles.slate);
+      const matches = JSON.parse(await readFile(path, "utf8"));
+      const venue = matches.venues[0];
+      const first = importGoal1Season(core, {
+        ...importOptions,
+        artifactsDirectory: temporary,
+      });
+      const venueId = core.importKeys.find(
+        first.seasonId,
+        "goal1:host-venue",
+        venue.host_ts,
+      )!.recordId;
+      const sourceSlot = core.seasons.listVenueSlots(venueId)[0]!;
+      const staleKey = core.importKeys.find(
+        first.seasonId,
+        "goal1:assignment",
+        `host:${venue.host_ts}:6-7`,
+      )!;
+      expect(() => core.seasons.getAssignment(staleKey.recordId)).toThrow(
+        `assignment ${staleKey.recordId} does not exist`,
+      );
+
+      delete venue.slots["6-7"].canceled;
+      await writeFile(path, `${JSON.stringify(matches, null, 2)}\n`);
+      const second = importGoal1Season(core, {
+        ...importOptions,
+        artifactsDirectory: temporary,
+      });
+      const rebound = core.importKeys.find(
+        first.seasonId,
+        "goal1:assignment",
+        `host:${venue.host_ts}:6-7`,
+      )!;
+
+      expect(rebound.recordId).not.toBe(staleKey.recordId);
+      expect(core.seasons.getAssignment(rebound.recordId).slotId).toBe(
+        sourceSlot.id,
+      );
+      expect(
+        core.seasons.getAct(core.seasons.getAssignment(rebound.recordId).actId)
+          .status,
+      ).not.toBe("withdrawn");
+      expect(second.records.assignment.created).toBeGreaterThanOrEqual(2);
+    } finally {
+      await rm(temporary, { recursive: true, force: true });
+    }
+  });
+
   it("canceled superseded performers remain canonical and idempotent on rerun", async () => {
     const temporary = await copyFixture("porchfest-canceled-superseded-");
     try {
