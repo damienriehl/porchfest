@@ -108,11 +108,12 @@ restart the proxy. The gate is successful only when all of these invariants hold
 
 - the running `/data` mount is exactly `PORCHFEST_DATA_VOLUME`;
 - SQLite `PRAGMA integrity_check` is `ok`;
-- counts for seasons, venues, acts, contacts, assignments, and outbox messages exactly match before
-  and after the deploy;
+- the archive-time count taken while the app is quiesced is authoritative; `seasons` stays equal,
+  no other table decreases, and any increase is printed as `+N <table> during the window` evidence;
 - a quiesced full-volume archive exists outside the served/project tree, is owned by the deploy
   user, has mode `0600`, and has a verified SHA-256;
-- the image that was running at preflight remains tagged `:prev`;
+- the image that was running at preflight remains tagged
+  `<repository>:prev-<compose-project>`, isolated from concurrent Compose projects;
 - the archive record names the last Drizzle journal entry and database migration timestamp;
 - external HTTPS health returns 200, plain HTTP redirects to HTTPS, and a short-lived sign-in probe
   returns `Secure; HttpOnly; SameSite=Lax`; the probe session is immediately signed out;
@@ -124,6 +125,10 @@ recovery sign-in and session-cookie flags. When it is unset, the deploy prints a
 issues or consumes the fresh install's bootstrap link; HTTPS and redirect checks still run. The
 script never prints the selector, link token, cookie, response body, database contents, or provider
 values. If organizer recovery fails, its stderr explanation is preserved for the operator.
+
+Normal archives restart the app and require it to become healthy. Incident automation may use
+`bash deploy/archive.sh --no-restart` (or `PORCHFEST_ARCHIVE_NO_RESTART=1`) to leave a quiesced app
+stopped; any archive failure reports whether restart was attempted and the resulting app state.
 
 The backup RPO is the age of the newest successful archive shown in `offsite.sh`'s evidence block.
 Run the gate on every release and at least daily if a day of organizer work is the maximum acceptable
@@ -151,16 +156,21 @@ Archive existence or a successful `age` command alone is not a backup gate.
 ## Rollback decision
 
 Run `bash deploy/rollback.sh` on the host. The script reads the last journal entry from both the
-current image and `:prev`:
+current image and the Compose-project-scoped previous-image tag:
 
-- Equal entries: retag `:prev` as the configured app image and recreate only `app` with
+- Equal entries: retag the previous image as the configured app image and recreate only `app` with
   `--no-build`. The data volume is unchanged.
 - Current entry newer: image-only rollback is refused. The script locates the newest archive whose
-  record matches the previous image, takes a fresh safety archive, removes and recreates only the
-  exact pinned volume, restores and rehearses the matching archive, then boots `:prev`.
+  record matches the previous image, restores it into a fresh rehearsal volume, and requires every
+  check to pass before touching production data. It then takes a no-restart safety archive, removes
+  and recreates only the exact pinned volume, restores the chosen archive, and boots the previous
+  image. If that destructive phase fails, it automatically restores the safety archive into the
+  pinned volume, reports the recovery, and exits as a failed rollback.
 
-The script never runs `docker compose down -v`. If no matching archive exists, it stops before
-touching the volume and names the missing schema entry.
+The script never runs `docker compose down -v`; throwaway restore projects use `compose down`
+without `-v`, and only caller-created rehearsal volumes are explicitly removed. If no matching
+archive exists or rehearsal fails, rollback stops before touching the pinned volume and names the
+failure.
 
 ## SMTP shakedown wave (operator only)
 

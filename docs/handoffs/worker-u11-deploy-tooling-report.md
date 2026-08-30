@@ -25,16 +25,21 @@ No npm dependency was added. `package-lock.json` was not changed. `npm rebuild` 
 - `.env.example`
 - `README.md`
 - `compose.yaml`
+- `Dockerfile`
 - `deploy/archive.sh`
 - `deploy/common.sh`
 - `deploy/compose.external-proxy.yaml`
 - `deploy/deploy.sh`
 - `deploy/offsite.sh`
 - `deploy/preflight.sh`
+- `deploy/probe.sh`
 - `deploy/restore.sh`
 - `deploy/rollback.sh`
 - `docs/deploy.md`
 - `scripts/container-smoke.sh`
+- `scripts/deploy-common.test.sh`
+- `scripts/deploy-failure-paths.test.sh`
+- `scripts/deploy-probe.test.sh`
 - `scripts/restore-rehearsal.sh`
 - `docs/handoffs/worker-u11-deploy-tooling-report.md`
 
@@ -51,26 +56,30 @@ Implementation commits before this report:
 ### KTD9 scripts
 
 - `preflight.sh` proves that the running app mounts the configured literal named volume at `/data`,
-  retains the running image as `:prev`, runs containerized SQLite integrity, and records six
-  non-sensitive counts.
+  retains the running image under a Compose-project-scoped previous tag, runs SQLite integrity with
+  the app image's installed `better-sqlite3`, and records six non-sensitive counts.
 - `archive.sh` stops only `app`, streams a tar of the whole volume to a deploy-user-owned `0600`
-  file, records SHA-256 and schema metadata, restarts and health-checks the app, and prunes local
-  archives by modification time.
+  file, records SHA-256 and schema metadata, and prunes local archives by modification time. Normal
+  runs restart and health-check the app; `--no-restart` leaves it stopped for rollback incidents.
+  Failures report the restart attempt and resulting app state.
 - `offsite.sh` verifies the local SHA-256, encrypts with a public age recipient, copies the encrypted
   archive and evidence sidecars in one manifest-driven rclone operation, verifies the remote
   listing, and prunes by remote modification time. Missing recipient or remote values fail closed.
 - `restore.sh` accepts a plain archive or an age-encrypted archive plus an operator-supplied identity,
   creates a fresh named volume, boots an app-only throwaway Compose project, and requires integrity,
-  row-count, and schema-journal agreement before printing PASS. The restored volume is retained for
-  inspection.
-- `rollback.sh` compares the last Drizzle journal entry in the configured image and `:prev`. Equal
-  entries force-recreate `app` from `:prev` without a build. A newer current schema requires a
-  matching archive, takes a fresh safety archive, removes only the exact app container and pinned
-  volume, rehearses restore with `:prev`, then starts the normal project. It never runs
-  `docker compose down -v`.
+  row-count, and schema-journal agreement before printing PASS. It refuses the production Compose
+  project name, removes the throwaway network with `compose down` without `-v`, and retains the
+  restored volume for inspection.
+- `rollback.sh` compares the last Drizzle journal entry in the configured and scoped previous image.
+  Equal entries force-recreate `app` without a build. A newer current schema first rehearses the
+  matching archive in a fresh volume, then takes an exactly identified no-restart safety archive,
+  replaces only the pinned volume, and restores the chosen archive. Any destructive-phase failure
+  automatically restores the safety archive and reports whether the app also restarted. It never
+  runs `docker compose down -v`.
 - `deploy.sh` ships only `git archive HEAD`, preserves the host `.env` and deployment-root sentinel,
-  runs the gates on the host, rebuilds only `app`, compares pre/post counts, and checks external
-  HTTPS status, HTTP redirect, and sign-in cookie flags. Its dry run performs no command.
+  runs the gates on the host, binds the deploy to the exact archive it created, rebuilds only `app`,
+  compares the quiesced archive counts to post-deploy counts, and checks external HTTPS status,
+  HTTP redirect, and sign-in cookie flags. Its dry run performs no command.
 
 ### Proxy topology and CI
 
@@ -92,9 +101,10 @@ an explicit skip.
   the image's Node runtime. The persisted schema is `max(created_at)` from the repository's actual
   `__drizzle_migrations` table. Preflight requires equality; restore permits an older archive only
   when the chosen image can migrate it forward.
-- “Matching counts” means exact equality for `seasons`, `venues`, `acts`, `contacts`, `assignments`,
-  and `outbox_messages`. Counts are queried together through `sqlite3` in a pinned throwaway image.
-  Contents, recipient addresses, message bodies, configuration values, and tokens are never printed.
+- The authoritative deploy baseline is captured inside the archive quiesce. `seasons` must remain
+  equal; every other table may increase but never decrease, and increases print `+N <table> during
+the window`. Restore and rollback checks remain exact. Counts use `better-sqlite3` in the app image;
+  contents, addresses, message bodies, configuration values, and tokens are never printed.
 - Archive records use `porchfest-deploy-evidence/v1` JSON beside each tarball. They contain UTC time,
   commit, image IDs/tags, literal volume, integrity result, six counts, schema timestamp/tag, archive
   path/SHA/mode, and no database contents. The SHA sidecar uses the ordinary sha256sum format.
@@ -107,9 +117,10 @@ an explicit skip.
 - Compose `.env` is not sourced as shell. A small allow-listed parser imports only deployment values
   that are not already in the process environment, preserving literal shell metacharacters and
   rollback overrides. Compose itself remains responsible for provider-secret dotenv parsing.
-- Authentication tokens, CSRF values, and the probe cookie are passed to curl in `0600` temporary
-  config files, not command-line arguments. Every external curl has a bounded connect and total
-  timeout. The probe session is signed out on success.
+- Authentication tokens, CSRF values, and the probe cookie are passed to curl in a `0700` temporary
+  directory with `0600` files, not command-line arguments. Every external curl has a bounded connect
+  and total timeout. Once a session cookie exists, an EXIT cleanup signs it out on all success and
+  failure paths and refuses to treat an HTTP error as a successful sign-out.
 - The overlay removes Caddy with Compose's `!reset null` override. The app keeps its internal default
   network for ordinary Compose behavior and also joins the external proxy network; it only exposes
   port 9398 to Docker networks.
@@ -118,9 +129,10 @@ an explicit skip.
   collapses into one apparent client bucket.
 - The SMTP port default is empty in Compose. This preserves no-provider boot: the SMTP adapter may
   apply its port default only after an SMTP host enables that provider.
-- The CI rollback intentionally covers the requested same-schema path with two tags of one image.
-  A schema-moving rollback needs a real older image and its matching archive, so that destructive
-  path remains a documented real-host rehearsal rather than a fabricated CI result.
+- The container CI rollback uses two tags of one image for the same-schema path. A deterministic
+  failure-path test separately proves live-project refusal, partial-stop restart, exact safety
+  recovery reporting, and the app-start failure distinction. A real schema-moving rollback still
+  needs an actual older image and matching archive for the operator's clean-machine rehearsal.
 
 ## Review findings resolved
 
@@ -141,21 +153,22 @@ specialists:
 One additional local finding was fixed: image-only rollback now uses `--force-recreate`, because
 retagging an unchanged Compose image string does not by itself guarantee container replacement.
 
-The cross-model route was not used because the assignment explicitly routed the worker to Codex.
-No repository context was sent to another provider or over the network.
+The final review attempted to prepare the skill's independent cross-model route, but the external
+send was denied because this assignment did not authorize repository egress. The adversarial lens
+ran locally instead. No repository context was sent to another provider.
 
 ## Verification commands and exact results
 
 Every requested executable gate used Node v24.13.0 and exited 0.
 
-| Gate                              | Exact result                                                                                                                                            |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `npm run typecheck`               | `tsc --noEmit -p tsconfig.json`; exit 0                                                                                                                 |
-| `npm run lint`                    | exit 0; 0 errors and the two pre-existing unused-argument warnings in `packages/core/src/access.ts` at lines 244 and 275                                |
-| `npm run format:check`            | `All matched files use Prettier code style!`; exit 0                                                                                                    |
-| `npm test`                        | `Test Files 47 passed (47)`; `Tests 842 passed (842)`; duration 31.73s; exit 0                                                                          |
-| `npm run check:boundaries`        | both boundary checks printed `OK`; exit 0                                                                                                               |
-| `bash scripts/container-smoke.sh` | clean boot/TLS, archive, restore, exact counts, integrity, same-schema rollback, external-proxy config, dotenv safety, and off-site shim passed; exit 0 |
+| Gate                       | Exact result                                                                                                                                           |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `npm run typecheck`        | `tsc --noEmit -p tsconfig.json`; exit 0                                                                                                                |
+| `npm run lint`             | exit 0; 0 errors and the two pre-existing unused-argument warnings in `packages/core/src/access.ts` at lines 244 and 275                               |
+| `npm run format:check`     | `All matched files use Prettier code style!`; exit 0                                                                                                   |
+| `npm test`                 | `Test Files 47 passed (47)`; `Tests 842 passed (842)`; duration 33.41s; exit 0                                                                         |
+| `npm run check:boundaries` | both boundary checks printed `OK`; exit 0                                                                                                              |
+| `npm run test:container`   | 11 `OK:` lines covering focused helpers, failure paths, verbatim example boot, TLS, archive/restore, rollback, proxy config, and off-site shim; exit 0 |
 
 `npm test` printed all six required success lines:
 
@@ -171,6 +184,13 @@ OK: clean-room scan found no participant-data artifacts in working tree (includi
 The final container gate additionally printed:
 
 ```text
+OK: deploy helpers parse dotenv/JSON safely, tolerate count growth, and derive scoped tags
+OK: deploy probe normalizes origins, skips fresh installs, surfaces link errors, and signs out every established session
+OK: deploy failure paths protect the live project, restart partial stops, and report safety recovery
+OK: .env.example copied verbatim boots with zero-configuration values
+OK: malformed table shape rejected and fixture restored byte-identically (<sha256>)
+OK: clean-room scan found no participant-data artifacts in image tree
+OK: clean-room scan found no participant-data artifacts in working tree (including ignored paths) and Git history and container image
 OK: container migrates an empty data volume, contains all workspaces, and serves TLS health
 OK: deploy dotenv parsing preserves literal values without shell evaluation
 OK: off-site backup encryption and rclone arguments rehearsed with an isolated shim
@@ -185,6 +205,41 @@ The stated baseline was 47 files / 842 tests. The final suite remains 47 files /
 deployment coverage is a shell/container rehearsal rather than a Vitest file. Docker emitted only
 the runner's existing rootless `IPv4 forwarding is disabled` and pre-created-volume warnings; the
 gate still exited 0 and cleaned its test resources.
+
+## Review-fix commits
+
+| Item | Commit(s)            | Implemented decision or fix                                                                                                                                      |
+| ---- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1    | `0fbbcd6`            | Accept optional `export`, quoted trailing comments, and literal values without shell evaluation.                                                                 |
+| 2    | `8efc670`            | Parse `PUBLIC_BASE_URL` with URL-origin semantics and require a valid HTTPS URL.                                                                                 |
+| 3    | `8efc670`, `e4a5d36` | Use EXIT-scoped session/temp cleanup; activate cleanup as soon as a session exists and require a 303 sign-out response.                                          |
+| 4    | `8efc670`            | Never consume bootstrap links; skip organizer sign-in unless `PORCHFEST_DEPLOY_PROBE_ORGANIZER` names an existing organizer.                                     |
+| 5    | `8efc670`            | Capture organizer-link stderr in a protected temporary file and surface it without printing the recovery link.                                                   |
+| 6    | `41e4c0e`, `984e782` | Rehearse first, take an exact no-restart safety archive, replace the pinned volume only after PASS, and automatically restore/report safety recovery on failure. |
+| 7    | `c916513`, `984e782` | Use `compose down` without `-v` for throwaway projects, reject the live project name, and never down the real project.                                           |
+| 8    | `31a70b3`, `30ebc42` | Comment the session secret, `PUBLIC_BASE_URL`, and `COMPOSE_FILE`; copy `.env.example` verbatim and prove its zero-configuration app boot.                       |
+| 9    | `4785774`            | Add `--no-restart`/`PORCHFEST_ARCHIVE_NO_RESTART=1`; rollback uses it so a crash-looping release need not become healthy first.                                  |
+| 10   | `22cfbf7`            | Use archive-quiesce counts; keep seasons exact, reject every decrease, and print every allowed increase.                                                         |
+| 11   | `4785774`, `984e782` | Make archive failures loud and recover even when `compose stop` stops the app but returns nonzero.                                                               |
+| 12   | `73653bf`            | Derive tags from only the final image path component, including registry ports and existing tags.                                                                |
+| 13   | `73653bf`            | Scope the previous tag as `<repository>:prev-<compose-project>`.                                                                                                 |
+| 14   | `fc1e834`            | Pass empty values through Compose so application code owns the five defaults.                                                                                    |
+| 15   | `fc1e834`, `a1e0702` | Add Docker's 2-second start interval and a named 150-second script health budget.                                                                                |
+| 16   | `3cc74cb`, `fe45102` | Use the app image and installed `better-sqlite3` for integrity/count/schema checks; remove `PORCHFEST_SQLITE_IMAGE`.                                             |
+| 17   | `0fbbcd6`            | Parse evidence JSON with Python, falling back to Node in the app image; remove regex readers.                                                                    |
+
+Cross-item gate and cleanup commits:
+
+- `8cc194b` - `test(deploy): gate the review-fix contracts`
+- `a1e0702` - `refactor(deploy): simplify cleanup and health waits`
+- `e4a5d36` - `fix(deploy): sign out every probe session`
+- `984e782` - `fix(deploy): bind archives and recover failure paths`
+- `30ebc42` - `fix(deploy): boot the verbatim example environment`
+
+The item 6 ordering, item 4 organizer-only probe, item 8 example-file behavior, item 10 monotonic
+count rule, and item 16 app-image SQLite choice are the requested settled decisions. The review also
+closed two failure windows not explicit in the original line evidence: exact archive-to-run binding
+under concurrent writers and refusal to reuse the production Compose project for a throwaway restore.
 
 ## Real-host work remaining for the operator
 
