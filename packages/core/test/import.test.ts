@@ -1194,7 +1194,8 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
     });
     const renderedBodies = outbox
       .listMessages(wave.wave.id)
-      .flatMap(({ textBody, htmlBody }) => [textBody, htmlBody]);
+      .flatMap(({ textBody, htmlBody }) => [textBody, htmlBody])
+      .filter((body): body is string => body !== null);
     for (const entry of mapped) {
       const host = submissions.hosts.find(({ ts }) => ts === entry.host_ts)!;
       expect(renderedBodies.every((body) => !body.includes(host.address))).toBe(
