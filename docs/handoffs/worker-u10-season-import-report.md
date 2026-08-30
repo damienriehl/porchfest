@@ -328,3 +328,87 @@ With Node 24.13.0, the exact requested chain exited 0:
 The fixture generator was rerun deterministically, and the focused importer/CLI
 run passed 44 tests. Nothing was pushed or merged. The documentation and this
 handoff are committed separately from the code and tests.
+
+## Review-fix commits (U10-b)
+
+The verified U10-b review decisions are implemented in the following local
+commits. The real artifacts were not opened, imported, or quoted; every added
+fixture value and mutation is synthetic.
+
+- Items 1 and 7: `a4f7402` (`fix(import): preserve live bookings across
+cancellation reruns`) limits cancellation to its slot family, withdraws only
+  an act with no remaining canonical assignment, and recreates/rebinds an
+  assignment after un-cancel.
+- Item 2: `eee4868` (`fix(import): find existing placeholders before resolving
+reach`) restores found-first placeholder reruns and removes the unreachable
+  host-only timestamp tail. The existing timestamp fallback test remains the
+  reachable fallback proof.
+- Item 3: `dd61a52` (`fix(import): keep host-form addresses organizer-only`)
+  moves the submitted address to an idempotent organizer annotation and proves
+  rendered host and act messages contain no submitted address. `e417d37`
+  (`fix(import): purge legacy host-form notes`) also removes an old reserved note
+  when a later artifact no longer has `map_address`.
+- Items 4 and 6: `c432fe7` (`fix(import): distinguish geocache review reasons`)
+  maps missing/malformed refs to `missing-ref`, unknown providers to
+  `imprecise`, and restores importer-level `out-of-bounds` coverage beside
+  `cross-check-missing` with publishability assertions.
+- Item 5 and the malformed-pair part of item 9: `fce109c` (`fix(import): tolerate
+incomplete cancellation shapes`) makes cyclic `same_as` pairs warn-and-skip
+  and accepts boolean cancellation. `cbadeca` (`fix(import): skip malformed slot
+pairs`) extends that behavior to absent, non-object, and non-string pair
+  targets. `6487fdc` (`test(import): cover malformed and false slot flags`)
+  proves malformed pairs report once and `canceled: false` preserves the live
+  assignment without annotation.
+- Item 8: `b63bda2` (`fix(import): validate only matched geocache entries`)
+  checks address misses before validation and warns for irrelevant malformed
+  entries. Matching entries remain strictly validated.
+- Item 10: `554bace` (`fix(import): match exact chase-list tokens`) tokenizes on
+  whitespace and punctuation except hyphen and underscore, then requires an
+  exact case-insensitive token match.
+- Item 11: `c0e4654` (`refactor(core): share regular-expression escaping`)
+  exports one core `escapeRegex` implementation for core matching and geo.
+- Item 12 is paired with `eee4868`: the dead host-only lookup was removed rather
+  than preserving a second timestamp fallback path.
+- Item 13: `84d2916` (`perf(import): cache canonical acts and venue slots`) adds
+  run-scoped resolution caches. `561e9c2` (`refactor(import): simplify
+review-fix lookup caches`) caches canonical IDs rather than mutable records,
+  loads assignments once, and indexes found host reach. `f42071a`
+  (`perf(import): index assignments by slot`) makes continuation and
+  cancellation lookup constant-time. `6d036a0` (`fix(import): invalidate
+retargeted canonical caches`) clears canonical resolution after a corrected
+  supersession and proves the later cancellation uses the new canonical act.
+- Supporting tests: `210938a` (`test(import): narrow rendered wave bodies`)
+  makes nullable outbox bodies explicit, and `5dc198d` (`test(import): cover
+import-key rebinding contract`) directly covers missing-key creation,
+  same-record no-op, changed-record rebinding, and record-type refusal.
+
+The required simplification pass applied five findings: two repeated-query
+eliminations, canonical-ID caching to avoid stale versions, shared import-key
+normalization, and a compile-safe supersession branch. A fresh local review then
+found the legacy-note, malformed-pair, supersession-retarget, assignment-index,
+and two branch-coverage gaps above. After those fixes, correctness, testing,
+adversarial, and performance confirmation passes returned no findings. The
+proposed large importer/test-file split was not applied because it would widen
+this focused review-fix assignment without changing behavior. The matched
+malformed-geocache suggestion was not applied because the explicit decision only
+makes non-matching malformed entries warn-and-skip.
+
+### Final verification
+
+With Node 24.13.0, the exact requested chain exited 0:
+
+- `npm run typecheck`: passed.
+- `npm run lint`: passed with 0 errors and the two pre-existing unused-argument
+  warnings in `packages/core/src/access.ts` at lines 244 and 275.
+- `npm run format:check`: passed.
+- `npm test`: 48 files passed and 875 tests passed. It printed all six required
+  `OK:` lines: the two boundary self-tests, the two boundary checks, the
+  clean-room self-test, and the working-tree-plus-history clean-room scan.
+- `npm run check:boundaries`: passed and printed both boundary `OK:` lines.
+
+The first sandboxed full-test attempt could not bind the existing SMTP tests to
+loopback (`listen EPERM 127.0.0.1`). Re-running the same exact chain with local
+loopback access passed without changing code, test limits, or timeouts.
+
+These 17 review-fix commits and this report commit remain local on
+`u10-fidelity-shapes`. Nothing was pushed, rebased, amended, squashed, or merged.
