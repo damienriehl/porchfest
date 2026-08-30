@@ -5,6 +5,21 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=deploy/common.sh
 source "$script_dir/common.sh"
 
+usage() {
+  printf 'Usage: %s [--no-restart]\n' "$0" >&2
+  exit 2
+}
+
+no_restart="${PORCHFEST_ARCHIVE_NO_RESTART:-0}"
+case "${1:-}" in
+  "") ;;
+  --no-restart) no_restart=1 ;;
+  *) usage ;;
+esac
+[[ $# -le 1 ]] || usage
+[[ "$no_restart" == 0 || "$no_restart" == 1 ]] \
+  || die "PORCHFEST_ARCHIVE_NO_RESTART must be 0 or 1"
+
 load_dotenv_if_present
 init_deploy_config
 require_command docker
@@ -18,12 +33,39 @@ running_image_id="$(docker inspect --format '{{.Image}}' "$container")"
 IFS=$'\t' read -r schema_when schema_tag _schema_idx < <(image_schema_entry "$running_image_id")
 
 stopped=0
-restart_app() {
-  if ((stopped)); then
-    compose start app >/dev/null 2>&1 || true
+archive_app_state() {
+  local target
+  target="$(compose ps -a -q app 2>/dev/null || true)"
+  if [[ -z "$target" ]]; then
+    printf '%s\n' 'missing'
+  else
+    docker inspect --format '{{.State.Status}}' "$target" 2>/dev/null || printf '%s\n' 'unknown'
   fi
 }
-trap restart_app EXIT
+
+archive_exit() {
+  local status=$?
+  local restart_result="not-needed"
+  local resulting_state
+  trap - EXIT
+  if ((status != 0)); then
+    printf '%s\n' 'ERROR: archive step failed' >&2
+    if ((stopped)); then
+      if ((no_restart)); then
+        restart_result="not-requested"
+      elif compose start app; then
+        restart_result="restarted"
+      else
+        restart_result="restart-failed"
+      fi
+    fi
+    resulting_state="$(archive_app_state)"
+    printf 'archive_failure_app_restart=%s\n' "$restart_result" >&2
+    printf 'archive_failure_app_state=%s\n' "$resulting_state" >&2
+  fi
+  exit "$status"
+}
+trap archive_exit EXIT
 
 compose stop app >/dev/null
 stopped=1
@@ -53,10 +95,14 @@ chmod 0600 "$sha_file"
 metadata="$(archive_metadata_path "$archive")"
 write_evidence_json "$metadata" archive "$integrity" "$counts" "$archive" "$archive_sha" "$archive_mode" "$schema_when" "$schema_tag"
 
-compose start app >/dev/null
-stopped=0
-wait_for_app_health
-assert_pinned_volume
+if ((no_restart)); then
+  printf '%s\n' 'archive_app_state=stopped'
+else
+  compose start app
+  wait_for_app_health
+  assert_pinned_volume
+  stopped=0
+fi
 
 mapfile -t archives < <(
   find "$archive_dir" -maxdepth 1 -type f -name 'porchfest-*.tar.gz' -printf '%T@\t%p\n' \
