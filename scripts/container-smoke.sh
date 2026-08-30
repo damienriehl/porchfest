@@ -10,6 +10,9 @@ caddy_data_volume="${compose_project}-caddy-data"
 caddy_config_volume="${compose_project}-caddy-config"
 tls_response_file=""
 archive_dir=""
+example_env_dir="$(mktemp -d)"
+cp .env.example "$example_env_dir/.env"
+cmp -s .env.example "$example_env_dir/.env"
 
 compose() {
   env \
@@ -22,7 +25,7 @@ compose() {
     PORCHFEST_HTTPS_PORT_MAPPING="127.0.0.1::443" \
     PUBLIC_BASE_URL= \
     PORCHFEST_SESSION_SECRET= \
-    docker compose -p "$compose_project" "$@"
+    docker compose --env-file "$example_env_dir/.env" -p "$compose_project" "$@"
 }
 
 assert_schema_ready() {
@@ -90,6 +93,7 @@ cleanup() {
   if [[ -n "$archive_dir" ]]; then
     rm -rf -- "$archive_dir"
   fi
+  rm -rf -- "$example_env_dir"
   docker rm -fv "$container" >/dev/null 2>&1 || true
   compose down --volumes --remove-orphans >/dev/null 2>&1 || true
   docker image rm -f "$image" >/dev/null 2>&1 || true
@@ -245,6 +249,7 @@ if ((tls_curl_status != 0)) || \
 fi
 
 echo "OK: container migrates an empty data volume, contains all workspaces, and serves TLS health"
+echo "OK: .env.example copied verbatim boots the reference Caddy topology"
 
 archive_dir="$(mktemp -d)"
 export PORCHFEST_COMPOSE_PROJECT="$compose_project"

@@ -26,7 +26,6 @@ Connect the existing Traefik container to an external Docker network such as `pr
 values are especially important:
 
 ```dotenv
-COMPOSE_FILE=compose.yaml:deploy/compose.external-proxy.yaml
 PORCHFEST_COMPOSE_PROJECT=porchfest-neighborhood
 PORCHFEST_APP_IMAGE=porchfest-neighborhood:current
 PORCHFEST_DATA_VOLUME=porchfest-neighborhood-data
@@ -45,6 +44,12 @@ PORCHFEST_EXTERNAL_CONNECT_TIMEOUT=5
 PORCHFEST_EXTERNAL_MAX_TIME=20
 ```
 
+The repository example intentionally leaves `COMPOSE_FILE` commented so copying it verbatim boots
+the reference Caddy topology. On an external-Traefik host, uncomment the example only in that
+host's untracked `.env` so the deploy scripts use both files. For every manual Compose command,
+name the overlay explicitly with `-f compose.yaml -f deploy/compose.external-proxy.yaml`; do not
+depend on implicit file selection while validating the topology.
+
 Use a literal, per-instance data volume such as `porchfest-neighborhood-data`; never reuse the
 reference `porchfest-data` name between instances. Leave `PORCHFEST_SESSION_SECRET` empty to create
 a unique `0600` secret in that volume, or set a unique high-entropy value. The public age recipient
@@ -62,9 +67,9 @@ Validate interpolation before first boot:
 ```sh
 cd /srv/porchfest-neighborhood
 docker compose -f compose.yaml -f deploy/compose.external-proxy.yaml config >/dev/null
-docker compose up -d --build app
-docker compose ps
-docker compose logs app
+docker compose -f compose.yaml -f deploy/compose.external-proxy.yaml up -d --build app
+docker compose -f compose.yaml -f deploy/compose.external-proxy.yaml ps
+docker compose -f compose.yaml -f deploy/compose.external-proxy.yaml logs app
 ```
 
 Open the bootstrap URL printed once in the app log. Create the first organizer, then complete
