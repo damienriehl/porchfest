@@ -600,6 +600,63 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
     }
   });
 
+  it("chase matching preserves hyphens and requires exact tokens", async () => {
+    const temporary = await copyFixture("porchfest-virtual-chase-tokens-");
+    try {
+      const path = join(temporary, fixtureArtifactFiles.slate);
+      const matches = JSON.parse(await readFile(path, "utf8"));
+      matches.virtual_performers.duo = {
+        display_name: "Synthetic Duo",
+        reach_via: "host",
+      };
+      matches.virtual_performers["lonely-loons"] = {
+        display_name: "Synthetic Lonely Loons",
+        reach_via: "host",
+      };
+      matches.venues[0].chase.push(
+        "Synthetic near misses: duo-2 and lonely-loonsville.",
+      );
+      matches.venues[1].chase.push("Please contact DUO through this host.");
+      matches.venues[2].chase.push(
+        "Please contact lonely-loons through this host.",
+      );
+      await writeFile(path, `${JSON.stringify(matches, null, 2)}\n`);
+
+      const report = importGoal1Season(core, {
+        ...importOptions,
+        artifactsDirectory: temporary,
+      });
+      const duo = core.seasons.getAct(
+        core.importKeys.find(report.seasonId, "goal1:virtual-performer", "duo")!
+          .recordId,
+      );
+      const lonelyLoons = core.seasons.getAct(
+        core.importKeys.find(
+          report.seasonId,
+          "goal1:virtual-performer",
+          "lonely-loons",
+        )!.recordId,
+      );
+
+      expect(duo.reachViaContactId).toBe(
+        core.importKeys.find(
+          report.seasonId,
+          "goal1:host-contact",
+          matches.venues[1].host_ts,
+        )!.recordId,
+      );
+      expect(lonelyLoons.reachViaContactId).toBe(
+        core.importKeys.find(
+          report.seasonId,
+          "goal1:host-contact",
+          matches.venues[2].host_ts,
+        )!.recordId,
+      );
+    } finally {
+      await rm(temporary, { recursive: true, force: true });
+    }
+  });
+
   it("a naming slot takes precedence over an earlier chase mention", async () => {
     const temporary = await copyFixture("porchfest-virtual-slot-first-");
     try {

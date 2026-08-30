@@ -1845,9 +1845,10 @@ function classifyFoundVirtualReach(
     }),
   );
   if (slotNamed) return "slot";
-  const keyPattern = new RegExp(`\\b${escapeRegex(virtualKey)}\\b`, "i");
   return venues.some((entry) =>
-    stringList(entry.chase).some((chase) => keyPattern.test(chase)),
+    stringList(entry.chase).some((chase) =>
+      chaseHasExactVirtualKey(chase, virtualKey),
+    ),
   )
     ? "chase"
     : "slot";
@@ -1879,9 +1880,10 @@ function resolveVirtualActReach(
     if (contact) return { contact, reachVia: "slot" };
   }
 
-  const keyPattern = new RegExp(`\\b${escapeRegex(virtualKey)}\\b`, "i");
   const chaseVenues = venues.filter((entry) =>
-    stringList(entry.chase).some((chase) => keyPattern.test(chase)),
+    stringList(entry.chase).some((chase) =>
+      chaseHasExactVirtualKey(chase, virtualKey),
+    ),
   );
   if (chaseVenues.length > 1) {
     state.report.warnings.push(
@@ -1916,8 +1918,12 @@ function resolveVenueEntryContact(
     : null;
 }
 
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function chaseHasExactVirtualKey(chase: string, virtualKey: string): boolean {
+  const normalizedKey = virtualKey.toLocaleLowerCase("en");
+  return chase
+    .split(/[^\p{L}\p{N}_-]+/u)
+    .filter(Boolean)
+    .some((token) => token.toLocaleLowerCase("en") === normalizedKey);
 }
 
 function mapHost(row: JsonObject) {
