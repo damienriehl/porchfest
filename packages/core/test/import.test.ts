@@ -193,6 +193,31 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
     ]);
   });
 
+  it("caches canonical-act and venue-slot resolution for one import run", () => {
+    const base = core.seasons;
+    const resolveCalls = new Map<number, number>();
+    const slotCalls = new Map<number, number>();
+    core = {
+      ...core,
+      seasons: {
+        ...base,
+        resolveAct(id: number) {
+          resolveCalls.set(id, (resolveCalls.get(id) ?? 0) + 1);
+          return base.resolveAct(id);
+        },
+        listVenueSlots(venueId: number) {
+          slotCalls.set(venueId, (slotCalls.get(venueId) ?? 0) + 1);
+          return base.listVenueSlots(venueId);
+        },
+      },
+    };
+
+    runImport();
+
+    expect(Math.max(...resolveCalls.values())).toBe(1);
+    expect(Math.max(...slotCalls.values())).toBeLessThanOrEqual(1);
+  });
+
   it("R29: re-running an invalid geocache entry preserves its null-normalized row version", async () => {
     const temporary = await copyFixture("porchfest-invalid-coordinate-");
     try {

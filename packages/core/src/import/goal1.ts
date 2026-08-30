@@ -26,6 +26,7 @@ import type {
   ImportKey,
   Season,
   SeasonTimeSlot,
+  Slot,
   Venue,
   VenueAmenity,
   VenueDrink,
@@ -181,6 +182,8 @@ interface ImportState {
   readonly matchedVenueIds: Map<string, number>;
   readonly importKeys: Map<string, ImportKey>;
   readonly reportedAnnotationKeys: Set<string>;
+  readonly canonicalActs: Map<number, Act>;
+  readonly venueSlots: Map<number, readonly Slot[]>;
 }
 
 interface MutableImportReport {
@@ -293,6 +296,8 @@ function importGoal1SeasonInTransaction(
         .map((key) => [importKeyCacheKey(key.source, key.naturalKey), key]),
     ),
     reportedAnnotationKeys: new Set(),
+    canonicalActs: new Map(),
+    venueSlots: new Map(),
   };
 
   importHosts(state, artifacts.matches);
@@ -309,9 +314,7 @@ function importGoal1SeasonInTransaction(
   const approvedActs = new Set(
     core.seasons
       .listAssignments(season.id)
-      .map(
-        (assignment) => core.seasons.resolveAct(assignment.actId).canonical.id,
-      ),
+      .map((assignment) => canonicalAct(state, assignment.actId).id),
   );
   report.summary = {
     slateVenues: new Set(state.matchedVenueIds.values()).size,
@@ -812,8 +815,9 @@ function applySupersessionGroup(
       recordType === "venue"
         ? state.core.seasons.resolveVenue(source.id).canonical.id ===
           canonical.id
-        : state.core.seasons.resolveAct(source.id).canonical.id ===
-          canonical.id;
+        : source.canonicalActId === null
+          ? false
+          : canonicalAct(state, source.id).id === canonical.id;
     if (!alreadySuperseded) {
       if (recordType === "venue") {
         const supersededVenue = state.core.seasons.supersedeVenue(
@@ -877,6 +881,7 @@ function bindVenueSlots(state: ImportState): void {
     const natural = state.venueNaturalKeys.get(venue.id);
     if (!natural) continue;
     const slots = state.core.seasons.ensureVenueSlots(venue.id);
+    state.venueSlots.set(venue.id, slots);
     for (const [index, slot] of slots.entries()) {
       const slotLabel = GOAL1_SLOT_DEFINITIONS[index]?.artifactLabel;
       if (!slotLabel) continue;
@@ -960,7 +965,7 @@ function importVenueSlate(state: ImportState, matches: JsonObject): void {
     const venueId = state.matchedVenueIds.get(entryId);
     if (venueId === undefined) continue;
     const natural = state.venueNaturalKeys.get(venueId) ?? entryId;
-    const slots = state.core.seasons.listVenueSlots(venueId);
+    const slots = venueSlotsFor(state, venueId);
     const configuredSlots = object(venueEntry.slots, `slots for ${entryId}`);
     for (const [index, definition] of GOAL1_SLOT_DEFINITIONS.entries()) {
       const slotLabel = definition.artifactLabel;
@@ -1207,7 +1212,7 @@ function applySlotCancellations(state: ImportState, matches: JsonObject): void {
     const entryId = requiredString(venueEntry.id, "venue id");
     const venueId = state.matchedVenueIds.get(entryId);
     if (venueId === undefined) continue;
-    const slots = state.core.seasons.listVenueSlots(venueId);
+    const slots = venueSlotsFor(state, venueId);
     const configuredSlots = object(venueEntry.slots, `slots for ${entryId}`);
     for (const [index, definition] of GOAL1_SLOT_DEFINITIONS.entries()) {
       const slotLabel = definition.artifactLabel;
@@ -1242,7 +1247,7 @@ function applySlotCancellations(state: ImportState, matches: JsonObject): void {
         ? state.core.seasons.getAct(assignment.actId)
         : null;
       const act = assignedAct
-        ? state.core.seasons.resolveAct(assignedAct.id).canonical
+        ? canonicalAct(state, assignedAct.id)
         : resolveConfiguredSlotAct(state, configuration, configuredSlots);
       if (!act) {
         state.report.warnings.push(
@@ -1322,9 +1327,7 @@ function applySlotCancellations(state: ImportState, matches: JsonObject): void {
     const hasRemainingAssignment = state.core.seasons
       .listAssignments(state.season.id)
       .some(
-        (assignment) =>
-          state.core.seasons.resolveAct(assignment.actId).canonical.id ===
-          act.id,
+        (assignment) => canonicalAct(state, assignment.actId).id === act.id,
       );
     if (!hasRemainingAssignment && act.status !== "withdrawn") {
       state.core.seasons.setRecordStatus(
@@ -1347,6 +1350,26 @@ function liveAssignmentImportKey(
     .some((assignment) => assignment.id === key.recordId)
     ? key
     : null;
+}
+
+function canonicalAct(state: ImportState, actId: number): Act {
+  const cached = state.canonicalActs.get(actId);
+  if (cached) return cached;
+  const resolution = state.core.seasons.resolveAct(actId);
+  state.canonicalActs.set(resolution.canonical.id, resolution.canonical);
+  state.canonicalActs.set(actId, resolution.canonical);
+  for (const superseded of resolution.superseded) {
+    state.canonicalActs.set(superseded.id, resolution.canonical);
+  }
+  return resolution.canonical;
+}
+
+function venueSlotsFor(state: ImportState, venueId: number): readonly Slot[] {
+  const cached = state.venueSlots.get(venueId);
+  if (cached) return cached;
+  const slots = state.core.seasons.listVenueSlots(venueId);
+  state.venueSlots.set(venueId, slots);
+  return slots;
 }
 
 function slotFamilyIsCanceled(
@@ -1397,7 +1420,7 @@ function restoreImporterCanceledAct(
   ) {
     return;
   }
-  const canonical = state.core.seasons.resolveAct(act.id).canonical;
+  const canonical = canonicalAct(state, act.id);
   if (canonical.status !== "withdrawn") return;
   state.core.seasons.setRecordStatus(
     "act",
@@ -1416,12 +1439,12 @@ function resolveConfiguredSlotAct(
   const performerKey = optionalString(configuration.performer_ts);
   if (performerKey) {
     const act = state.performerActs.get(performerKey);
-    return act ? state.core.seasons.resolveAct(act.id).canonical : null;
+    return act ? canonicalAct(state, act.id) : null;
   }
   const virtualKey = optionalString(configuration.virtual_performer);
   if (virtualKey) {
     const act = state.virtualActs.get(virtualKey);
-    return act ? state.core.seasons.resolveAct(act.id).canonical : null;
+    return act ? canonicalAct(state, act.id) : null;
   }
   const sameAs = optionalString(configuration.same_as);
   if (!sameAs) return null;
