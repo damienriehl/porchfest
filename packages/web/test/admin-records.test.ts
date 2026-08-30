@@ -29,14 +29,14 @@ afterEach(async () => {
   );
 });
 
-async function boot() {
+async function boot(publicBaseUrl = PUBLIC_BASE_URL) {
   const dataDirectory = await mkdtemp(join(tmpdir(), "porchfest-admin-"));
   temporaryRoots.push(dataDirectory);
   const announced: string[] = [];
   const runtime = await createTestingRuntime({
     dataDirectory,
     env: {
-      PUBLIC_BASE_URL,
+      PUBLIC_BASE_URL: publicBaseUrl,
       PORCHFEST_SESSION_SECRET: "admin-records-test-secret",
     },
     announce: (message) => announced.push(message),
@@ -45,7 +45,7 @@ async function boot() {
 
   const cookieFor = async (token: string, name: string, email?: string) => {
     const page = await runtime.request(
-      `${PUBLIC_BASE_URL}/admin/sign-in?token=${token}`,
+      `${publicBaseUrl}/admin/sign-in?token=${token}`,
     );
     const csrf =
       (await page.text()).match(/name="_csrf" value="([^"]+)"/)?.[1] ?? "";
@@ -55,10 +55,10 @@ async function boot() {
       display_name: name,
     });
     if (email) body.set("email", email);
-    const signedIn = await runtime.request(`${PUBLIC_BASE_URL}/admin/sign-in`, {
+    const signedIn = await runtime.request(`${publicBaseUrl}/admin/sign-in`, {
       method: "POST",
       headers: {
-        origin: PUBLIC_BASE_URL,
+        origin: publicBaseUrl,
         "content-type": "application/x-www-form-urlencoded",
       },
       body,
@@ -187,6 +187,45 @@ async function csrfFrom(response: Response, action?: string) {
 }
 
 describe("the activity queue", () => {
+  it("shows shareable URLs for the selected season from the configured public base", async () => {
+    const publicBaseUrl = "https://events.example.invalid:8443";
+    const { runtime, alice } = await boot(publicBaseUrl);
+    const publicMapUrl =
+      "https://map.example.invalid/porchfest?view=public&kind=all";
+    const { season } = runtime.core.setup.createSeason({
+      year: 2032,
+      displayName: "Second Synthetic Season",
+      timezone: "UTC",
+      eventDate: "2032-09-11",
+      eventCity: "Elsewhere",
+      eventState: "MN",
+      publicMapUrl,
+      timeSlots: [],
+      openSignups: true,
+    });
+    expect(season.id).toBe(2);
+
+    const page = await runtime.request(
+      `${publicBaseUrl}/admin?season=${season.id}`,
+      { headers: { cookie: alice, host: "request-host.example.invalid" } },
+    );
+    const html = await page.text();
+    const hostUrl = `${publicBaseUrl}/signup/host?season=2`;
+    const performerUrl = `${publicBaseUrl}/signup/performer?season=2`;
+
+    expect(page.status).toBe(200);
+    expect(html).toContain(`href="${hostUrl}"`);
+    expect(html).toContain(`href="${performerUrl}"`);
+    expect(html).toContain(
+      'href="https://map.example.invalid/porchfest?view=public&amp;kind=all"',
+    );
+    expect(html).not.toContain(
+      'href="https://map.example.invalid/porchfest?view=public&kind=all"',
+    );
+    expect((await runtime.request(hostUrl)).status).toBe(200);
+    expect((await runtime.request(performerUrl)).status).toBe(200);
+  });
+
   it("shows a new signup to an organizer", async () => {
     const { runtime, season, alice } = await boot();
 

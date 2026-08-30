@@ -5,6 +5,8 @@ import {
   type SeasonAction,
   type SeasonState,
 } from "@porchfest/core";
+import type { SeasonSignupUrls } from "../routes/signup-paths.js";
+import { renderPublicSeasonLinks } from "./public-season-links.js";
 import { escapeHtml, renderOrganizerPage } from "./signup-view.js";
 
 export const SEASON_ACTION_LABELS: Readonly<Record<SeasonAction, string>> = {
@@ -32,6 +34,8 @@ export function renderSeasonLifecyclePage(options: {
   readonly season: Season;
   readonly heldSlotCount: number;
   readonly csrfToken: string;
+  readonly signupUrls: SeasonSignupUrls | null;
+  readonly publicMapUrl: string | null;
   readonly error?: string;
   readonly transitioned?: boolean;
 }): string {
@@ -47,6 +51,7 @@ export function renderSeasonLifecyclePage(options: {
       <p class="lede"><a href="/admin?season=${options.season.id}">Back to activity queue</a> · <a href="/admin/seasons/${options.season.id}/edit">Edit event details</a> · <a href="/admin/seasons/${options.season.id}/outbox">Email outbox</a> · <a href="/seasons/${options.season.id}/coordinates">Coordinate review &amp; map publication</a></p>
     </header>
     ${notice}
+    ${renderPublicSeasonLinks(options.signupUrls, options.publicMapUrl)}
     <section aria-labelledby="current-season-state">
       <h2 id="current-season-state">Current season</h2>
       <dl class="submission-list">

@@ -19,6 +19,7 @@ import {
   redirect,
   unauthorized,
 } from "./admin-http.js";
+import { seasonSignupUrls } from "./signup-paths.js";
 
 export const SEASON_LIFECYCLE_PATH = "/admin/seasons/:id";
 export const SEASON_TRANSITION_PATH = "/admin/seasons/:id/transition";
@@ -27,6 +28,7 @@ export function registerSeasonLifecycleRoutes(options: {
   readonly core: CoreRuntime;
   readonly routes: RouteRegistry;
   readonly csrfTokenFor: (path: string) => string;
+  readonly publicBaseUrl: string | null;
 }): void {
   options.routes.register({
     method: "GET",
@@ -134,6 +136,7 @@ function seasonPage(
   options: {
     readonly core: CoreRuntime;
     readonly csrfTokenFor: (path: string) => string;
+    readonly publicBaseUrl: string | null;
   },
   season: Season,
   status: number,
@@ -147,6 +150,8 @@ function seasonPage(
         .listSeasonSlots(season.id)
         .filter((slot) => slot.state === "held").length,
       csrfToken: options.csrfTokenFor(SEASON_TRANSITION_PATH),
+      signupUrls: seasonSignupUrls(options.publicBaseUrl, season.id),
+      publicMapUrl: season.publicMapUrl,
       error,
       transitioned,
     }),

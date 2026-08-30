@@ -93,6 +93,7 @@ export function createApp(options: AppOptions): PorchfestApp {
     core: options.core,
     routes,
     csrfTokenFor,
+    publicBaseUrl: options.publicBaseUrl ?? null,
     resolveSocketPeerAddress:
       options.resolveSocketPeerAddress ?? defaultSocketPeerAddress,
     cookie: options.sessionCookie,
@@ -102,7 +103,12 @@ export function createApp(options: AppOptions): PorchfestApp {
 
   registerAdminRecordRoutes({ core: options.core, routes, csrfTokenFor });
 
-  registerSeasonLifecycleRoutes({ core: options.core, routes, csrfTokenFor });
+  registerSeasonLifecycleRoutes({
+    core: options.core,
+    routes,
+    csrfTokenFor,
+    publicBaseUrl: options.publicBaseUrl ?? null,
+  });
 
   registerCoordinateRoutes({ core: options.core, routes, csrfTokenFor });
 

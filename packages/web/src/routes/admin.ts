@@ -23,6 +23,7 @@ import {
 } from "../auth.js";
 import type { RouteRegistry } from "../router/registry.js";
 import { findSeason, notFound, positiveInteger } from "./admin-http.js";
+import { seasonSignupUrls } from "./signup-paths.js";
 import { renderQueuePage } from "../views/admin-records.js";
 import {
   renderAdminShell,
@@ -45,6 +46,7 @@ export interface AdminRouteOptions {
   readonly core: CoreRuntime;
   readonly routes: RouteRegistry;
   readonly csrfTokenFor: (path: string) => string;
+  readonly publicBaseUrl: string | null;
   readonly resolveSocketPeerAddress: (context: Context) => string | null;
   readonly cookie?: SessionCookieOptions;
 }
@@ -109,6 +111,8 @@ export function registerAdminRoutes(options: AdminRouteOptions): void {
           organizerName: organizer.displayName,
           seasonName: season.displayName,
           seasonId: season.id,
+          signupUrls: seasonSignupUrls(options.publicBaseUrl, season.id),
+          publicMapUrl: season.publicMapUrl,
           correctionsClosed: !isSeasonActionLegal(season.state, "correction"),
           items: options.core.queue.listForOrganizer(season.id, organizer.id),
           changeRequests: options.core.changeRequests.listPendingForSeason(

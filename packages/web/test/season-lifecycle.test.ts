@@ -6,6 +6,7 @@ import {
   createTestingRuntime,
   type PorchfestRuntime,
 } from "../src/composition.js";
+import { renderPublicSeasonLinks } from "../src/views/public-season-links.js";
 
 const PUBLIC_BASE_URL = "https://porchfest.example";
 const temporaryRoots: string[] = [];
@@ -20,14 +21,14 @@ afterEach(async () => {
   );
 });
 
-async function boot() {
+async function boot(publicBaseUrl = PUBLIC_BASE_URL) {
   const dataDirectory = await mkdtemp(join(tmpdir(), "porchfest-lifecycle-"));
   temporaryRoots.push(dataDirectory);
   const announced: string[] = [];
   const runtime = await createTestingRuntime({
     dataDirectory,
     env: {
-      PUBLIC_BASE_URL,
+      PUBLIC_BASE_URL: publicBaseUrl,
       PORCHFEST_SESSION_SECRET: "season-lifecycle-test-secret",
     },
     announce: (message) => announced.push(message),
@@ -37,14 +38,14 @@ async function boot() {
   const bootstrapToken =
     announced.join("\n").match(/token=([A-Za-z0-9_-]+)/)?.[1] ?? "";
   const signInPage = await runtime.request(
-    `${PUBLIC_BASE_URL}/admin/sign-in?token=${bootstrapToken}`,
+    `${publicBaseUrl}/admin/sign-in?token=${bootstrapToken}`,
   );
   const signInCsrf =
     (await signInPage.text()).match(/name="_csrf" value="([^"]+)"/)?.[1] ?? "";
-  const signedIn = await runtime.request(`${PUBLIC_BASE_URL}/admin/sign-in`, {
+  const signedIn = await runtime.request(`${publicBaseUrl}/admin/sign-in`, {
     method: "POST",
     headers: {
-      origin: PUBLIC_BASE_URL,
+      origin: publicBaseUrl,
       "content-type": "application/x-www-form-urlencoded",
     },
     body: new URLSearchParams({
@@ -122,6 +123,51 @@ async function transition(
 }
 
 describe("organizer season lifecycle", () => {
+  it("names unavailable public links when deployment or season configuration is absent", () => {
+    const html = renderPublicSeasonLinks(null, null);
+
+    expect(html).toContain(
+      "Shareable signup URLs are unavailable because PUBLIC_BASE_URL is not configured.",
+    );
+    expect(html).toContain("No public map URL is configured for this season.");
+  });
+
+  it("shows shareable URLs and the configured public map for this season", async () => {
+    const publicBaseUrl = "https://events.example.invalid:8443";
+    const { runtime, cookie } = await boot(publicBaseUrl);
+    const publicMapUrl =
+      "https://map.example.invalid/porchfest?view=public&kind=all";
+    const { season } = runtime.core.setup.createSeason({
+      year: 2032,
+      displayName: "Second Synthetic Season",
+      timezone: "UTC",
+      eventDate: "2032-09-11",
+      eventCity: "Elsewhere",
+      eventState: "MN",
+      publicMapUrl,
+      timeSlots: [{ startsAt: "18:00", endsAt: "19:00" }],
+      openSignups: true,
+    });
+    expect(season.id).toBe(2);
+
+    const page = await runtime.request(
+      `${publicBaseUrl}/admin/seasons/${season.id}`,
+      { headers: { cookie, host: "request-host.example.invalid" } },
+    );
+    const html = await page.text();
+    const hostUrl = `${publicBaseUrl}/signup/host?season=2`;
+    const performerUrl = `${publicBaseUrl}/signup/performer?season=2`;
+
+    expect(page.status).toBe(200);
+    expect(html).toContain(`href="${hostUrl}"`);
+    expect(html).toContain(`href="${performerUrl}"`);
+    expect(html).toContain(
+      'href="https://map.example.invalid/porchfest?view=public&amp;kind=all"',
+    );
+    expect((await runtime.request(hostUrl)).status).toBe(200);
+    expect((await runtime.request(performerUrl)).status).toBe(200);
+  });
+
   it("refuses unauthenticated GET and POST requests", async () => {
     const { runtime, season } = await boot();
     expect((await get(runtime, `/admin/seasons/${season.id}`)).status).toBe(
