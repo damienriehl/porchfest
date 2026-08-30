@@ -180,6 +180,27 @@ function makeBox() {
   };
 }
 
+/** A browser control whose async click handlers can be observed to completion. */
+function makeAsyncControl() {
+  const listeners: Record<
+    string,
+    ((event: { preventDefault(): void }) => void | Promise<void>)[]
+  > = {};
+  return {
+    addEventListener(
+      name: string,
+      handler: (event: { preventDefault(): void }) => void | Promise<void>,
+    ) {
+      (listeners[name] ??= []).push(handler);
+    },
+    async fire(name: string) {
+      for (const handler of listeners[name] ?? []) {
+        await handler({ preventDefault() {} });
+      }
+    },
+  };
+}
+
 function slug(value: string): string {
   return value.toLowerCase().replaceAll(" ", "-");
 }
@@ -349,12 +370,16 @@ describe("organizer outbox screens", () => {
     expect(html).toContain("the-porch-cats@example.invalid");
     expect(html).toContain("Generated");
     expect(html).toContain("Send selected");
+    expect(html).not.toContain("Copy selected");
+    expect(html).toContain("Review and send");
     expect(html).toContain("Export selected");
     expect(html).toContain("Sending through spy");
 
     const seasonHtml = await (
       await get(runtime, `/admin/seasons/${season.id}/outbox`, cookie)
     ).text();
+    expect(seasonHtml).toContain("press send");
+    expect(seasonHtml).not.toContain("review, copy, or export");
     expect(seasonHtml).toContain("match");
     expect(seasonHtml).toContain(`/admin/outbox/waves/${generated.waveId}`);
     expect(seasonHtml).toContain("4 generated");
@@ -525,7 +550,7 @@ describe("organizer outbox screens", () => {
     expect(refused.status).toBe(409);
   });
 
-  it("offers export only when no provider is configured", async () => {
+  it("offers review, copy, and export controls when no provider is configured", async () => {
     const { runtime, cookie, season } = await boot();
     const { waveId, messages } = await generateMatchWave(
       runtime,
@@ -540,10 +565,24 @@ describe("organizer outbox screens", () => {
     );
     const html = await wavePage.text();
     expect(html).not.toContain("Send selected");
+    expect(html).not.toContain("Review and send");
+    expect(html).not.toContain("press send");
+    expect(html).toContain("Review, copy, or export");
     expect(html).toContain(
       "No email provider configured — messages can be copied or exported",
     );
+    expect(html).toContain("Copy selected");
+    expect(html).toContain('type="button" data-outbox-copy');
+    expect(html).toContain(
+      'data-outbox-copy-status role="status" aria-live="polite"',
+    );
     expect(html).toContain("Export selected");
+
+    const seasonHtml = await (
+      await get(runtime, `/admin/seasons/${season.id}/outbox`, cookie)
+    ).text();
+    expect(seasonHtml).toContain("review, copy, or export");
+    expect(seasonHtml).not.toContain("press send");
 
     const sendCsrf = csrf(html, `/admin/outbox/waves/${waveId}/send`);
     // One form, one token, one path: the export buttons post their intent
@@ -606,7 +645,7 @@ describe("organizer outbox screens", () => {
     expect(refusedHtml).toContain(
       "Select at least one message before exporting.",
     );
-    expect(refusedHtml).toContain("Review and send");
+    expect(refusedHtml).toContain("Review, copy, or export");
 
     const single = await get(
       runtime,
@@ -963,5 +1002,116 @@ describe("organizer outbox screens", () => {
     boxes[0]!.fire("change");
     expect(toggle.checked).toBe(false);
     expect(toggle.indeterminate).toBe(true);
+  });
+
+  it("copies selected message text with an announced result and makes no request", async () => {
+    const { runtime, cookie, season } = await boot();
+    const { waveId, messages } = await generateMatchWave(
+      runtime,
+      cookie,
+      season.id,
+    );
+    const html = await (
+      await get(runtime, `/admin/outbox/waves/${waveId}`, cookie)
+    ).text();
+    expect(html).toContain('type="button" data-outbox-copy');
+    expect(html).toContain(
+      `data-copy-subject="message-${messages[0]!.id}-subject" data-copy-body="message-${messages[0]!.id}-body"`,
+    );
+    expect(html).toContain(`id="message-${messages[0]!.id}-body"`);
+
+    const source = await (await get(runtime, "/admin/assets/admin.js")).text();
+    const run = new Function("document", "navigator", "fetch", source) as (
+      document: unknown,
+      navigator: unknown,
+      fetch: unknown,
+    ) => void;
+
+    const boxes = [
+      {
+        ...makeBox(),
+        checked: true,
+        getAttribute: (name: string) =>
+          name === "data-copy-subject"
+            ? "copy-subject-1"
+            : name === "data-copy-body"
+              ? "copy-body-1"
+              : null,
+      },
+      {
+        ...makeBox(),
+        checked: true,
+        getAttribute: (name: string) =>
+          name === "data-copy-subject"
+            ? "copy-subject-2"
+            : name === "data-copy-body"
+              ? "copy-body-2"
+              : null,
+      },
+      {
+        ...makeBox(),
+        checked: false,
+        getAttribute: () => null,
+      },
+    ];
+    const toggle = makeBox();
+    const copyAction = makeAsyncControl();
+    const copyStatus = { textContent: "" };
+    const copied: string[] = [];
+    let requestCount = 0;
+    const nodes: Readonly<Record<string, { textContent: string }>> = {
+      "copy-subject-1": { textContent: messages[0]!.subject },
+      "copy-body-1": { textContent: messages[0]!.textBody! },
+      "copy-subject-2": { textContent: messages[1]!.subject },
+      "copy-body-2": { textContent: messages[1]!.textBody! },
+    };
+    const form = {
+      requestSubmit: () => {
+        requestCount += 1;
+      },
+      querySelector: (selector: string) => {
+        if (selector === 'input[name="select_all"]') return toggle;
+        if (selector === "[data-outbox-copy]") return copyAction;
+        if (selector === "[data-outbox-copy-status]") return copyStatus;
+        return null;
+      },
+      querySelectorAll: (selector: string) =>
+        selector === 'input[name="message"]:checked'
+          ? boxes.filter((box) => box.checked)
+          : boxes,
+    };
+    const navigator = {
+      clipboard: {
+        writeText: async (value: string) => {
+          copied.push(value);
+        },
+      },
+    };
+    run(
+      {
+        getElementById: (id: string) =>
+          id === "outbox-selection" ? form : (nodes[id] ?? null),
+      },
+      navigator,
+      () => {
+        requestCount += 1;
+      },
+    );
+
+    await copyAction.fire("click");
+    expect(copied).toEqual([
+      `Subject: ${messages[0]!.subject}\n\n${messages[0]!.textBody}\n\n----- next message -----\n\nSubject: ${messages[1]!.subject}\n\n${messages[1]!.textBody}`,
+    ]);
+    expect(copyStatus.textContent).toBe("Copied 2 messages.");
+    expect(requestCount).toBe(0);
+
+    navigator.clipboard.writeText = async () => {
+      throw new Error("clipboard unavailable");
+    };
+    await copyAction.fire("click");
+    expect(copyStatus.textContent).toBe(
+      "Could not copy the selected messages. Review and copy each message instead.",
+    );
+    expect(requestCount).toBe(0);
   });
 });

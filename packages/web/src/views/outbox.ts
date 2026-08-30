@@ -115,6 +115,12 @@ function providerLine(provider: ProviderStatus): string {
     : `<p class="help">No email provider configured — messages can be copied or exported.</p>`;
 }
 
+function outboxIntro(provider: ProviderStatus): string {
+  return provider.configured
+    ? "Every wave is generated here for review. Nothing is sent until you select messages and press send."
+    : "Every wave is generated here for review, copy, or export. Nothing is transmitted from this site.";
+}
+
 function errorSummary(
   heading: string,
   message: string | undefined,
@@ -212,7 +218,7 @@ export function renderSeasonOutboxPage(options: {
     `    <header class="signup-header">
       <p class="eyebrow">${escapeHtml(options.season.displayName)}</p>
       <h1>Email outbox</h1>
-      <p class="lede">Every wave is generated here for review. Nothing is sent until you select messages and press send.</p>
+      <p class="lede">${outboxIntro(options.provider)}</p>
       <p class="lede"><a href="/admin?season=${options.season.id}">Back to activity queue</a> · <a href="/admin/seasons/${options.season.id}">Season settings &amp; state</a></p>
       ${providerLine(options.provider)}
     </header>
@@ -315,7 +321,7 @@ export function renderOutboxWavePage(options: {
       ${regenerate}
     </section>
     <section aria-labelledby="outbox-review-title">
-      <h2 id="outbox-review-title">Review and send</h2>
+      <h2 id="outbox-review-title">${options.provider.configured ? "Review and send" : "Review, copy, or export"}</h2>
       ${
         options.messages.length === 0
           ? `<p class="help">This wave has no messages. Regenerate it once the season has records to write to.</p>`
@@ -323,11 +329,12 @@ export function renderOutboxWavePage(options: {
         <input type="hidden" name="_csrf" value="${escapeHtml(options.csrf.send)}">
         ${selectAll}
         <ul class="queue-list">${list}</ul>
-        <p class="help">Exporting never transmits anything; it hands you the text and the .eml files to send yourself.</p>
+        <p class="help">${options.provider.configured ? "Exporting never transmits anything; it hands you the text and the .eml files to send yourself." : "Review the selected messages, then copy their text or export files for your own email workflow."}</p>
         ${
           options.provider.configured
             ? `<button class="primary-action" type="submit" name="intent" value="send">Send selected</button>`
-            : `<p class="help">Sending is unavailable until an email provider is configured.</p>`
+            : `<button class="primary-action" type="button" data-outbox-copy>Copy selected</button>
+        <p class="help" data-outbox-copy-status role="status" aria-live="polite" aria-atomic="true"></p>`
         }
         <button class="secondary-action" type="submit" name="intent" value="export-text">Export selected</button>
         <button class="secondary-action" type="submit" name="intent" value="export-eml">Export selected as .eml</button>
@@ -376,13 +383,13 @@ function renderMessageCard(season: Season, message: OutboxMessageView): string {
         <ul class="outbox-recipients">${recipients}</ul>
         <details>
           <summary>Read the message</summary>
-          <pre class="outbox-body">${escapeHtml(bodyOrPurged(message))}</pre>
+          <pre class="outbox-body" id="message-${message.id}-body">${escapeHtml(bodyOrPurged(message))}</pre>
         </details>
         <p class="help"><a href="/admin/outbox/messages/${message.id}.eml">Download this message as .eml</a></p>
         ${
           sendable
             ? `<div class="field"><label class="choice" for="message-${message.id}">
-          <input id="message-${message.id}" name="message" type="checkbox" value="${message.id}" aria-describedby="message-${message.id}-subject">
+          <input id="message-${message.id}" name="message" type="checkbox" value="${message.id}" aria-describedby="message-${message.id}-subject" data-copy-subject="message-${message.id}-subject" data-copy-body="message-${message.id}-body">
           Include this message
         </label></div>
         <input type="hidden" name="version_${message.id}" value="${message.version}">`
