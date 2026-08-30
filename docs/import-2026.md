@@ -97,6 +97,11 @@ the synthetic fixture keeps it covered. An `id_for_fallback` on an
 The three `nominatim-house` coordinates intentionally remain in review because
 their `crosscheck_m` values are null. That `needs-review` /
 `cross-check-missing` result is the KTD11 fail-closed path, not an import warning.
+Imported points with a malformed or missing element reference enter the same
+review queue as `missing-ref`; an unknown source label enters it as `imprecise`.
+The `refused` code remains reserved for the live-provider outcome where no point
+was returned, which is stored as rejected rather than as reviewable point
+evidence.
 Likewise, deliberately open slots and canceled assignment history do not produce
 warnings. A clean fidelity report has exactly the one expected unmatched-venue
 warning above, not an empty `warnings` array. Stop for any reach-via warning or

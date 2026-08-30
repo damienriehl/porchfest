@@ -1465,35 +1465,70 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
     }
   });
 
-  it("R29: the three recognized geocache source labels map exactly and nominatim-house without cross-check enters review", async () => {
-    const geocache = await readFixture<
-      Record<string, { source: string; crosscheck_m: number | null }>
-    >(fixtureArtifactFiles.geocache);
-    const report = runImport();
-    const coordinates = database.db.select().from(venueCoordinates).all();
-    expect(
-      new Set(Object.values(geocache).map(({ source }) => source)),
-    ).toEqual(
-      new Set(["osm-address-point", "nominatim-house", "us-census-unimproved"]),
-    );
-    expect(coordinates).toHaveLength(20);
-    expect(
-      coordinates.every(
-        ({ source, provider, ref }) =>
-          source === "geocoded" &&
-          ["osm-address-point", "nominatim-house"].includes(provider) &&
-          /^way\/\d+$/.test(ref ?? ""),
-      ),
-    ).toBe(true);
-    expect(
-      coordinates.filter(
-        ({ status, rejectionCode }) =>
-          status === "needs-review" && rejectionCode === "cross-check-missing",
-      ),
-    ).toHaveLength(3);
-    expect(report.geocache.hits).toHaveLength(20);
-    expect(report.geocache.misses).toHaveLength(3);
-    expect(report.warnings).toEqual([]);
+  it("R29: recognized sources preserve cross-check and out-of-bounds review evidence", async () => {
+    const temporary = await copyFixture("porchfest-geocache-review-codes-");
+    try {
+      const path = join(temporary, fixtureArtifactFiles.geocache);
+      const geocache = JSON.parse(await readFile(path, "utf8")) as Record<
+        string,
+        {
+          lat: number;
+          lng: number;
+          source: string;
+          crosscheck_m: number | null;
+        }
+      >;
+      const outsideAddress = Object.keys(geocache)[5]!;
+      geocache[outsideAddress]!.lat = 11;
+      geocache[outsideAddress]!.lng = 21;
+      await writeFile(path, `${JSON.stringify(geocache, null, 2)}\n`);
+
+      const report = importGoal1Season(core, {
+        ...importOptions,
+        artifactsDirectory: temporary,
+      });
+      const coordinates = database.db.select().from(venueCoordinates).all();
+      expect(
+        new Set(Object.values(geocache).map(({ source }) => source)),
+      ).toEqual(
+        new Set([
+          "osm-address-point",
+          "nominatim-house",
+          "us-census-unimproved",
+        ]),
+      );
+      expect(coordinates).toHaveLength(20);
+      expect(
+        coordinates.every(
+          ({ source, provider, ref }) =>
+            source === "geocoded" &&
+            ["osm-address-point", "nominatim-house"].includes(provider) &&
+            /^way\/\d+$/.test(ref ?? ""),
+        ),
+      ).toBe(true);
+      expect(
+        coordinates.filter(
+          ({ status, rejectionCode }) =>
+            status === "needs-review" &&
+            rejectionCode === "cross-check-missing",
+        ),
+      ).toHaveLength(3);
+      const outsideHit = report.geocache.hits.find(
+        ({ address }) => address === outsideAddress,
+      )!;
+      expect(outsideHit).toMatchObject({
+        reviewStatus: "needs-review",
+        rejectionCode: "out-of-bounds",
+      });
+      expect(
+        core.geocoding.publishableCoordinate(outsideHit.venueId),
+      ).toBeNull();
+      expect(report.geocache.hits).toHaveLength(20);
+      expect(report.geocache.misses).toHaveLength(3);
+      expect(report.warnings).toEqual([]);
+    } finally {
+      await rm(temporary, { recursive: true, force: true });
+    }
   });
 
   it("R29: unknown providers fail closed while nominatim without a cross-check needs review", async () => {
@@ -1518,7 +1553,7 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
 
       expect(hits.get(unknownAddress)).toMatchObject({
         reviewStatus: "needs-review",
-        rejectionCode: "refused",
+        rejectionCode: "imprecise",
       });
       expect(hits.get(nominatimAddress)).toMatchObject({
         reviewStatus: "needs-review",
@@ -1588,7 +1623,7 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
       for (const address of addresses) {
         expect(hits.get(address)).toMatchObject({
           reviewStatus: "needs-review",
-          rejectionCode: "refused",
+          rejectionCode: "missing-ref",
         });
       }
       expect(report.warnings).toContain(

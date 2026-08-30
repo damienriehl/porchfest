@@ -1697,7 +1697,7 @@ function importCoordinates(state: ImportState, geocache: JsonObject): void {
         interpolated: providerKind.interpolated,
         forcedRejectionCode: validRef
           ? providerKind.forcedRejectionCode
-          : "refused",
+          : "missing-ref",
       });
       const stored = imported.coordinate;
       const status =
@@ -1760,7 +1760,7 @@ function goal1ProviderKind(provider: string): {
   return {
     precision: "parcel",
     interpolated: false,
-    forcedRejectionCode: "refused",
+    forcedRejectionCode: "imprecise",
     warning: `Unknown geocache source label requires review: ${provider}`,
   };
 }
