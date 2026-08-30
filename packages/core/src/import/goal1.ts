@@ -15,7 +15,7 @@ import type {
 } from "../records.js";
 import type { createSeasonRepository } from "../season.js";
 import type { SeasonSetupRepository } from "../setup.js";
-import { endOfDateInTimeZone } from "../time.js";
+import { endOfDateInTimeZone, parseWallClock } from "../time.js";
 import type {
   Act,
   Contact,
@@ -455,12 +455,10 @@ function applyPerformerOverrides(
     }
     const existing = findImportKey(state, SOURCE.override, naturalKey);
     const override = object(rawOverride, `performer override ${naturalKey}`);
-    const overrideDate = requiredString(override.on, "override on");
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(overrideDate)) {
-      throw new Error(
-        `Performer override ${naturalKey} on must use YYYY-MM-DD.`,
-      );
-    }
+    const overrideDate = requiredIsoDate(
+      override.on,
+      `Performer override ${naturalKey} on`,
+    );
     const fields = object(
       override.fields,
       `performer override fields ${naturalKey}`,
@@ -621,34 +619,44 @@ function importVirtualActs(state: ImportState, matches: JsonObject): void {
       virtual.reach_via,
       "virtual performer reach_via",
     );
-    let reach: { reachViaContactId: number } | null = null;
-    if (reachVia === "manual_contact") {
-      const manualKey = requiredString(
-        virtual.manual_contact,
-        "virtual performer manual_contact",
-      );
-      const manual = state.manualContacts.get(manualKey);
-      if (manual) reach = { reachViaContactId: manual.id };
-    } else {
-      const contact = resolveVirtualActReach(
+    const manualKey =
+      reachVia === "manual_contact"
+        ? requiredString(
+            virtual.manual_contact,
+            "virtual performer manual_contact",
+          )
+        : optionalString(virtual.manual_contact);
+    const manual = manualKey ? state.manualContacts.get(manualKey) : null;
+    let contact = manual;
+    let reachWarningEmitted = false;
+    if (reachVia !== "manual_contact") {
+      contact = resolveVirtualActReach(
         state,
         virtualKey,
         reachVia,
         matchVenues,
         matches,
       );
-      if (contact !== null) reach = { reachViaContactId: contact.id };
+      if (contact === null) {
+        state.report.warnings.push(
+          `Virtual performer reach-via did not resolve: ${virtualKey}`,
+        );
+        reachWarningEmitted = true;
+        contact = manual;
+      }
     }
-    if (reach === null) {
-      state.report.warnings.push(
-        `Virtual performer reach-via did not resolve: ${virtualKey}`,
-      );
+    if (!contact) {
+      if (!reachWarningEmitted) {
+        state.report.warnings.push(
+          `Virtual performer reach-via did not resolve: ${virtualKey}`,
+        );
+      }
       increment(state.report, "act", "skipped");
       continue;
     }
     const act = state.core.seasons.createPlaceholderAct({
       seasonId: state.season.id,
-      reach,
+      reach: { reachViaContactId: contact.id },
       act: {
         name: requiredString(
           virtual.display_name,
@@ -874,13 +882,39 @@ function importVenueSlate(state: ImportState, matches: JsonObject): void {
       continue;
     }
     const mapAddress = optionalString(venueEntry.map_address);
-    if (
-      mapAddress &&
-      normalizeVenueAddress(venue.address) !== normalizeVenueAddress(mapAddress)
-    ) {
-      venue = state.core.seasons.updateVenue(venue.id, venue.version, {
-        address: mapAddress,
-      });
+    if (mapAddress) {
+      const hostFormAddress = hostKey
+        ? optionalString(state.hostRows.get(hostKey)?.address)
+        : null;
+      const privateAddressLine =
+        hostFormAddress &&
+        normalizeVenueAddress(hostFormAddress) !==
+          normalizeVenueAddress(mapAddress)
+          ? `[host-form address] ${hostFormAddress}`
+          : null;
+      const addressChanged =
+        normalizeVenueAddress(venue.address) !==
+        normalizeVenueAddress(mapAddress);
+      const notesChanged =
+        privateAddressLine !== null &&
+        !venue.notes?.split("\n").includes(privateAddressLine);
+      if (addressChanged || notesChanged) {
+        venue = state.core.seasons.updateVenue(venue.id, venue.version, {
+          ...(addressChanged ? { address: mapAddress } : {}),
+          ...(notesChanged
+            ? { notes: joinedNotes([venue.notes, privateAddressLine]) }
+            : {}),
+        });
+      }
+      if (privateAddressLine) {
+        addAnnotation(
+          state,
+          "venue",
+          venue.id,
+          `${entryId}:host-form-address`,
+          privateAddressLine,
+        );
+      }
       if (hostKey) state.hostVenues.set(hostKey, venue);
       if (virtualKey) state.virtualVenues.set(virtualKey, venue);
     }
@@ -914,7 +948,7 @@ function importVenueSlate(state: ImportState, matches: JsonObject): void {
       );
       annotateSlotProse(state, venueId, entryId, slotLabel, configuration);
       const assignmentNaturalKey = `${natural}:${slotLabel}`;
-      if (configuration.open === true || "canceled" in configuration) {
+      if (configuration.open === true) {
         increment(state.report, "assignment", "skipped");
         continue;
       }
@@ -1105,6 +1139,172 @@ function importVenueSlate(state: ImportState, matches: JsonObject): void {
       increment(state.report, "assignment", "created");
     }
   }
+  applySlotCancellations(state, matches);
+}
+
+function applySlotCancellations(state: ImportState, matches: JsonObject): void {
+  const cancellationsByAct = new Map<
+    number,
+    {
+      act: Act;
+      cancellations: {
+        entryId: string;
+        slotLabel: string;
+        on: string;
+        reason: string;
+        propagatedFrom?: string;
+      }[];
+    }
+  >();
+  const assignmentsBySlot = new Map(
+    state.core.seasons
+      .listAssignments(state.season.id)
+      .map((assignment) => [assignment.slotId, assignment]),
+  );
+
+  for (const rawVenue of array(matches.venues)) {
+    const venueEntry = object(rawVenue, "venue entry");
+    const entryId = requiredString(venueEntry.id, "venue id");
+    const venueId = state.matchedVenueIds.get(entryId);
+    if (venueId === undefined) continue;
+    const slots = state.core.seasons.listVenueSlots(venueId);
+    const configuredSlots = object(venueEntry.slots, `slots for ${entryId}`);
+    for (const [index, definition] of GOAL1_SLOT_DEFINITIONS.entries()) {
+      const slotLabel = definition.artifactLabel;
+      const configuration = object(
+        configuredSlots[slotLabel],
+        `${entryId} ${slotLabel} slot`,
+      );
+      if (!("canceled" in configuration)) continue;
+      const cancellation = object(
+        configuration.canceled,
+        `${entryId} ${slotLabel} cancellation`,
+      );
+      const on = requiredIsoDate(cancellation.on, "Slot cancellation on");
+      const reason = requiredString(
+        cancellation.reason,
+        "slot cancellation reason",
+      );
+      const slot = slots[index];
+      if (!slot) continue;
+      const assignment = assignmentsBySlot.get(slot.id);
+      const assignedAct = assignment
+        ? state.core.seasons.getAct(assignment.actId)
+        : null;
+      const act = assignedAct
+        ? state.core.seasons.resolveAct(assignedAct.id).canonical
+        : resolveConfiguredSlotAct(state, configuration, configuredSlots);
+      if (!act) {
+        state.report.warnings.push(
+          `Canceled slot assignment did not resolve: ${entryId} ${slotLabel}`,
+        );
+        continue;
+      }
+      const grouped = cancellationsByAct.get(act.id) ?? {
+        act,
+        cancellations: [],
+      };
+      grouped.cancellations.push({ entryId, slotLabel, on, reason });
+      const partnerLabels = new Set<string>();
+      const sourceLabel = optionalString(configuration.same_as);
+      if (sourceLabel) partnerLabels.add(sourceLabel);
+      for (const [partnerLabel, rawPartner] of Object.entries(
+        configuredSlots,
+      )) {
+        const partner = object(rawPartner, `${entryId} ${partnerLabel} slot`);
+        if (optionalString(partner.same_as) === slotLabel) {
+          partnerLabels.add(partnerLabel);
+        }
+      }
+      for (const partnerLabel of partnerLabels) {
+        grouped.cancellations.push({
+          entryId,
+          slotLabel: partnerLabel,
+          on,
+          reason,
+          propagatedFrom: slotLabel,
+        });
+      }
+      cancellationsByAct.set(act.id, grouped);
+      const sourceIndex = sourceLabel
+        ? GOAL1_SLOT_DEFINITIONS.findIndex(
+            ({ artifactLabel }) => artifactLabel === sourceLabel,
+          )
+        : -1;
+      const sourceSlot = sourceIndex >= 0 ? slots[sourceIndex] : undefined;
+      const assignmentToUnassign =
+        (sourceSlot ? assignmentsBySlot.get(sourceSlot.id) : undefined) ??
+        assignment;
+      if (assignmentToUnassign) {
+        state.core.seasons.unassignSlot(
+          assignmentToUnassign.id,
+          assignmentToUnassign.version,
+        );
+        for (const [assignedSlotId, candidate] of assignmentsBySlot) {
+          if (
+            candidate.id === assignmentToUnassign.id ||
+            candidate.continuationOfAssignmentId === assignmentToUnassign.id
+          ) {
+            assignmentsBySlot.delete(assignedSlotId);
+          }
+        }
+      }
+    }
+  }
+
+  for (const {
+    act: importedAct,
+    cancellations,
+  } of cancellationsByAct.values()) {
+    for (const cancellation of cancellations) {
+      addAnnotation(
+        state,
+        "act",
+        importedAct.id,
+        `cancellation:${cancellation.entryId}:${cancellation.slotLabel}`,
+        `Canceled on ${cancellation.on}: ${cancellation.reason}${
+          cancellation.propagatedFrom
+            ? ` (same_as partner of ${cancellation.propagatedFrom})`
+            : ""
+        }`,
+      );
+    }
+    const act = state.core.seasons.getAct(importedAct.id);
+    if (act.status !== "withdrawn") {
+      state.core.seasons.setRecordStatus(
+        "act",
+        act.id,
+        act.version,
+        "withdrawn",
+      );
+    }
+  }
+}
+
+function resolveConfiguredSlotAct(
+  state: ImportState,
+  configuration: JsonObject,
+  configuredSlots: JsonObject,
+  seenLabels: Set<string> = new Set(),
+): Act | null {
+  const performerKey = optionalString(configuration.performer_ts);
+  if (performerKey) {
+    const act = state.performerActs.get(performerKey);
+    return act ? state.core.seasons.resolveAct(act.id).canonical : null;
+  }
+  const virtualKey = optionalString(configuration.virtual_performer);
+  if (virtualKey) {
+    const act = state.virtualActs.get(virtualKey);
+    return act ? state.core.seasons.resolveAct(act.id).canonical : null;
+  }
+  const sameAs = optionalString(configuration.same_as);
+  if (!sameAs) return null;
+  if (seenLabels.has(sameAs)) {
+    throw new Error(`Slot same_as cycle includes ${sameAs}.`);
+  }
+  seenLabels.add(sameAs);
+  const source = object(configuredSlots[sameAs], `${sameAs} source slot`);
+  return resolveConfiguredSlotAct(state, source, configuredSlots, seenLabels);
 }
 
 function applyVenueWithdrawal(
@@ -1122,10 +1322,7 @@ function applyVenueWithdrawal(
   let note = "Withdrawn";
   if (rawWithdrawal !== true) {
     const withdrawal = object(rawWithdrawal, "venue withdrawal");
-    const on = requiredString(withdrawal.on, "venue withdrawal on");
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(on)) {
-      throw new Error("Venue withdrawal on must use YYYY-MM-DD.");
-    }
+    const on = requiredIsoDate(withdrawal.on, "Venue withdrawal on");
     note = `Withdrawn on ${on}: ${requiredString(withdrawal.reason, "venue withdrawal reason")}`;
   }
   addAnnotation(state, "venue", venue.id, `venue:${venue.id}:withdrawal`, note);
@@ -1227,6 +1424,16 @@ function annotateSlotProse(
       venueId,
       `${entryId}:${slotLabel}:chase:${index}`,
       `Slot ${slotLabel} chase: ${chase}`,
+    );
+  }
+  const bandCheck = optionalString(slot.band_check);
+  if (bandCheck) {
+    addAnnotation(
+      state,
+      "venue",
+      venueId,
+      `${entryId}:${slotLabel}:band-check`,
+      `Band check: ${bandCheck}`,
     );
   }
 }
@@ -1332,16 +1539,20 @@ function importCoordinates(state: ImportState, geocache: JsonObject): void {
   }
   const hitVenueIds = new Set<number>();
   for (const [address, rawCoordinate] of Object.entries(geocache)) {
+    const coordinate = object(rawCoordinate, `geocache entry ${address}`);
+    const provider = requiredString(coordinate.source, "geocache source");
+    const providerKind = goal1ProviderKind(provider);
+    const ref = requiredString(coordinate.ref, "geocache ref");
+    if (!/^[A-Za-z]\/\d+$/.test(ref)) {
+      throw new Error("Geocache ref must use <letter>/<digits>.");
+    }
+    if (providerKind.warning) state.report.warnings.push(providerKind.warning);
     const normalizedAddress = normalizeVenueAddress(address);
     const venuesAtAddress = canonicalByAddress.get(normalizedAddress);
     if (!venuesAtAddress) {
       state.report.geocache.misses.push(address);
       continue;
     }
-    const coordinate = object(rawCoordinate, `geocache entry ${address}`);
-    const provider = requiredString(coordinate.source, "geocache source");
-    const providerKind = goal1ProviderKind(provider);
-    if (providerKind.warning) state.report.warnings.push(providerKind.warning);
     for (const venue of venuesAtAddress) {
       const natural =
         state.venueNaturalKeys.get(venue.id) ?? `venue:${venue.id}`;
@@ -1351,7 +1562,7 @@ function importCoordinates(state: ImportState, geocache: JsonObject): void {
         latitude: requiredNumber(coordinate.lat, "geocache latitude"),
         longitude: requiredNumber(coordinate.lng, "geocache longitude"),
         provider,
-        ref: requiredString(coordinate.ref, "geocache ref"),
+        ref,
         crossCheckDistanceM: nullableNumber(
           coordinate.crosscheck_m,
           "geocache crosscheck_m",
@@ -1410,15 +1621,13 @@ function goal1ProviderKind(provider: string): {
   readonly forcedRejectionCode?: CoordinateRejectionCode;
   readonly warning?: string;
 } {
-  const normalized = provider.toLowerCase();
-  if (normalized.includes("census") || normalized.includes("unimproved")) {
-    return { precision: "street", interpolated: true };
-  }
-  if (normalized.includes("house") || normalized.includes("nominatim")) {
-    return { precision: "house", interpolated: false };
-  }
-  if (normalized.includes("parcel")) {
-    return { precision: "parcel", interpolated: false };
+  switch (provider) {
+    case "osm-address-point":
+      return { precision: "parcel", interpolated: false };
+    case "nominatim-house":
+      return { precision: "house", interpolated: false };
+    case "us-census-unimproved":
+      return { precision: "street", interpolated: true };
   }
   return {
     precision: "parcel",
@@ -1951,6 +2160,14 @@ function requiredString(value: unknown, label: string): string {
   if (normalized === null)
     throw new Error(`${label} must be a non-empty string.`);
   return normalized;
+}
+
+function requiredIsoDate(value: unknown, label: string): string {
+  const date = requiredString(value, label);
+  if (!parseWallClock(`${date}T12:00`)) {
+    throw new Error(`${label} must use YYYY-MM-DD.`);
+  }
+  return date;
 }
 
 function manualContactKey(reference: string): string | null {

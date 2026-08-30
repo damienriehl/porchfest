@@ -103,15 +103,32 @@ export function generateSeasonFixture(outputDirectory = here): void {
     const hostRow = hosts[hostIndex - 1]!;
     const performerRow = performers[assignedPerformerIndexes[position]! - 1]!;
     const slotTwo =
-      position < 5
-        ? { virtual_performer: `virtual-act-${position + 2}` }
-        : position < 16
-          ? { same_as: "6-7" }
-          : { open: true };
+      position === 2 || position === 3
+        ? {
+            virtual_performer: `virtual-act-${position}`,
+            ...(position === 3
+              ? { note: "Invented virtual performer slot note." }
+              : {}),
+          }
+        : position >= 15 && position <= 18
+          ? { open: true }
+          : { same_as: "6-7" };
+    const withdrawn =
+      position < 2
+        ? {
+            on: `2026-08-${String(position + 10).padStart(2, "0")}`,
+            reason: `Invented physical venue withdrawal ${position + 1}.`,
+          }
+        : undefined;
+    const mapAddress =
+      position === 2 || position === 3
+        ? `${700 + position} Storybook Square, Fableton, FS`
+        : undefined;
     return {
       id: `venue-${String(position + 1).padStart(2, "0")}`,
       host_ts: hostRow.ts,
-      address_check: hostRow.address,
+      ...(mapAddress ? { map_address: mapAddress } : {}),
+      address_check: mapAddress ?? hostRow.address,
       basis: `Invented matching basis ${position + 1}.`,
       chase: [`Invented chase item ${position + 1}.`],
       email_notes: [`Invented email note ${position + 1}.`],
@@ -121,8 +138,22 @@ export function generateSeasonFixture(outputDirectory = here): void {
           : position === 1
             ? ["manual_contact: manual-extra-two"]
             : [],
+      ...(withdrawn ? { withdrawn } : {}),
       slots: {
-        "6-7": { performer_ts: performerRow.ts },
+        "6-7": {
+          performer_ts: performerRow.ts,
+          ...(withdrawn
+            ? {
+                canceled: {
+                  on: withdrawn.on,
+                  reason: `Invented canceled assignment ${position + 1}.`,
+                },
+              }
+            : {}),
+          ...(position === 2
+            ? { band_check: "Invented organizer name verification." }
+            : {}),
+        },
         "7-8": slotTwo,
       },
     };
@@ -173,8 +204,14 @@ export function generateSeasonFixture(outputDirectory = here): void {
       email_notes: ["Invented withdrawn-venue email note."],
       withdrawn: virtualVenues["virtual-withdrawn-venue"].withdrawn,
       slots: {
-        "6-7": { canceled: true },
-        "7-8": { canceled: true },
+        "6-7": {
+          performer_ts: performers[21]!.ts,
+          canceled: {
+            on: "2026-08-15",
+            reason: "Invented canceled virtual-venue assignment.",
+          },
+        },
+        "7-8": { same_as: "6-7" },
       },
     },
   ];
@@ -191,11 +228,17 @@ export function generateSeasonFixture(outputDirectory = here): void {
               manual_contact: "manual-paper-comet",
               note: "Invented manual-contact placeholder note.",
             }
-          : {
-              display_name: `Porcelain Echo ${number}`,
-              reach_via: "host",
-              note: `Invented host-reached placeholder note ${number}.`,
-            },
+          : number <= 3
+            ? {
+                display_name: `Porcelain Echo ${number}`,
+                reach_via: "host",
+                note: `Invented host-reached placeholder note ${number}.`,
+              }
+            : {
+                display_name: `Porcelain Echo ${number}`,
+                reach_via: performers[number + 15]!.ts,
+                note: `Invented timestamp-reached placeholder note ${number}.`,
+              },
       ];
     }),
   );
@@ -248,6 +291,7 @@ export function generateSeasonFixture(outputDirectory = here): void {
     unmatched_venues: [
       {
         host_ts: hosts[22]!.ts,
+        id_for_fallback: "unmatched-venue-override",
         address_check: hosts[22]!.address,
         status: "unmatched",
         email_note: "Invented unmatched venue note.",
@@ -303,16 +347,24 @@ export function generateSeasonFixture(outputDirectory = here): void {
     geocode_unimproved_allowlist: {},
   };
 
-  const geocacheAddresses = venueEntries.map((venue) => venue.address_check);
+  const geocacheAddresses = [
+    ...venueEntries.map((venue) => venue.address_check),
+    hosts[22]!.address,
+  ];
   const geocache = Object.fromEntries(
     geocacheAddresses.map((address, index) => [
       address,
       {
         lat: Number((10 + index * 0.01).toFixed(6)),
         lng: Number((20 + index * 0.01).toFixed(6)),
-        source: "synthetic-parcel",
-        ref: `synthetic/ref/${String(index + 1).padStart(2, "0")}`,
-        crosscheck_m: index % 4 === 0 ? 4.2 : null,
+        source:
+          index === 21
+            ? "us-census-unimproved"
+            : index >= 2 && index <= 4
+              ? "nominatim-house"
+              : "osm-address-point",
+        ref: `${index % 2 === 0 ? "n" : "w"}/${1000 + index}`,
+        crosscheck_m: index >= 2 && index <= 4 ? null : 4.2,
       },
     ]),
   );

@@ -42,7 +42,7 @@ const importOptions = {
   artifactsDirectory: fixtureDirectory,
   artifactFiles: fixtureArtifactFiles,
   localityName: "Synthetic Lantern District",
-  bounds: { north: 10.195, south: 9.5, east: 20.5, west: 19.5 },
+  bounds: { north: 10.5, south: 9.5, east: 20.5, west: 19.5 },
   timezone: "America/Chicago",
   now: () => beforeDecideBy,
 } as const;
@@ -75,7 +75,7 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
     return importGoal1Season(core, importOptions);
   }
 
-  it("R23: importing the 2026 artifacts yields 22 active slate venues and 26 approved act-side entries", () => {
+  it("R23: importing the synthetic fidelity shapes yields 22 slate venues and 20 active canonical venues", () => {
     const report = runImport();
     const activeVenues = database.db
       .select({ total: sql<number>`count(*)` })
@@ -94,18 +94,18 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
       .where(eq(slots.state, "held"))
       .get()!.total;
 
-    expect(activeVenues).toBe(22);
-    expect(approvedActs + holds).toBe(26);
-    expect(database.db.select().from(assignments).all()).toHaveLength(36);
+    expect(activeVenues).toBe(20);
+    expect(approvedActs + holds).toBe(21);
+    expect(database.db.select().from(assignments).all()).toHaveLength(32);
     expect(database.db.select().from(venues).all()).toHaveLength(25);
     expect(database.db.select().from(acts).all()).toHaveLength(33);
     expect(database.db.select().from(contacts).all()).toHaveLength(53);
     expect(report.records.venue.created).toBe(25);
     expect(report.records.act.created).toBe(33);
-    expect(report.records.assignment.created).toBe(36);
+    expect(report.records.assignment.created).toBe(38);
     expect(report.summary).toEqual({
       slateVenues: 22,
-      approvedActEntries: 26,
+      approvedActEntries: 21,
       placeholderActs: 6,
       placeholderVenues: 2,
       unmatchedVenues: 1,
@@ -156,7 +156,7 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
     expect(second.records.venue.found).toBe(25);
     expect(second.records.act.found).toBe(33);
     expect(second.records.contact.found).toBe(53);
-    expect(second.records.coordinate.found).toBe(21);
+    expect(second.records.coordinate.found).toBe(20);
     expect(second.records.annotation.found).toBe(before.counts.annotations);
     expect(second.annotationCount).toBe(before.counts.annotations);
     expect(second.supersessions.every(({ status }) => status === "found")).toBe(
@@ -172,7 +172,7 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
     try {
       const path = join(temporary, fixtureArtifactFiles.geocache);
       const geocache = JSON.parse(await readFile(path, "utf8"));
-      const address = Object.keys(geocache)[0]!;
+      const address = Object.keys(geocache)[2]!;
       geocache[address].lat = 91;
       await writeFile(path, `${JSON.stringify(geocache, null, 2)}\n`);
 
@@ -199,7 +199,7 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
       expect(after).toEqual(before);
       expect(second.records.coordinate).toMatchObject({
         created: 0,
-        found: 21,
+        found: 20,
       });
     } finally {
       await rm(temporary, { recursive: true, force: true });
@@ -279,7 +279,7 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
     try {
       const path = join(temporary, fixtureArtifactFiles.geocache);
       const geocache = JSON.parse(await readFile(path, "utf8"));
-      const activeAddress = Object.keys(geocache)[0]!;
+      const activeAddress = Object.keys(geocache)[2]!;
       geocache[activeAddress].lat = "not-a-coordinate";
       await writeFile(path, `${JSON.stringify(geocache, null, 2)}\n`);
 
@@ -300,7 +300,17 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
     }
   });
 
-  it("R26: the six placeholder acts carry their reach-via through the contact graph", () => {
+  it("R26: reach_via host and manual_contact tokens resolve alongside the timestamp fallback", async () => {
+    const matches = await readFixture<{
+      virtual_performers: Record<
+        string,
+        { reach_via: string; manual_contact?: string }
+      >;
+      venues: {
+        host_ts?: string;
+        slots: Record<string, { virtual_performer?: string }>;
+      }[];
+    }>(fixtureArtifactFiles.slate);
     const { seasonId } = runImport();
     const placeholders = database.db
       .select()
@@ -313,6 +323,40 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
       expect(act.reachViaContactId).not.toBeNull();
       const resolved = core.seasons.resolveContact(act.reachViaContactId!);
       expect(resolved.canonical.email).toMatch(/@example\.invalid$/);
+    }
+    for (const [virtualKey, performer] of Object.entries(
+      matches.virtual_performers,
+    )) {
+      const act = core.seasons.getAct(
+        core.importKeys.find(seasonId, "goal1:virtual-performer", virtualKey)!
+          .recordId,
+      );
+      let expectedContactId: number;
+      if (performer.reach_via === "manual_contact") {
+        expectedContactId = core.importKeys.find(
+          seasonId,
+          "goal1:manual-contact",
+          performer.manual_contact!,
+        )!.recordId;
+      } else if (performer.reach_via === "host") {
+        const venue = matches.venues.find(({ slots }) =>
+          Object.values(slots).some(
+            ({ virtual_performer }) => virtual_performer === virtualKey,
+          ),
+        )!;
+        expectedContactId = core.importKeys.find(
+          seasonId,
+          "goal1:host-contact",
+          venue.host_ts!,
+        )!.recordId;
+      } else {
+        expectedContactId = core.importKeys.find(
+          seasonId,
+          "goal1:performer-contact",
+          performer.reach_via,
+        )!.recordId;
+      }
+      expect(act.reachViaContactId, virtualKey).toBe(expectedContactId);
     }
     for (const manualKey of [
       "manual-paper-comet",
@@ -329,6 +373,381 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
         core.annotations
           .listAnnotations(seasonId, "contact", manual!.recordId)
           .some(({ note }) => note.startsWith("Contact sourced from 2025")),
+      ).toBe(true);
+    }
+  });
+
+  it("virtual_performer slots name exactly two host-reached acts and preserve the slot note", async () => {
+    const matches = await readFixture<{
+      virtual_performers: Record<string, { reach_via: string }>;
+      venues: {
+        host_ts: string;
+        slots: Record<string, { virtual_performer?: string; note?: string }>;
+      }[];
+    }>(fixtureArtifactFiles.slate);
+    const virtualSlots = matches.venues.flatMap(({ host_ts, slots }) =>
+      Object.entries(slots).flatMap(([slotLabel, slot]) =>
+        slot.virtual_performer ? [{ host_ts, slotLabel, ...slot }] : [],
+      ),
+    );
+
+    expect(
+      virtualSlots.map(({ virtual_performer }) => virtual_performer),
+    ).toEqual(["virtual-act-2", "virtual-act-3"]);
+    expect(
+      virtualSlots.map(
+        ({ virtual_performer }) =>
+          matches.virtual_performers[virtual_performer!]!.reach_via,
+      ),
+    ).toEqual(["host", "host"]);
+    expect(virtualSlots.filter(({ note }) => note)).toHaveLength(1);
+
+    const { seasonId } = runImport();
+    const notedSlot = virtualSlots.find(({ note }) => note)!;
+    const venueId = core.importKeys.find(
+      seasonId,
+      "goal1:host-venue",
+      notedSlot.host_ts,
+    )!.recordId;
+    expect(
+      core.annotations
+        .listAnnotations(seasonId, "venue", venueId)
+        .map(({ note }) => note),
+    ).toContain(`Slot ${notedSlot.slotLabel}: ${notedSlot.note}`);
+  });
+
+  it("an unassigned host reach warns and falls back to manual_contact when supplied", async () => {
+    const temporary = await copyFixture("porchfest-virtual-manual-fallback-");
+    try {
+      const path = join(temporary, fixtureArtifactFiles.slate);
+      const matches = JSON.parse(await readFile(path, "utf8"));
+      matches.venues[2].slots["7-8"] = { open: true };
+      matches.virtual_performers["virtual-act-2"].manual_contact =
+        "manual-paper-comet";
+      await writeFile(path, `${JSON.stringify(matches, null, 2)}\n`);
+
+      const report = importGoal1Season(core, {
+        ...importOptions,
+        artifactsDirectory: temporary,
+      });
+      const act = core.seasons.getAct(
+        core.importKeys.find(
+          report.seasonId,
+          "goal1:virtual-performer",
+          "virtual-act-2",
+        )!.recordId,
+      );
+      const manual = core.importKeys.find(
+        report.seasonId,
+        "goal1:manual-contact",
+        "manual-paper-comet",
+      )!;
+
+      expect(act.reachViaContactId).toBe(manual.recordId);
+      expect(report.summary.placeholderActs).toBe(6);
+      expect(report.warnings).toContain(
+        "Virtual performer reach-via did not resolve: virtual-act-2",
+      );
+    } finally {
+      await rm(temporary, { recursive: true, force: true });
+    }
+  });
+
+  it("an unassigned virtual performer without manual_contact is skipped with its key named", async () => {
+    const temporary = await copyFixture("porchfest-virtual-unresolved-");
+    try {
+      const path = join(temporary, fixtureArtifactFiles.slate);
+      const matches = JSON.parse(await readFile(path, "utf8"));
+      matches.venues[3].slots["7-8"] = { open: true };
+      await writeFile(path, `${JSON.stringify(matches, null, 2)}\n`);
+
+      const report = importGoal1Season(core, {
+        ...importOptions,
+        artifactsDirectory: temporary,
+      });
+
+      expect(report.summary.placeholderActs).toBe(5);
+      expect(report.records.act.skipped).toBe(1);
+      expect(report.warnings).toContain(
+        "Virtual performer reach-via did not resolve: virtual-act-3",
+      );
+    } finally {
+      await rm(temporary, { recursive: true, force: true });
+    }
+  });
+
+  it("R16/AE2: canceled slots import assignment history, propagate through same_as, and disappear from the season listing", async () => {
+    const matches = await readFixture<{
+      venues: {
+        id: string;
+        host_ts?: string;
+        virtual_venue?: string;
+        slots: Record<
+          string,
+          {
+            canceled?: { on: string; reason: string };
+            same_as?: string;
+          }
+        >;
+      }[];
+    }>(fixtureArtifactFiles.slate);
+    const report = runImport();
+    const canceledSlots = matches.venues.flatMap((venue) =>
+      Object.entries(venue.slots).flatMap(([slotLabel, slot]) =>
+        slot.canceled ? [{ venue, slotLabel, canceled: slot.canceled }] : [],
+      ),
+    );
+
+    expect(canceledSlots).toHaveLength(3);
+    expect(report.records.assignment.created).toBe(38);
+    for (const { venue, slotLabel, canceled } of canceledSlots) {
+      const venueKey = venue.host_ts
+        ? core.importKeys.find(
+            report.seasonId,
+            "goal1:host-venue",
+            venue.host_ts,
+          )
+        : core.importKeys.find(
+            report.seasonId,
+            "goal1:virtual-venue",
+            venue.virtual_venue!,
+          );
+      const slotIndex = slotLabel === "6-7" ? 0 : 1;
+      const importedSlot = core.seasons.listVenueSlots(venueKey!.recordId)[
+        slotIndex
+      ]!;
+      expect(importedSlot.state).toBe("open");
+      expect(
+        core.seasons
+          .listAssignments(report.seasonId)
+          .some(({ slotId }) => slotId === importedSlot.id),
+      ).toBe(false);
+      const canceledAnnotation = database.db
+        .select()
+        .from(annotations)
+        .where(
+          sql`${annotations.note} = ${`Canceled on ${canceled.on}: ${canceled.reason}`}`,
+        )
+        .get();
+      expect(canceledAnnotation).toBeDefined();
+      expect(core.seasons.getAct(canceledAnnotation!.recordId).status).toBe(
+        "withdrawn",
+      );
+
+      const partner = Object.entries(venue.slots).find(
+        ([, slot]) => slot.same_as === slotLabel,
+      );
+      expect(partner).toBeDefined();
+      const partnerSlot = core.seasons.listVenueSlots(venueKey!.recordId)[
+        partner![0] === "6-7" ? 0 : 1
+      ]!;
+      expect(partnerSlot.state).toBe("open");
+    }
+  });
+
+  it("a canceled same_as continuation also cancels its source partner", async () => {
+    const temporary = await copyFixture("porchfest-canceled-continuation-");
+    try {
+      const path = join(temporary, fixtureArtifactFiles.slate);
+      const matches = JSON.parse(await readFile(path, "utf8"));
+      const venue = matches.venues[4];
+      venue.slots["7-8"].canceled = {
+        on: "2026-08-18",
+        reason: "Invented continuation cancellation.",
+      };
+      await writeFile(path, `${JSON.stringify(matches, null, 2)}\n`);
+
+      const report = importGoal1Season(core, {
+        ...importOptions,
+        artifactsDirectory: temporary,
+      });
+      const venueId = core.importKeys.find(
+        report.seasonId,
+        "goal1:host-venue",
+        venue.host_ts,
+      )!.recordId;
+      const venueSlots = core.seasons.listVenueSlots(venueId);
+
+      expect(venueSlots.map(({ state }) => state)).toEqual(["open", "open"]);
+      expect(
+        core.seasons
+          .listAssignments(report.seasonId)
+          .filter(({ slotId }) => venueSlots.some(({ id }) => id === slotId)),
+      ).toEqual([]);
+      expect(
+        core.annotations
+          .listAnnotations(report.seasonId, "act")
+          .some(({ note }) => note.includes("(same_as partner of 7-8)")),
+      ).toBe(true);
+    } finally {
+      await rm(temporary, { recursive: true, force: true });
+    }
+  });
+
+  it("canceled superseded performers remain canonical and idempotent on rerun", async () => {
+    const temporary = await copyFixture("porchfest-canceled-superseded-");
+    try {
+      const path = join(temporary, fixtureArtifactFiles.slate);
+      const matches = JSON.parse(await readFile(path, "utf8"));
+      const [supersededKey, supersession] = Object.entries(
+        matches.superseded.performers,
+      )[0] as [string, { canonical: string }];
+      matches.venues[0].slots["6-7"].performer_ts = supersededKey;
+      await writeFile(path, `${JSON.stringify(matches, null, 2)}\n`);
+
+      const first = importGoal1Season(core, {
+        ...importOptions,
+        artifactsDirectory: temporary,
+      });
+      const canonicalId = core.importKeys.find(
+        first.seasonId,
+        "goal1:performer-act",
+        supersession.canonical,
+      )!.recordId;
+      const sourceId = core.importKeys.find(
+        first.seasonId,
+        "goal1:performer-act",
+        supersededKey,
+      )!.recordId;
+      const cancellationCount = core.annotations
+        .listAnnotations(first.seasonId, "act", canonicalId)
+        .filter(({ note }) => note.startsWith("Canceled on ")).length;
+
+      const second = importGoal1Season(core, {
+        ...importOptions,
+        artifactsDirectory: temporary,
+      });
+
+      expect(second.warnings).toEqual([]);
+      expect(core.seasons.getAct(canonicalId).status).toBe("withdrawn");
+      expect(core.seasons.getAct(sourceId).status).not.toBe("withdrawn");
+      expect(core.seasons.resolveAct(sourceId).canonical.id).toBe(canonicalId);
+      expect(
+        core.annotations
+          .listAnnotations(second.seasonId, "act", canonicalId)
+          .filter(({ note }) => note.startsWith("Canceled on ")),
+      ).toHaveLength(cancellationCount);
+    } finally {
+      await rm(temporary, { recursive: true, force: true });
+    }
+  });
+
+  it("a canceled same_as cycle fails explicitly and rolls back", async () => {
+    const temporary = await copyFixture("porchfest-canceled-cycle-");
+    try {
+      const path = join(temporary, fixtureArtifactFiles.slate);
+      const matches = JSON.parse(await readFile(path, "utf8"));
+      const venue = matches.venues[4];
+      venue.slots["6-7"] = {
+        same_as: "7-8",
+        canceled: {
+          on: "2026-08-19",
+          reason: "Invented cycle rejection.",
+        },
+      };
+      venue.slots["7-8"] = { same_as: "6-7" };
+      await writeFile(path, `${JSON.stringify(matches, null, 2)}\n`);
+
+      expect(() =>
+        importGoal1Season(core, {
+          ...importOptions,
+          artifactsDirectory: temporary,
+        }),
+      ).toThrow("Slot same_as cycle includes 7-8.");
+      expect(database.db.select().from(seasons).all()).toEqual([]);
+    } finally {
+      await rm(temporary, { recursive: true, force: true });
+    }
+  });
+
+  it("canceled slot dates reject impossible calendar days and roll back", async () => {
+    const temporary = await copyFixture("porchfest-canceled-invalid-date-");
+    try {
+      const path = join(temporary, fixtureArtifactFiles.slate);
+      const matches = JSON.parse(await readFile(path, "utf8"));
+      matches.venues[0].slots["6-7"].canceled.on = "2026-02-30";
+      await writeFile(path, `${JSON.stringify(matches, null, 2)}\n`);
+
+      expect(() =>
+        importGoal1Season(core, {
+          ...importOptions,
+          artifactsDirectory: temporary,
+        }),
+      ).toThrow("Slot cancellation on must use YYYY-MM-DD.");
+      expect(database.db.select().from(seasons).all()).toEqual([]);
+    } finally {
+      await rm(temporary, { recursive: true, force: true });
+    }
+  });
+
+  it("open slots remain deliberately empty", async () => {
+    const matches = await readFixture<{
+      venues: {
+        host_ts?: string;
+        virtual_venue?: string;
+        slots: Record<string, { open?: boolean }>;
+      }[];
+    }>(fixtureArtifactFiles.slate);
+    const report = runImport();
+    const openSlots = matches.venues.flatMap((venue) =>
+      Object.entries(venue.slots).flatMap(([slotLabel, slot]) =>
+        slot.open === true ? [{ venue, slotLabel }] : [],
+      ),
+    );
+
+    expect(openSlots).toHaveLength(5);
+    for (const { venue, slotLabel } of openSlots) {
+      const venueKey = venue.host_ts
+        ? core.importKeys.find(
+            report.seasonId,
+            "goal1:host-venue",
+            venue.host_ts,
+          )
+        : core.importKeys.find(
+            report.seasonId,
+            "goal1:virtual-venue",
+            venue.virtual_venue!,
+          );
+      const importedSlot = core.seasons.listVenueSlots(venueKey!.recordId)[
+        slotLabel === "6-7" ? 0 : 1
+      ]!;
+      expect(importedSlot.state).toBe("open");
+    }
+  });
+
+  it("map_address replaces the public address and preserves the host-form address privately", async () => {
+    const submissions = await readFixture<{
+      hosts: { ts: string; address: string }[];
+    }>(fixtureArtifactFiles.submissions);
+    const matches = await readFixture<{
+      venues: { id: string; host_ts: string; map_address?: string }[];
+    }>(fixtureArtifactFiles.slate);
+    const report = runImport();
+    const mapped = matches.venues.filter(({ map_address }) => map_address);
+
+    expect(mapped).toHaveLength(2);
+    for (const entry of mapped) {
+      const host = submissions.hosts.find(({ ts }) => ts === entry.host_ts)!;
+      const venue = core.seasons.getVenue(
+        core.importKeys.find(
+          report.seasonId,
+          "goal1:host-venue",
+          entry.host_ts,
+        )!.recordId,
+      );
+      const privateLine = `[host-form address] ${host.address}`;
+      expect(venue.address).toBe(entry.map_address);
+      expect(venue.notes).toContain(privateLine);
+      expect(
+        core.annotations
+          .listAnnotations(report.seasonId, "venue", venue.id)
+          .map(({ note }) => note),
+      ).toContain(privateLine);
+      expect(
+        report.geocache.hits.some(
+          ({ venueId, address }) =>
+            venueId === venue.id && address === entry.map_address,
+        ),
       ).toBe(true);
     }
   });
@@ -388,8 +807,8 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
           reason: "Synthetic same-run withdrawal.",
         },
         slots: {
-          "6-7": { canceled: true },
-          "7-8": { canceled: true },
+          "6-7": { open: true },
+          "7-8": { open: true },
         },
       });
       await writeFile(path, `${JSON.stringify(matches, null, 2)}\n`);
@@ -535,7 +954,7 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
         .from(annotations)
         .where(sql`${annotations.note} like 'Slot %: same assignment as %'`)
         .all(),
-    ).toHaveLength(11);
+    ).toHaveLength(15);
     const continuationVenue = core.seasons.getVenue(
       core.importKeys.find(
         seasonId,
@@ -574,7 +993,110 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
         .from(annotations)
         .where(sql`${annotations.note} like 'Withdrawn on %'`)
         .all(),
-    ).toHaveLength(1);
+    ).toHaveLength(3);
+  });
+
+  it("band_check and extra_recipients become organizer annotations", async () => {
+    const { seasonId } = runImport();
+    const matches = await readFixture<{
+      venues: {
+        host_ts: string;
+        slots: Record<string, { band_check?: string }>;
+      }[];
+    }>(fixtureArtifactFiles.slate);
+    const bandCheckVenue = matches.venues.find(({ slots }) =>
+      Object.values(slots).some(({ band_check }) => band_check),
+    )!;
+    const bandCheck = Object.values(bandCheckVenue.slots).find(
+      ({ band_check }) => band_check,
+    )!.band_check!;
+    const venueId = core.importKeys.find(
+      seasonId,
+      "goal1:host-venue",
+      bandCheckVenue.host_ts,
+    )!.recordId;
+    const notes = core.annotations
+      .listAnnotations(seasonId, "venue", venueId)
+      .map(({ note }) => note);
+
+    expect(notes).toContain(`Band check: ${bandCheck}`);
+    expect(
+      core.annotations
+        .listAnnotations(seasonId)
+        .map(({ note }) => note)
+        .filter((note) => note.startsWith("Extra recipient: ")),
+    ).toEqual(
+      expect.arrayContaining([
+        "Extra recipient: Synthetic Extra Recipient One",
+        "Extra recipient: Synthetic Extra Recipient Two",
+      ]),
+    );
+  });
+
+  it("supersession objects use canonical and reason fields independent of property order", async () => {
+    const temporary = await copyFixture("porchfest-named-supersession-");
+    try {
+      const path = join(temporary, fixtureArtifactFiles.slate);
+      const matches = JSON.parse(await readFile(path, "utf8"));
+      const [sourceKey, value] = Object.entries(
+        matches.superseded.performers,
+      )[0] as [string, { canonical: string; reason: string }];
+      matches.superseded.performers[sourceKey] = {
+        reason: value.reason,
+        canonical: value.canonical,
+      };
+      await writeFile(path, `${JSON.stringify(matches, null, 2)}\n`);
+
+      const report = importGoal1Season(core, {
+        ...importOptions,
+        artifactsDirectory: temporary,
+      });
+      const source = core.importKeys.find(
+        report.seasonId,
+        "goal1:performer-act",
+        sourceKey,
+      )!;
+      const canonical = core.importKeys.find(
+        report.seasonId,
+        "goal1:performer-act",
+        value.canonical,
+      )!;
+
+      expect(core.seasons.resolveAct(source.recordId).canonical.id).toBe(
+        canonical.recordId,
+      );
+      expect(
+        core.annotations
+          .listAnnotations(report.seasonId, "act", source.recordId)
+          .some(({ note }) => note.endsWith(value.reason)),
+      ).toBe(true);
+    } finally {
+      await rm(temporary, { recursive: true, force: true });
+    }
+  });
+
+  it("unmatched id_for_fallback remains an id override and never creates a slot hold", async () => {
+    const matches = await readFixture<{
+      unmatched_venues: {
+        host_ts: string;
+        id_for_fallback?: string;
+      }[];
+    }>(fixtureArtifactFiles.slate);
+    const report = runImport();
+
+    expect(matches.unmatched_venues).toEqual([
+      expect.objectContaining({
+        id_for_fallback: "unmatched-venue-override",
+      }),
+    ]);
+    expect(report.holds).toHaveLength(1);
+    expect(
+      core.importKeys.find(
+        report.seasonId,
+        "goal1:hold",
+        "unmatched-venue-override",
+      ),
+    ).toBeNull();
   });
 
   it("R23: a forward same_as pointer resolves after its direct source assignment", async () => {
@@ -582,7 +1104,10 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
     try {
       const path = join(temporary, fixtureArtifactFiles.slate);
       const matches = JSON.parse(await readFile(path, "utf8"));
-      matches.venues[0].slots["6-7"] = { same_as: "7-8" };
+      const venue = matches.venues[4];
+      const direct = venue.slots["6-7"];
+      venue.slots["6-7"] = { same_as: "7-8" };
+      venue.slots["7-8"] = direct;
       await writeFile(path, `${JSON.stringify(matches, null, 2)}\n`);
 
       const report = importGoal1Season(core, {
@@ -592,7 +1117,7 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
       const venueId = core.importKeys.find(
         report.seasonId,
         "goal1:host-venue",
-        matches.venues[0].host_ts,
+        venue.host_ts,
       )!.recordId;
       const venueSlots = core.seasons.listVenueSlots(venueId);
       const venueAssignments = core.seasons
@@ -602,33 +1127,42 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
       expect(venueAssignments).toHaveLength(2);
       expect(venueAssignments[0]!.actId).toBe(venueAssignments[1]!.actId);
       expect(report.warnings).not.toContain(
-        "Continuation assignment did not resolve: venue-01 6-7 -> 7-8",
+        `Continuation assignment did not resolve: ${venue.id} 6-7 -> 7-8`,
       );
     } finally {
       await rm(temporary, { recursive: true, force: true });
     }
   });
 
-  it("R29: geocache provenance imports offline and an out-of-box entry needs review", () => {
+  it("R29: the three recognized geocache source labels map exactly and nominatim-house without cross-check enters review", async () => {
+    const geocache = await readFixture<
+      Record<string, { source: string; crosscheck_m: number | null }>
+    >(fixtureArtifactFiles.geocache);
     const report = runImport();
     const coordinates = database.db.select().from(venueCoordinates).all();
-    expect(coordinates).toHaveLength(21);
+    expect(
+      new Set(Object.values(geocache).map(({ source }) => source)),
+    ).toEqual(
+      new Set(["osm-address-point", "nominatim-house", "us-census-unimproved"]),
+    );
+    expect(coordinates).toHaveLength(20);
     expect(
       coordinates.every(
         ({ source, provider, ref }) =>
           source === "geocoded" &&
-          provider === "synthetic-parcel" &&
-          ref?.startsWith("synthetic/ref/") === true,
+          ["osm-address-point", "nominatim-house"].includes(provider) &&
+          /^[nw]\/\d+$/.test(ref ?? ""),
       ),
     ).toBe(true);
     expect(
       coordinates.filter(
         ({ status, rejectionCode }) =>
-          status === "needs-review" && rejectionCode === "out-of-bounds",
+          status === "needs-review" && rejectionCode === "cross-check-missing",
       ),
-    ).toHaveLength(1);
-    expect(report.geocache.hits).toHaveLength(21);
-    expect(report.geocache.misses).toHaveLength(2);
+    ).toHaveLength(3);
+    expect(report.geocache.hits).toHaveLength(20);
+    expect(report.geocache.misses).toHaveLength(3);
+    expect(report.warnings).toEqual([]);
   });
 
   it("R29: unknown providers fail closed while nominatim without a cross-check needs review", async () => {
@@ -636,10 +1170,10 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
     try {
       const path = join(temporary, fixtureArtifactFiles.geocache);
       const geocache = JSON.parse(await readFile(path, "utf8"));
-      const unknownAddress = Object.keys(geocache)[0]!;
-      const nominatimAddress = Object.keys(geocache)[1]!;
+      const unknownAddress = Object.keys(geocache)[2]!;
+      const nominatimAddress = Object.keys(geocache)[3]!;
       geocache[unknownAddress].source = "synthetic-mystery-provider";
-      geocache[nominatimAddress].source = "nominatim";
+      geocache[nominatimAddress].source = "nominatim-house";
       geocache[nominatimAddress].crosscheck_m = null;
       await writeFile(path, `${JSON.stringify(geocache, null, 2)}\n`);
 
@@ -667,6 +1201,61 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
     }
   });
 
+  it("R29: malformed geocache refs fail closed and roll back", async () => {
+    const temporary = await copyFixture("porchfest-malformed-geocache-ref-");
+    try {
+      const path = join(temporary, fixtureArtifactFiles.geocache);
+      const geocache = JSON.parse(await readFile(path, "utf8"));
+      geocache[Object.keys(geocache)[0]!].ref = "node/12345";
+      await writeFile(path, `${JSON.stringify(geocache, null, 2)}\n`);
+
+      expect(() =>
+        importGoal1Season(core, {
+          ...importOptions,
+          artifactsDirectory: temporary,
+        }),
+      ).toThrow("Geocache ref must use <letter>/<digits>.");
+      expect(database.db.select().from(seasons).all()).toEqual([]);
+    } finally {
+      await rm(temporary, { recursive: true, force: true });
+    }
+  });
+
+  it("R29: us-census-unimproved imports as street/interpolated review evidence", async () => {
+    const temporary = await copyFixture("porchfest-census-provider-");
+    try {
+      const path = join(temporary, fixtureArtifactFiles.geocache);
+      const geocache = JSON.parse(await readFile(path, "utf8"));
+      const address = Object.keys(geocache)[5]!;
+      geocache[address].source = "us-census-unimproved";
+      await writeFile(path, `${JSON.stringify(geocache, null, 2)}\n`);
+
+      const report = importGoal1Season(core, {
+        ...importOptions,
+        artifactsDirectory: temporary,
+      });
+      const hit = report.geocache.hits.find(
+        (candidate) => candidate.address === address,
+      )!;
+      const coordinate = database.db
+        .select()
+        .from(venueCoordinates)
+        .where(eq(venueCoordinates.id, hit.coordinateId))
+        .get()!;
+
+      expect(hit).toMatchObject({
+        reviewStatus: "needs-review",
+        rejectionCode: "interpolated",
+      });
+      expect(coordinate).toMatchObject({
+        provider: "us-census-unimproved",
+        precision: "street",
+      });
+    } finally {
+      await rm(temporary, { recursive: true, force: true });
+    }
+  });
+
   it("R29: one address collision geocodes both live venues and names both natural keys", async () => {
     const temporary = await copyFixture("porchfest-address-collision-");
     try {
@@ -674,10 +1263,18 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
       const matchesPath = join(temporary, fixtureArtifactFiles.slate);
       const submissions = JSON.parse(await readFile(submissionsPath, "utf8"));
       const matches = JSON.parse(await readFile(matchesPath, "utf8"));
-      const firstKey = submissions.hosts[0].ts;
-      const secondKey = submissions.hosts[2].ts;
-      submissions.hosts[2].address = submissions.hosts[0].address;
-      matches.venues[1].address_check = submissions.hosts[0].address;
+      const firstEntry = matches.venues[4];
+      const secondEntry = matches.venues[5];
+      const firstHost = submissions.hosts.find(
+        ({ ts }: { ts: string }) => ts === firstEntry.host_ts,
+      );
+      const secondHost = submissions.hosts.find(
+        ({ ts }: { ts: string }) => ts === secondEntry.host_ts,
+      );
+      const firstKey = firstHost.ts;
+      const secondKey = secondHost.ts;
+      secondHost.address = firstHost.address;
+      secondEntry.address_check = firstHost.address;
       await writeFile(
         submissionsPath,
         `${JSON.stringify(submissions, null, 2)}\n`,
@@ -689,7 +1286,7 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
         artifactsDirectory: temporary,
       });
       const sharedAddressHits = report.geocache.hits.filter(
-        ({ address }) => address === submissions.hosts[0].address,
+        ({ address }) => address === firstHost.address,
       );
 
       expect(sharedAddressHits).toHaveLength(2);
@@ -697,7 +1294,7 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
         new Set(sharedAddressHits.map(({ venueId }) => venueId)).size,
       ).toBe(2);
       expect(report.warnings).toContain(
-        `Live canonical venues share geocache address ${submissions.hosts[0].address}: ${firstKey}, ${secondKey}`,
+        `Live canonical venues share geocache address ${firstHost.address}: ${firstKey}, ${secondKey}`,
       );
     } finally {
       await rm(temporary, { recursive: true, force: true });
@@ -707,11 +1304,9 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
   it("R29: a withdrawn venue cannot shadow a live venue at the same address", async () => {
     const temporary = await copyFixture("porchfest-withdrawn-shadow-");
     try {
-      const submissionsPath = join(temporary, fixtureArtifactFiles.submissions);
       const matchesPath = join(temporary, fixtureArtifactFiles.slate);
-      const submissions = JSON.parse(await readFile(submissionsPath, "utf8"));
       const matches = JSON.parse(await readFile(matchesPath, "utf8"));
-      const sharedAddress = submissions.hosts[0].address;
+      const sharedAddress = matches.venues[4].address_check;
       matches.virtual_venues["virtual-withdrawn-venue"].address_display =
         sharedAddress;
       const withdrawnEntry = matches.venues.find(
