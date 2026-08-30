@@ -844,6 +844,7 @@ function applySupersessionGroup(
           source.version,
           canonical.id,
         );
+        state.canonicalActIds.clear();
         state.performerActs.set(sourceKey, supersededAct);
       }
     }

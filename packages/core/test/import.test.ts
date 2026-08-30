@@ -1040,6 +1040,71 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
     }
   });
 
+  it("retargeted supersessions use the new canonical act later in the rerun", async () => {
+    const temporary = await copyFixture("porchfest-retargeted-supersession-");
+    try {
+      const path = join(temporary, fixtureArtifactFiles.slate);
+      const matches = JSON.parse(await readFile(path, "utf8"));
+      const [sourceKey, supersession] = Object.entries(
+        matches.superseded.performers,
+      )[0] as [string, { canonical: string; reason: string }];
+      const newCanonicalKey = "2026-05-27T11:00:00Z";
+      const openVenue = matches.venues.find(
+        ({ slots }: { slots: Record<string, { open?: boolean }> }) =>
+          slots["7-8"]?.open === true,
+      )!;
+      const options = { ...importOptions, artifactsDirectory: temporary };
+
+      const first = importGoal1Season(core, options);
+      const oldCanonicalId = core.importKeys.find(
+        first.seasonId,
+        "goal1:performer-act",
+        supersession.canonical,
+      )!.recordId;
+      const newCanonicalId = core.importKeys.find(
+        first.seasonId,
+        "goal1:performer-act",
+        newCanonicalKey,
+      )!.recordId;
+      supersession.canonical = newCanonicalKey;
+      openVenue.slots["7-8"] = {
+        performer_ts: sourceKey,
+        canceled: {
+          on: "2026-08-22",
+          reason: "Invented retarget cancellation.",
+        },
+      };
+      await writeFile(path, `${JSON.stringify(matches, null, 2)}\n`);
+
+      const second = importGoal1Season(core, options);
+      const cancellationNote =
+        "Canceled on 2026-08-22: Invented retarget cancellation.";
+
+      expect(
+        core.seasons.resolveAct(
+          core.importKeys.find(
+            second.seasonId,
+            "goal1:performer-act",
+            sourceKey,
+          )!.recordId,
+        ).canonical.id,
+      ).toBe(newCanonicalId);
+      expect(core.seasons.getAct(newCanonicalId).status).toBe("withdrawn");
+      expect(
+        core.annotations
+          .listAnnotations(second.seasonId, "act", newCanonicalId)
+          .map(({ note }) => note),
+      ).toContain(cancellationNote);
+      expect(
+        core.annotations
+          .listAnnotations(second.seasonId, "act", oldCanonicalId)
+          .map(({ note }) => note),
+      ).not.toContain(cancellationNote);
+    } finally {
+      await rm(temporary, { recursive: true, force: true });
+    }
+  });
+
   it("a canceled same_as cycle warns and skips in both assignment passes", async () => {
     const temporary = await copyFixture("porchfest-canceled-cycle-");
     try {
