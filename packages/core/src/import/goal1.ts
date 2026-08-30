@@ -186,6 +186,7 @@ interface ImportState {
   readonly canonicalActIds: Map<number, number>;
   readonly venueSlots: Map<number, readonly Slot[]>;
   readonly assignmentsById: Map<number, Assignment>;
+  readonly assignmentsBySlot: Map<number, Assignment>;
 }
 
 interface MutableImportReport {
@@ -301,6 +302,7 @@ function importGoal1SeasonInTransaction(
     canonicalActIds: new Map(),
     venueSlots: new Map(),
     assignmentsById: new Map(),
+    assignmentsBySlot: new Map(),
   };
 
   importHosts(state, artifacts.matches);
@@ -1144,7 +1146,7 @@ function importVenueSlate(state: ImportState, matches: JsonObject): void {
         recordType: "assignment",
         recordId: assignment.id,
       });
-      state.assignmentsById.set(assignment.id, assignment);
+      cacheAssignment(state, assignment);
       increment(state.report, "assignment", "created");
     }
 
@@ -1184,9 +1186,7 @@ function importVenueSlate(state: ImportState, matches: JsonObject): void {
       );
       const sourceSlot = slots[sourceIndex];
       const sourceAssignment = sourceSlot
-        ? [...state.assignmentsById.values()].find(
-            (assignment) => assignment.slotId === sourceSlot.id,
-          )
+        ? state.assignmentsBySlot.get(sourceSlot.id)
         : undefined;
       if (!sourceSlot || !sourceAssignment) {
         state.report.warnings.push(
@@ -1207,7 +1207,7 @@ function importVenueSlate(state: ImportState, matches: JsonObject): void {
         recordType: "assignment",
         recordId: assignment.id,
       });
-      state.assignmentsById.set(assignment.id, assignment);
+      cacheAssignment(state, assignment);
       increment(state.report, "assignment", "created");
     }
   }
@@ -1227,13 +1227,6 @@ function applySlotCancellations(state: ImportState, matches: JsonObject): void {
       }[];
     }
   >();
-  const assignmentsBySlot = new Map(
-    [...state.assignmentsById.values()].map((assignment) => [
-      assignment.slotId,
-      assignment,
-    ]),
-  );
-
   for (const rawVenue of array(matches.venues)) {
     const venueEntry = object(rawVenue, "venue entry");
     const entryId = requiredString(venueEntry.id, "venue id");
@@ -1269,7 +1262,7 @@ function applySlotCancellations(state: ImportState, matches: JsonObject): void {
       }
       const slot = slots[index];
       if (!slot) continue;
-      const assignment = assignmentsBySlot.get(slot.id);
+      const assignment = state.assignmentsBySlot.get(slot.id);
       const assignedAct = assignment
         ? state.core.seasons.getAct(assignment.actId)
         : null;
@@ -1315,20 +1308,19 @@ function applySlotCancellations(state: ImportState, matches: JsonObject): void {
         : -1;
       const sourceSlot = sourceIndex >= 0 ? slots[sourceIndex] : undefined;
       const assignmentToUnassign =
-        (sourceSlot ? assignmentsBySlot.get(sourceSlot.id) : undefined) ??
+        (sourceSlot ? state.assignmentsBySlot.get(sourceSlot.id) : undefined) ??
         assignment;
       if (assignmentToUnassign) {
         state.core.seasons.unassignSlot(
           assignmentToUnassign.id,
           assignmentToUnassign.version,
         );
-        for (const [assignedSlotId, candidate] of assignmentsBySlot) {
+        for (const candidate of state.assignmentsBySlot.values()) {
           if (
             candidate.id === assignmentToUnassign.id ||
             candidate.continuationOfAssignmentId === assignmentToUnassign.id
           ) {
-            assignmentsBySlot.delete(assignedSlotId);
-            state.assignmentsById.delete(candidate.id);
+            uncacheAssignment(state, candidate);
           }
         }
       }
@@ -1377,11 +1369,22 @@ function liveAssignmentImportKey(
 
 function refreshAssignments(state: ImportState): void {
   state.assignmentsById.clear();
+  state.assignmentsBySlot.clear();
   for (const assignment of state.core.seasons.listAssignments(
     state.season.id,
   )) {
-    state.assignmentsById.set(assignment.id, assignment);
+    cacheAssignment(state, assignment);
   }
+}
+
+function cacheAssignment(state: ImportState, assignment: Assignment): void {
+  state.assignmentsById.set(assignment.id, assignment);
+  state.assignmentsBySlot.set(assignment.slotId, assignment);
+}
+
+function uncacheAssignment(state: ImportState, assignment: Assignment): void {
+  state.assignmentsById.delete(assignment.id);
+  state.assignmentsBySlot.delete(assignment.slotId);
 }
 
 function canonicalAct(state: ImportState, actId: number): Act {
