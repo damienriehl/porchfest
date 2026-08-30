@@ -114,9 +114,11 @@ restart the proxy. The gate is successful only when all of these invariants hold
 - encrypted off-host retention is 30 archives and local retention is 7 archives with the values
   above.
 
-The cookie probe can infer the organizer only when exactly one is active. With several organizers,
-set `PORCHFEST_DEPLOY_ORGANIZER_SELECTOR` on the host to the intended email or numeric id. The script
-never prints the selector, link token, cookie, response body, database contents, or provider values.
+Set `PORCHFEST_DEPLOY_PROBE_ORGANIZER` to an existing organizer email or numeric id to exercise the
+recovery sign-in and session-cookie flags. When it is unset, the deploy prints a probe skip and never
+issues or consumes the fresh install's bootstrap link; HTTPS and redirect checks still run. The
+script never prints the selector, link token, cookie, response body, database contents, or provider
+values. If organizer recovery fails, its stderr explanation is preserved for the operator.
 
 The backup RPO is the age of the newest successful archive shown in `offsite.sh`'s evidence block.
 Run the gate on every release and at least daily if a day of organizer work is the maximum acceptable
