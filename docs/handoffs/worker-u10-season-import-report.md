@@ -243,3 +243,88 @@ check, the scanner self-test, and the current-tree clean-room scan exit 0. The
 full `npm test` still exits 1 only at the final history scan for the immutable
 ancestor paths described above; obtaining its sixth `OK:` line still requires a
 forbidden history rewrite or a forbidden scanner exception.
+
+## Fidelity shapes (U10-b)
+
+This follow-up is implemented in `389db04` (`fix(import): match Goal-1 fidelity
+shapes`). The real artifacts were not opened or imported. All fixture values and
+test mutations remain invented, and all synthetic contact domains remain
+`example.invalid`.
+
+### Shape coverage and decisions
+
+- **Virtual-performer reach-via.** `manual_contact` resolves the named manual
+  contact. `host` scans venue slots for the virtual key and uses that venue's host
+  contact. Timestamp-shaped host and performer lookups remain as the legacy
+  fallback. An unresolved non-manual lookup emits a warning naming the virtual
+  key; an available manual contact still creates the placeholder, otherwise the
+  entry is skipped. The fixture has both token forms, the timestamp fallback,
+  exactly two `virtual_performer` slots, and a note on one of those slots.
+- **Reach-via fidelity risk.** The importer does not invent a host relationship
+  for a key that no slot names. Under the supplied rule, five host tokens plus
+  only two naming slots cannot produce six warning-free placeholders unless the
+  remaining keys have another stated linkage. The orchestrator's read-only
+  fidelity gate must confirm that linkage or reconcile the expected outcome.
+- **Holds and unmatched IDs.** The slot hold path and its synthetic test remain.
+  The current-artifact expectation is zero holds because that slot shape is not
+  present. `id_for_fallback` on an unmatched venue remains an ID override and
+  does not create a hold.
+- **Geocache provenance.** The three recognized source labels map exactly to
+  parcel, house, and street/interpolated evidence. Every other label is refused
+  into review with a warning. Refs must use the stated letter/digits shape, even
+  on cache misses. The three null-cross-check house entries stay in
+  `needs-review` with `cross-check-missing`; this is review-queue evidence, not a
+  warning.
+- **Map addresses.** `map_address` becomes the venue address used by the map and
+  geocache. A differing submitted address is retained only in venue notes with
+  the `[host-form address]` prefix and in a matching organizer annotation. Tests
+  cover exactly two mapped venues and successful cache matching.
+- **Canceled slots.** Direct and continuation assignments are created first,
+  then the core `unassignSlot` operation reopens the slot family. The canonical
+  act becomes withdrawn. Dated reasons are annotated, impossible calendar dates
+  roll back, `same_as` cancellation propagates in both directions, cycles fail
+  explicitly, and superseded performer keys remain canonical and idempotent on
+  rerun. The season-listing test proves canceled assignments are absent from the
+  map-eligible listing.
+- **Open slots and organizer prose.** Exactly five synthetic slots use
+  `open: true` and remain unassigned. `band_check`, slot notes, and
+  `extra_recipients` become venue-scoped organizer annotations. Physical and
+  virtual dated withdrawals remain covered.
+- **Supersessions.** Host and performer objects are read through the named
+  `canonical` and `reason` fields. A property-order mutation test proves the
+  importer does not interpret object values positionally.
+- **Fixture and operator guide.** The deterministic generator now emits every
+  requested shape in addition to the legacy hold case. `docs/import-2026.md`
+  records 22 slate venues, 26 approved act entries (20 canonical plus 6
+  placeholders), 2+1 supersessions, 2 placeholder venues, 0 current-artifact
+  holds, 20 imported coordinates, 3 review-queue coordinates, and no expected
+  warnings.
+
+The explicit create-then-`unassignSlot` sequence was retained even though final
+withdrawal also removes canonical-family assignments; it is the required audit
+history transition. Assignment import keys intentionally survive deletion of
+the live canceled assignment row, making reruns report the historical import
+rather than recreate it.
+
+### Review and verification
+
+A six-lens local review covered correctness, testing, maintainability,
+performance, reliability, and adversarial composition. It found and resolved
+the missing virtual-slot note, warning-plus-manual fallback, canonical
+cancellation rerun, venue-scoped annotation assertions, strict calendar dates,
+and cache-miss provenance validation. The external peer route was blocked before
+egress by privacy approval, so no repository content left the machine.
+
+With Node 24.13.0, the exact requested chain exited 0:
+
+- `npm run typecheck`: passed.
+- `npm run lint`: passed with 0 errors and the two pre-existing unused-argument
+  warnings in `packages/core/src/access.ts`.
+- `npm run format:check`: passed.
+- `npm test`: 47 files passed; 858 tests passed; all six required `OK:` lines
+  printed, including the tree-and-history clean-room result.
+- `npm run check:boundaries`: passed and printed both boundary `OK:` lines.
+
+The fixture generator was rerun deterministically, and the focused importer/CLI
+run passed 44 tests. Nothing was pushed or merged. The documentation and this
+handoff are committed separately from the code and tests.
