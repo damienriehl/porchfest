@@ -1,11 +1,11 @@
 import {
   AssignmentConflictError,
+  endOfDateInTimeZone,
   isSeasonActionLegal,
   SeasonActionError,
   SeasonConflictError,
   SeasonLifecycleError,
   suggestionsForAct,
-  zonedWallClockToUtc,
   type Act,
   type CoreRuntime,
   type QueueItem,
@@ -217,7 +217,7 @@ export function registerAssignmentRoutes(options: AssignRouteOptions): void {
       const fields = await readFields(context);
       const version = versionOf(fields.version);
       const heldForName = fields.held_for?.trim() ?? "";
-      const decideBy = parseEndOfDate(
+      const decideBy = endOfDateInTimeZone(
         fields.decide_by,
         located.season.timezone,
       );
@@ -444,7 +444,10 @@ function actPage(
   const matchingAct = input.acts.find((item) => item.id === act.id);
   if (!matchingAct && act.status !== "withdrawn") return notFound("act");
   const assignments = options.core.seasons.listAssignments(season.id);
-  const assignment = assignments.find((item) => item.actId === act.id);
+  const actAssignments = assignments.filter((item) => item.actId === act.id);
+  const assignment =
+    actAssignments.find((item) => item.continuationOfAssignmentId === null) ??
+    actAssignments[0];
   const currentAssignment = assignment
     ? (() => {
         const slot = options.core.seasons.getSlot(assignment.slotId);
@@ -452,6 +455,18 @@ function actPage(
           assignment,
           slot,
           venue: options.core.seasons.getVenue(slot.venueId),
+          continuations: actAssignments
+            .filter((item) => item.continuationOfAssignmentId === assignment.id)
+            .map((continuation) => {
+              const continuationSlot = options.core.seasons.getSlot(
+                continuation.slotId,
+              );
+              return {
+                assignment: continuation,
+                slot: continuationSlot,
+                venue: options.core.seasons.getVenue(continuationSlot.venueId),
+              };
+            }),
         };
       })()
     : null;
@@ -650,32 +665,6 @@ function versionOf(value: string | undefined): number | null {
 function optionalPositiveId(value: string | undefined): number | null | false {
   if ((value ?? "").trim() === "") return null;
   return positiveId(value) ?? false;
-}
-
-function parseEndOfDate(
-  value: string | undefined,
-  timezone: string,
-): Date | null {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value ?? "")) return null;
-  const [year, month, day] = value!.split("-").map(Number) as [
-    number,
-    number,
-    number,
-  ];
-  const selected = new Date(Date.UTC(year, month - 1, day));
-  if (
-    selected.getUTCFullYear() !== year ||
-    selected.getUTCMonth() !== month - 1 ||
-    selected.getUTCDate() !== day
-  ) {
-    return null;
-  }
-  const next = new Date(Date.UTC(year, month - 1, day + 1));
-  const nextDate = `${next.getUTCFullYear().toString().padStart(4, "0")}-${(next.getUTCMonth() + 1).toString().padStart(2, "0")}-${next.getUTCDate().toString().padStart(2, "0")}`;
-  const nextMidnight = zonedWallClockToUtc(`${nextDate}T00:00`, timezone);
-  return nextMidnight === null
-    ? null
-    : new Date(nextMidnight.getTime() - 1_000);
 }
 
 function nullableText(value: string | undefined): string | null {

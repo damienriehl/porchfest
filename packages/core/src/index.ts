@@ -50,8 +50,11 @@ export {
   venueGearValues,
   type Act,
   type ActLink,
+  type Annotation,
   type Assignment,
+  type Contact,
   type CoordinateRejectionCode,
+  type ImportKey,
   type Season,
   type Slot,
   type Venue,
@@ -164,8 +167,24 @@ export {
   type GeocodingRepository,
   type GeocodingRepositoryOptions,
   type GeocodeVenueResult,
+  type ImportedGeocodedCoordinateInput,
   type VenueCoordinateReview,
 } from "./geocoding.js";
+export { normalizeVenueAddress } from "./geocoding.js";
+export {
+  AnnotationLifecycleError,
+  createAnnotationRepository,
+  type AnnotateResult,
+  type AnnotationRepository,
+  type AnnotationTarget,
+} from "./annotations.js";
+export {
+  createImportKeyRepository,
+  ImportKeyLifecycleError,
+  type BindImportKeyInput,
+  type BoundImportKey,
+  type ImportKeyRepository,
+} from "./import-keys.js";
 export {
   AccessError,
   createAccessRepository,
@@ -237,16 +256,33 @@ export {
   type SeasonSetupResult,
   type TimeSlotInput,
 } from "./setup.js";
-export type { SeasonTimeSlot } from "./storage/schema.js";
+export type { ImportRecordType, SeasonTimeSlot } from "./storage/schema.js";
 export {
+  endOfDateInTimeZone,
   isValidTimeZone,
   parseWallClock,
   zonedWallClockToUtc,
   type WallClockParts,
 } from "./time.js";
+export {
+  goal1ArtifactFiles,
+  importGoal1Season,
+  type Goal1ImportCore,
+  type Goal1ArtifactFileMap,
+  type Goal1ImportOptions,
+  type ImportCounts,
+  type ImportGeocacheHit,
+  type ImportHold,
+  type ImportReport,
+  type ImportSupersession,
+} from "./import/goal1.js";
 
 import type { AdapterPorts } from "./ports/index.js";
 import { createAccessRepository, type AccessRepository } from "./access.js";
+import {
+  createAnnotationRepository,
+  type AnnotationRepository,
+} from "./annotations.js";
 import {
   createChangeRequestRepository,
   type ChangeRequestRepository,
@@ -260,6 +296,10 @@ import {
   createGeocodingRepository,
   type GeocodingRepository,
 } from "./geocoding.js";
+import {
+  createImportKeyRepository,
+  type ImportKeyRepository,
+} from "./import-keys.js";
 import { createQueueRepository, type QueueRepository } from "./queue.js";
 import {
   createRetentionRepository,
@@ -273,6 +313,7 @@ import type { CoreDatabase } from "./storage/repository-errors.js";
 export type SeasonRepository = ReturnType<typeof createSeasonRepository>;
 
 export interface CoreRuntime {
+  readonly transaction: <T>(work: () => T) => T;
   readonly ports: AdapterPorts;
   readonly seasons: SeasonRepository;
   readonly access: AccessRepository;
@@ -282,6 +323,8 @@ export interface CoreRuntime {
   readonly retention: RetentionRepository;
   readonly outbox: OutboxRepository;
   readonly geocoding: GeocodingRepository;
+  readonly annotations: AnnotationRepository;
+  readonly importKeys: ImportKeyRepository;
 }
 
 export interface CoreOptions {
@@ -295,6 +338,7 @@ export function createCore(
   options: CoreOptions = {},
 ): CoreRuntime {
   return Object.freeze({
+    transaction: <T>(work: () => T): T => database.transaction(work),
     ports: Object.freeze({ ...ports }),
     seasons: createSeasonRepository(database),
     access: createAccessRepository(database),
@@ -310,5 +354,7 @@ export function createCore(
       options.outbox,
     ),
     geocoding: createGeocodingRepository(database, { geo: ports.geo }),
+    annotations: createAnnotationRepository(database),
+    importKeys: createImportKeyRepository(database),
   });
 }

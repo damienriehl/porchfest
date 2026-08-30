@@ -132,6 +132,23 @@ describe("deterministic matching", () => {
     expect(linked!.score).toBeLessThan(unlinked!.score);
   });
 
+  it("warns when a linked act's continuation overlaps the candidate slot", () => {
+    const input = fixture();
+    input.assignments = [
+      { actId: 104, slotId: 22 },
+      { actId: 104, slotId: 21 },
+    ];
+
+    const linked = rankPairings(input).find(
+      ({ act, slot }) => act.id === 103 && slot.id === 11,
+    );
+
+    expect(linked?.warnings).toContainEqual({
+      code: "shared_member",
+      text: "Booked Friends shares a member and plays at Oak Avenue Stage, 1:00–2:00 PM",
+    });
+  });
+
   it("explains availability in the season timezone", () => {
     const available = rankPairings(fixture()).find(
       ({ act, slot }) => act.id === 101 && slot.id === 11,

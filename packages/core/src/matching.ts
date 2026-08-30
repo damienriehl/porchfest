@@ -181,11 +181,21 @@ export function rankPairings(input: MatchingInput): RankedPairing[] {
   const assignedSlotIds = new Set(
     input.assignments.map(({ slotId }) => slotId),
   );
-  const assignmentByActId = new Map<number, MatchingAssignment>();
+  const assignmentsByActId = new Map<number, MatchingAssignment[]>();
   for (const assignment of input.assignments) {
-    if (!assignmentByActId.has(assignment.actId)) {
-      assignmentByActId.set(assignment.actId, assignment);
-    }
+    const assignments = assignmentsByActId.get(assignment.actId) ?? [];
+    assignments.push(assignment);
+    assignmentsByActId.set(assignment.actId, assignments);
+  }
+  for (const assignments of assignmentsByActId.values()) {
+    assignments.sort((left, right) => {
+      const leftSlot = slotsById.get(left.slotId);
+      const rightSlot = slotsById.get(right.slotId);
+      return (
+        (leftSlot?.startsAt.getTime() ?? 0) -
+          (rightSlot?.startsAt.getTime() ?? 0) || left.slotId - right.slotId
+      );
+    });
   }
   const pairings: RankedPairing[] = [];
   const formattedSlots = new Map<number, string>();
@@ -276,22 +286,28 @@ export function rankPairings(input: MatchingInput): RankedPairing[] {
         }
 
         for (const linkedActId of act.linkedActIds) {
-          const linkedAssignment = assignmentByActId.get(linkedActId);
-          if (linkedAssignment === undefined) continue;
-          const linkedSlot = slotsById.get(linkedAssignment.slotId);
-          const linkedVenue = venuesBySlotId.get(linkedAssignment.slotId);
+          const linkedAssignments = assignmentsByActId.get(linkedActId) ?? [];
           const linkedAct = actsById.get(linkedActId);
-          if (
-            linkedSlot !== undefined &&
-            linkedVenue !== undefined &&
-            linkedAct !== undefined &&
-            overlaps(linkedSlot, slot)
-          ) {
-            score -= 200;
+          let linkedActOverlaps = false;
+          for (const linkedAssignment of linkedAssignments) {
+            const linkedSlot = slotsById.get(linkedAssignment.slotId);
+            const linkedVenue = venuesBySlotId.get(linkedAssignment.slotId);
+            if (
+              linkedSlot === undefined ||
+              linkedVenue === undefined ||
+              linkedAct === undefined ||
+              !overlaps(linkedSlot, slot)
+            ) {
+              continue;
+            }
+            linkedActOverlaps = true;
             warnings.push({
               code: "shared_member",
               text: `${linkedAct.name} shares a member and plays at ${linkedVenue.title}, ${formattedSlots.get(linkedSlot.id)}`,
             });
+          }
+          if (linkedActOverlaps) {
+            score -= 200;
           }
         }
 

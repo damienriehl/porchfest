@@ -197,6 +197,17 @@ export const seasons = sqliteTable(
 
 export const queueRecordTypes = ["act", "venue", "contact"] as const;
 
+export const importRecordTypes = [
+  "season",
+  "venue",
+  "act",
+  "contact",
+  "slot",
+  "assignment",
+  "coordinate",
+  "annotation",
+] as const;
+
 /**
  * R5: "new" is per organizer, so one organizer working the queue never hides an
  * item from another.
@@ -742,6 +753,9 @@ export const assignments = sqliteTable(
     slotId: integer("slot_id")
       .notNull()
       .references(() => slots.id),
+    continuationOfAssignmentId: integer(
+      "continuation_of_assignment_id",
+    ).references((): AnySQLiteColumn => assignments.id),
     sharedMemberOverride: text("shared_member_override"),
     ...mutableColumns(),
   },
@@ -749,6 +763,9 @@ export const assignments = sqliteTable(
     index("assignments_season_id_idx").on(table.seasonId),
     index("assignments_act_id_idx").on(table.actId),
     index("assignments_slot_id_idx").on(table.slotId),
+    index("assignments_continuation_of_assignment_id_idx").on(
+      table.continuationOfAssignmentId,
+    ),
   ],
 );
 
@@ -759,7 +776,7 @@ export const emailLog = sqliteTable(
     seasonId: integer("season_id")
       .notNull()
       .references(() => seasons.id),
-    recordType: text("record_type").notNull(),
+    recordType: text("record_type", { enum: queueRecordTypes }).notNull(),
     recordId: integer("record_id").notNull(),
     waveLabel: text("wave_label").notNull(),
     recipientContactId: integer("recipient_contact_id")
@@ -927,12 +944,53 @@ export const annotations = sqliteTable(
     seasonId: integer("season_id")
       .notNull()
       .references(() => seasons.id),
-    recordType: text("record_type").notNull(),
+    recordType: text("record_type", { enum: queueRecordTypes }).notNull(),
     recordId: integer("record_id").notNull(),
     note: text("note").notNull(),
     ...mutableColumns(),
   },
-  (table) => [index("annotations_season_id_idx").on(table.seasonId)],
+  (table) => [
+    index("annotations_season_record_note_idx").on(
+      table.seasonId,
+      table.recordType,
+      table.recordId,
+      table.note,
+    ),
+  ],
+);
+
+/**
+ * KTD13's durable bridge from Goal-1 natural keys to Porchfest row ids.
+ * `source` separates the several records created by one submission timestamp
+ * (for example its contact and venue) while keeping the artifact timestamp
+ * itself intact in `natural_key`.
+ */
+export const importKeys = sqliteTable(
+  "import_keys",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    seasonId: integer("season_id")
+      .notNull()
+      .references(() => seasons.id),
+    source: text("source").notNull(),
+    naturalKey: text("natural_key").notNull(),
+    recordType: text("record_type", { enum: importRecordTypes }).notNull(),
+    recordId: integer("record_id").notNull(),
+    ...mutableColumns(),
+  },
+  (table) => [
+    uniqueIndex("import_keys_season_source_natural_key_uidx").on(
+      table.seasonId,
+      table.source,
+      table.naturalKey,
+    ),
+    index("import_keys_record_idx").on(table.recordType, table.recordId),
+    index("import_keys_source_natural_type_idx").on(
+      table.source,
+      table.naturalKey,
+      table.recordType,
+    ),
+  ],
 );
 
 const schemaTables = [
@@ -955,6 +1013,7 @@ const schemaTables = [
   outboxMessages,
   outboxRecipients,
   annotations,
+  importKeys,
   organizers,
   organizerSessions,
   organizerInvites,
@@ -984,6 +1043,7 @@ export const schemaTableNames = Object.freeze(
 export type SeasonTimeSlot = typeof seasonTimeSlots.$inferSelect;
 export type QueueDismissal = typeof queueDismissals.$inferSelect;
 export type QueueRecordType = (typeof queueRecordTypes)[number];
+export type ImportRecordType = (typeof importRecordTypes)[number];
 export type RecordStatus = (typeof recordStatuses)[number];
 export type ChangeRequest = typeof changeRequests.$inferSelect;
 export type ChangeRequestKind = (typeof changeRequestKinds)[number];
@@ -1044,3 +1104,5 @@ export type OutboxRecordType = (typeof outboxRecordTypes)[number];
 export type OutboxSendOutcome = (typeof outboxSendOutcomes)[number];
 export type Annotation = typeof annotations.$inferSelect;
 export type NewAnnotation = typeof annotations.$inferInsert;
+export type ImportKey = typeof importKeys.$inferSelect;
+export type NewImportKey = typeof importKeys.$inferInsert;

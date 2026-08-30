@@ -1,9 +1,19 @@
 import { describe, expect, it } from "vitest";
 import {
+  endOfDateInTimeZone,
   isValidTimeZone,
   parseWallClock,
   zonedWallClockToUtc,
 } from "../src/time.js";
+
+describe("endOfDateInTimeZone", () => {
+  it("uses the season timezone and rolls the calendar year forward", () => {
+    expect(
+      endOfDateInTimeZone("2031-12-31", "America/Chicago")?.toISOString(),
+    ).toBe("2032-01-01T05:59:59.000Z");
+    expect(endOfDateInTimeZone("2031-02-29", "America/Chicago")).toBeNull();
+  });
+});
 
 describe("parseWallClock", () => {
   it("accepts a real calendar time", () => {

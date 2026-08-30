@@ -114,3 +114,30 @@ export function zonedWallClockToUtc(
 
   return new Date(timestamp);
 }
+
+/** Resolve the final whole second of a calendar date in an IANA timezone. */
+export function endOfDateInTimeZone(
+  value: string | undefined,
+  timeZone: string,
+): Date | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value ?? "")) return null;
+  const [year, month, day] = value!.split("-").map(Number) as [
+    number,
+    number,
+    number,
+  ];
+  const selected = new Date(Date.UTC(year, month - 1, day));
+  if (
+    selected.getUTCFullYear() !== year ||
+    selected.getUTCMonth() !== month - 1 ||
+    selected.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  const next = new Date(Date.UTC(year, month - 1, day + 1));
+  const nextDate = `${next.getUTCFullYear().toString().padStart(4, "0")}-${(next.getUTCMonth() + 1).toString().padStart(2, "0")}-${next.getUTCDate().toString().padStart(2, "0")}`;
+  const nextMidnight = zonedWallClockToUtc(`${nextDate}T00:00`, timeZone);
+  return nextMidnight === null
+    ? null
+    : new Date(nextMidnight.getTime() - 1_000);
+}

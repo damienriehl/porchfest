@@ -1,0 +1,2 @@
+ALTER TABLE `assignments` ADD `continuation_of_assignment_id` integer REFERENCES assignments(id);--> statement-breakpoint
+CREATE INDEX `assignments_continuation_of_assignment_id_idx` ON `assignments` (`continuation_of_assignment_id`);
