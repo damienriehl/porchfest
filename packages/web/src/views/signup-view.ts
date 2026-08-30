@@ -1,4 +1,9 @@
-import type { AntibotClientChallenge } from "@porchfest/core";
+import {
+  formatZonedWindow,
+  type AntibotClientChallenge,
+  type Season,
+  type SeasonTimeSlot,
+} from "@porchfest/core";
 import {
   HOST_SIGNUP_PATH,
   PERFORMER_SIGNUP_PATH,
@@ -19,6 +24,22 @@ export const SIGNUP_AUDIENCE_LABELS = Object.freeze({
 } as const);
 
 export type SignupAudience = keyof typeof SIGNUP_AUDIENCE_LABELS;
+
+const SEASON_STATE_LABELS: Readonly<Record<Season["state"], string>> = {
+  setup: "Preparing the season",
+  signups_open: "Accepting signups",
+  signups_closed: "Signups closed",
+  assigning: "Building the schedule",
+  locked: "Schedule confirmed",
+  archived: "Season closed and archived",
+};
+
+const eventDateFormatter = new Intl.DateTimeFormat("en-US", {
+  timeZone: "UTC",
+  year: "numeric",
+  month: "long",
+  day: "numeric",
+});
 
 /**
  * The participant-facing disclosure contract. Forms and receipts both read
@@ -95,10 +116,7 @@ export function allValues(
 
 export function renderSignupSeasonPage(options: {
   readonly kind: "host" | "performer";
-  readonly seasons: readonly {
-    readonly id: number;
-    readonly displayName: string;
-  }[];
+  readonly seasons: readonly Season[];
   readonly errors: readonly SignupError[];
 }): string {
   const path =
@@ -119,7 +137,7 @@ export function renderSignupSeasonPage(options: {
         <div class="choices">${options.seasons
           .map(
             (season) =>
-              `<label class="choice"><input type="radio" name="season" value="${season.id}" required><span>${escapeHtml(season.displayName)}</span></label>`,
+              `<label class="choice"><input type="radio" name="season" value="${season.id}" required><span><strong>${escapeHtml(season.displayName)}</strong><br><span class="help">${escapeHtml(formatSeasonDate(season))} · ${escapeHtml(formatSeasonLocality(season))} · ${escapeHtml(SEASON_STATE_LABELS[season.state])}</span></span></label>`,
           )
           .join("")}</div>
       </fieldset>
@@ -145,6 +163,66 @@ export function renderSignupSeasonPage(options: {
   </main>
 </body>
 </html>`;
+}
+
+export function renderSelectedSeason(season: Season | null): string {
+  if (season === null) return "";
+  return `<section class="confirmation-card season-context" aria-labelledby="selected-season-heading">
+    <h2 id="selected-season-heading">Selected Porchfest</h2>
+    <dl class="submission-list">
+      <div class="submission-row"><dt>Name</dt><dd>${escapeHtml(season.displayName)}</dd></div>
+      <div class="submission-row"><dt>Event date</dt><dd>${escapeHtml(formatSeasonDate(season))}</dd></div>
+      <div class="submission-row"><dt>Locality</dt><dd>${escapeHtml(formatSeasonLocality(season))}</dd></div>
+      <div class="submission-row"><dt>Signup status</dt><dd>${escapeHtml(SEASON_STATE_LABELS[season.state])}</dd></div>
+    </dl>
+  </section>`;
+}
+
+export function renderPublishedTimeSlots(
+  season: Season | null,
+  timeSlots: readonly SeasonTimeSlot[],
+): string {
+  if (season === null) return "";
+  const slots =
+    timeSlots.length === 0
+      ? '<p class="help">The organizers have not published performance slots yet.</p>'
+      : `<ul>${timeSlots
+          .map(
+            (slot) =>
+              `<li>${escapeHtml(formatZonedWindow(slot, season.timezone))}</li>`,
+          )
+          .join("")}</ul>`;
+  return `<section class="season-slots" aria-labelledby="published-slots-heading">
+    <h3 id="published-slots-heading">Published performance slots</h3>
+    ${slots}
+    <p class="help">Your availability does not need to match a published slot exactly. Include the setup and teardown buffer your full act needs so organizers know the complete window when everyone can be on site.</p>
+  </section>`;
+}
+
+function formatSeasonDate(season: Season): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(season.eventDate ?? "");
+  if (match === null) return "Date to be announced";
+  const date = new Date(
+    Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])),
+  );
+  return Number.isNaN(date.getTime())
+    ? "Date to be announced"
+    : eventDateFormatter.format(date);
+}
+
+function formatSeasonLocality(season: Season): string {
+  const locality =
+    cleanSeasonPlace(season.localityName) ?? cleanSeasonPlace(season.eventCity);
+  const region = cleanSeasonPlace(season.eventState);
+  const parts = [locality, region].filter(
+    (part): part is string => part !== null,
+  );
+  return parts.length > 0 ? parts.join(", ") : "Locality to be announced";
+}
+
+function cleanSeasonPlace(value: string | null): string | null {
+  const cleaned = value?.trim();
+  return cleaned && cleaned.toLowerCase() !== "unconfigured" ? cleaned : null;
 }
 
 export function renderSignupPage(options: {

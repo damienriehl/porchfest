@@ -92,6 +92,7 @@ async function makeRuntime(
     eventDate: "2031-06-01",
     eventCity: "Exampleton",
     eventState: "WI",
+    localityName: "Synthetic Quarter",
     timeSlots: options.timeSlots ?? [],
     openSignups: true,
   });
@@ -212,8 +213,40 @@ describe("public signup forms", () => {
     );
   });
 
-  it("auto-selects the only open season for a bare host URL and submits it", async () => {
+  it("auto-selects the only signup-legal season for a bare host URL and submits it", async () => {
     const { runtime, seasonId } = await makeRuntime();
+    const { season: closedSeason } = runtime.core.setup.createSeason({
+      year: 2030,
+      displayName: "Closed Synthetic Porchfest",
+      timezone: "UTC",
+      eventDate: "2030-06-01",
+      eventCity: "Exampleton",
+      eventState: "WI",
+      localityName: "Closed Quarter",
+      timeSlots: [],
+      openSignups: true,
+    });
+    runtime.core.seasons.transitionSeason(
+      closedSeason.id,
+      closedSeason.version,
+      "signups_closed",
+    );
+    const { season: archivedSeason } = runtime.core.setup.createSeason({
+      year: 2029,
+      displayName: "Archived Synthetic Porchfest",
+      timezone: "UTC",
+      eventDate: "2029-06-01",
+      eventCity: "Exampleton",
+      eventState: "WI",
+      localityName: "Archived Quarter",
+      timeSlots: [],
+      openSignups: true,
+    });
+    runtime.core.seasons.transitionSeason(
+      archivedSeason.id,
+      archivedSeason.version,
+      "archived",
+    );
 
     const response = await runtime.request(`${PUBLIC_BASE_URL}/signup/host`);
     const html = await response.text();
@@ -222,6 +255,10 @@ describe("public signup forms", () => {
     expect(response.status).toBe(200);
     expect(html).toContain('data-signup-form="host"');
     expect(html).toContain(`name="season_id" value="${seasonId}"`);
+    expect(html).toContain("Synthetic 2031 Porchfest");
+    expect(html).not.toContain("Closed Synthetic Porchfest");
+    expect(html).not.toContain("Archived Synthetic Porchfest");
+    expect(html).not.toContain("Choose a Porchfest season");
     expect(html).not.toContain('class="error-summary"');
     expect(token).toBeTruthy();
 
@@ -233,18 +270,56 @@ describe("public signup forms", () => {
     expect(submitted.status).toBe(201);
   });
 
-  it("renders a season chooser instead of a full form when two seasons are open", async () => {
+  it("offers only signup-legal seasons with identifying context", async () => {
     const { runtime } = await makeRuntime();
-    runtime.core.setup.createSeason({
+    const { season: assigningSeason } = runtime.core.setup.createSeason({
       year: 2032,
       displayName: "Synthetic 2032 Porchfest",
       timezone: "UTC",
-      eventDate: "2032-06-01",
-      eventCity: "Exampleton",
-      eventState: "WI",
+      eventDate: "2032-07-04",
+      eventCity: "Sample City",
+      eventState: "MN",
+      localityName: "Sample Ward",
       timeSlots: [],
       openSignups: true,
     });
+    runtime.core.seasons.transitionSeason(
+      assigningSeason.id,
+      assigningSeason.version,
+      "assigning",
+    );
+    const { season: closedSeason } = runtime.core.setup.createSeason({
+      year: 2033,
+      displayName: "Closed 2033 Porchfest",
+      timezone: "UTC",
+      eventDate: "2033-08-01",
+      eventCity: "Closed City",
+      eventState: "IA",
+      localityName: "Closed Ward",
+      timeSlots: [],
+      openSignups: true,
+    });
+    runtime.core.seasons.transitionSeason(
+      closedSeason.id,
+      closedSeason.version,
+      "signups_closed",
+    );
+    const { season: archivedSeason } = runtime.core.setup.createSeason({
+      year: 2034,
+      displayName: "Archived 2034 Porchfest",
+      timezone: "UTC",
+      eventDate: "2034-09-01",
+      eventCity: "Archived City",
+      eventState: "IL",
+      localityName: "Archived Ward",
+      timeSlots: [],
+      openSignups: true,
+    });
+    runtime.core.seasons.transitionSeason(
+      archivedSeason.id,
+      archivedSeason.version,
+      "archived",
+    );
 
     const listSeasons = vi.fn(() => runtime.core.setup.listSeasons());
     const app = createApp({
@@ -261,12 +336,70 @@ describe("public signup forms", () => {
     expect(html).toContain("Choose a Porchfest season");
     expect(html).toContain("Synthetic 2031 Porchfest");
     expect(html).toContain("Synthetic 2032 Porchfest");
+    expect(html).toContain("June 1, 2031");
+    expect(html).toContain("July 4, 2032");
+    expect(html).toContain("Synthetic Quarter, WI");
+    expect(html).toContain("Sample Ward, MN");
+    expect(html).toContain("Accepting signups");
+    expect(html).toContain("Building the schedule");
+    expect(html).not.toContain("Closed 2033 Porchfest");
+    expect(html).not.toContain("Archived 2034 Porchfest");
     expect(html).toContain('name="season"');
+    expect(html.match(/name="season"/g)).toHaveLength(2);
     expect(html).not.toContain('data-signup-form="host"');
     expect(html).not.toContain('name="season_id"');
     expect(html).toContain('class="signup-single-column"');
     expect(html).not.toContain('class="signup-layout"');
     expect(listSeasons).toHaveBeenCalledTimes(1);
+  });
+
+  it("repeats the selected season on both forms and explains performer slots", async () => {
+    const { runtime, seasonId } = await makeRuntime({
+      timeSlots: [
+        { startsAt: "14:00", endsAt: "14:45" },
+        { startsAt: "16:00", endsAt: "16:45" },
+      ],
+    });
+
+    const host = await csrfToken(runtime, "/signup/host", seasonId);
+    const performer = await csrfToken(runtime, "/signup/performer", seasonId);
+
+    for (const html of [host.html, performer.html]) {
+      expect(html).toContain("Selected Porchfest");
+      expect(html).toContain("Synthetic 2031 Porchfest");
+      expect(html).toContain("June 1, 2031");
+      expect(html).toContain("Synthetic Quarter, WI");
+      expect(html).toContain("Accepting signups");
+    }
+    expect(performer.html).toContain("Published performance slots");
+    expect(performer.html).toContain("2:00–2:45 PM");
+    expect(performer.html).toContain("4:00–4:45 PM");
+    expect(performer.html).toContain(
+      "Your availability does not need to match a published slot exactly",
+    );
+    expect(performer.html).toContain(
+      "Include the setup and teardown buffer your full act needs",
+    );
+  });
+
+  it("refuses a direct closed-season request without participant fields", async () => {
+    const { runtime, seasonId } = await makeRuntime();
+    const season = runtime.core.seasons.getSeason(seasonId);
+    runtime.core.seasons.transitionSeason(
+      season.id,
+      season.version,
+      "signups_closed",
+    );
+
+    const response = await runtime.request(
+      `${PUBLIC_BASE_URL}/signup/performer?season=${seasonId}`,
+    );
+    const html = await response.text();
+
+    expect(response.status).toBe(409);
+    expect(html).toContain("Signups are not open for that Porchfest season");
+    expect(html).not.toContain('data-signup-form="performer"');
+    expect(html).not.toContain('name="contact_name"');
   });
 
   it("renders a closed notice instead of a signup form when no season is open", async () => {

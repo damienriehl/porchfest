@@ -1038,19 +1038,24 @@ function formResponse(
   season: Season | null,
 ): Response {
   const path = kind === "host" ? HOST_SIGNUP_PATH : PERFORMER_SIGNUP_PATH;
-  const render = kind === "host" ? renderHostForm : renderPerformerForm;
-  return htmlResponse(
-    render({
-      seasonId: firstValue(values, "season_id"),
-      csrfToken: options.csrfTokenFor(path),
-      values,
-      errors,
-      challenge,
-      timezone: season?.timezone ?? null,
-    }),
-    status,
+  const shared = {
+    seasonId: firstValue(values, "season_id"),
+    csrfToken: options.csrfTokenFor(path),
+    values,
+    errors,
     challenge,
-  );
+    timezone: season?.timezone ?? null,
+    season,
+  };
+  const rendered =
+    kind === "host"
+      ? renderHostForm(shared)
+      : renderPerformerForm({
+          ...shared,
+          timeSlots:
+            season === null ? [] : options.core.setup.listTimeSlots(season.id),
+        });
+  return htmlResponse(rendered, status, challenge);
 }
 
 function htmlResponse(

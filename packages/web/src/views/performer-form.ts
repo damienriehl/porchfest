@@ -1,4 +1,8 @@
-import type { AntibotClientChallenge } from "@porchfest/core";
+import type {
+  AntibotClientChallenge,
+  Season,
+  SeasonTimeSlot,
+} from "@porchfest/core";
 import {
   escapeHtml,
   firstValue,
@@ -8,6 +12,8 @@ import {
   renderFieldError,
   renderHoneypot,
   renderPerformerPreview,
+  renderPublishedTimeSlots,
+  renderSelectedSeason,
   renderSignupPage,
   renderTextarea,
   PERFORMER_SIGNUP_AUDIENCES,
@@ -23,6 +29,8 @@ export function renderPerformerForm(options: {
   readonly errors?: readonly SignupError[];
   readonly challenge: AntibotClientChallenge | null;
   readonly timezone?: string | null;
+  readonly season?: Season | null;
+  readonly timeSlots?: readonly SeasonTimeSlot[];
 }): string {
   const values = options.values ?? {};
   const errors = options.errors ?? [];
@@ -43,6 +51,7 @@ export function renderPerformerForm(options: {
   const form = `<form class="signup-form" id="signup-form" data-signup-form="performer" method="post" action="${PERFORMER_SIGNUP_PATH}" novalidate>
     <input type="hidden" name="_csrf" value="${escapeHtml(options.csrfToken)}">
     <input type="hidden" name="season_id" value="${escapeHtml(options.seasonId)}">
+    ${renderSelectedSeason(options.season ?? null)}
     ${
       errors.some(({ field }) => field === "signup-form")
         ? `<div class="form-level-error">${renderFieldError(
@@ -68,6 +77,7 @@ export function renderPerformerForm(options: {
       <legend>How you play</legend>
       ${renderField({ id: "duration_minutes", label: "Set duration in minutes", value: firstValue(values, "duration_minutes"), errors, required: true, type: "number", inputmode: "numeric", min: "5", max: "240", step: "5", audience: PERFORMER_SIGNUP_AUDIENCES.duration_minutes })}
       ${renderBooleanChoices({ id: "requires_amplification", label: "Does your act need amplification?", value: firstValue(values, "requires_amplification"), errors, audience: PERFORMER_SIGNUP_AUDIENCES.requires_amplification })}
+      ${renderPublishedTimeSlots(options.season ?? null, options.timeSlots ?? [])}
       <div class="field ${availabilityError ? "has-error" : ""}" id="availability_start">
         <h3 class="field-heading">Available time windows <span aria-hidden="true">*</span></h3>
         ${renderFieldError("availability_start", availabilityError)}

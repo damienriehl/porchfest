@@ -1,4 +1,4 @@
-import type { AntibotClientChallenge } from "@porchfest/core";
+import type { AntibotClientChallenge, Season } from "@porchfest/core";
 import {
   venueAmenityValues,
   venueDrinkValues,
@@ -16,6 +16,7 @@ import {
   renderFieldError,
   renderHoneypot,
   renderHostPreview,
+  renderSelectedSeason,
   renderSignupPage,
   renderTextarea,
   HOST_SIGNUP_AUDIENCES,
@@ -51,12 +52,14 @@ export function renderHostForm(options: {
   readonly errors?: readonly SignupError[];
   readonly challenge: AntibotClientChallenge | null;
   readonly timezone?: string | null;
+  readonly season?: Season | null;
 }): string {
   const values = options.values ?? {};
   const errors = options.errors ?? [];
   const form = `<form class="signup-form" id="signup-form" data-signup-form="host" method="post" action="${HOST_SIGNUP_PATH}" novalidate>
     <input type="hidden" name="_csrf" value="${escapeHtml(options.csrfToken)}">
     <input type="hidden" name="season_id" value="${escapeHtml(options.seasonId)}">
+    ${renderSelectedSeason(options.season ?? null)}
     ${
       errors.some(({ field }) => field === "signup-form")
         ? `<div class="form-level-error">${renderFieldError(
