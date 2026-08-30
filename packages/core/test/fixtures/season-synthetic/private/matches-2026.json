@@ -1,0 +1,638 @@
+{
+  "_comment": "Entirely synthetic Goal-1-shaped fixture.",
+  "event": {
+    "name": "Fableton Lantern Porchfest 2026",
+    "date": "2026-09-16",
+    "date_display": "September 16, 2026",
+    "city": "Fableton",
+    "state": "FS",
+    "time_display": "6–8 pm",
+    "website": "https://porchfest.example.invalid",
+    "map_url": "https://map.example.invalid",
+    "host_form_url": "https://forms.example.invalid/hosts",
+    "performer_form_url": "https://forms.example.invalid/performers",
+    "organizer_name": "Synthetic Organizer",
+    "organizer_phone": "synthetic-organizer-phone",
+    "organizer_signature": "Synthetic organizing team"
+  },
+  "venues": [
+    {
+      "id": "venue-01",
+      "host_ts": "2026-05-01T10:00:00Z",
+      "address_check": "101 Lantern Loop, Fableton, FS",
+      "basis": "Invented matching basis 1.",
+      "chase": [
+        "Invented chase item 1."
+      ],
+      "email_notes": [
+        "Invented email note 1."
+      ],
+      "extra_recipients": [
+        "manual_contact: manual-extra-one"
+      ],
+      "slots": {
+        "6-7": {
+          "performer_ts": "2026-05-01T11:00:00Z"
+        },
+        "7-8": {
+          "virtual_performer": "virtual-act-2"
+        }
+      }
+    },
+    {
+      "id": "venue-02",
+      "host_ts": "2026-05-03T10:00:00Z",
+      "address_check": "103 Lantern Loop, Fableton, FS",
+      "basis": "Invented matching basis 2.",
+      "chase": [
+        "Invented chase item 2."
+      ],
+      "email_notes": [
+        "Invented email note 2."
+      ],
+      "extra_recipients": [
+        "manual_contact: manual-extra-two"
+      ],
+      "slots": {
+        "6-7": {
+          "performer_ts": "2026-05-03T11:00:00Z"
+        },
+        "7-8": {
+          "virtual_performer": "virtual-act-3"
+        }
+      }
+    },
+    {
+      "id": "venue-03",
+      "host_ts": "2026-05-05T10:00:00Z",
+      "address_check": "105 Lantern Loop, Fableton, FS",
+      "basis": "Invented matching basis 3.",
+      "chase": [
+        "Invented chase item 3."
+      ],
+      "email_notes": [
+        "Invented email note 3."
+      ],
+      "extra_recipients": [],
+      "slots": {
+        "6-7": {
+          "performer_ts": "2026-05-04T11:00:00Z"
+        },
+        "7-8": {
+          "virtual_performer": "virtual-act-4"
+        }
+      }
+    },
+    {
+      "id": "venue-04",
+      "host_ts": "2026-05-06T10:00:00Z",
+      "address_check": "106 Lantern Loop, Fableton, FS",
+      "basis": "Invented matching basis 4.",
+      "chase": [
+        "Invented chase item 4."
+      ],
+      "email_notes": [
+        "Invented email note 4."
+      ],
+      "extra_recipients": [],
+      "slots": {
+        "6-7": {
+          "performer_ts": "2026-05-05T11:00:00Z"
+        },
+        "7-8": {
+          "virtual_performer": "virtual-act-5"
+        }
+      }
+    },
+    {
+      "id": "venue-05",
+      "host_ts": "2026-05-07T10:00:00Z",
+      "address_check": "107 Lantern Loop, Fableton, FS",
+      "basis": "Invented matching basis 5.",
+      "chase": [
+        "Invented chase item 5."
+      ],
+      "email_notes": [
+        "Invented email note 5."
+      ],
+      "extra_recipients": [],
+      "slots": {
+        "6-7": {
+          "performer_ts": "2026-05-06T11:00:00Z"
+        },
+        "7-8": {
+          "virtual_performer": "virtual-act-6"
+        }
+      }
+    },
+    {
+      "id": "venue-06",
+      "host_ts": "2026-05-08T10:00:00Z",
+      "address_check": "108 Lantern Loop, Fableton, FS",
+      "basis": "Invented matching basis 6.",
+      "chase": [
+        "Invented chase item 6."
+      ],
+      "email_notes": [
+        "Invented email note 6."
+      ],
+      "extra_recipients": [],
+      "slots": {
+        "6-7": {
+          "performer_ts": "2026-05-07T11:00:00Z"
+        },
+        "7-8": {
+          "same_as": "6-7"
+        }
+      }
+    },
+    {
+      "id": "venue-07",
+      "host_ts": "2026-05-09T10:00:00Z",
+      "address_check": "109 Lantern Loop, Fableton, FS",
+      "basis": "Invented matching basis 7.",
+      "chase": [
+        "Invented chase item 7."
+      ],
+      "email_notes": [
+        "Invented email note 7."
+      ],
+      "extra_recipients": [],
+      "slots": {
+        "6-7": {
+          "performer_ts": "2026-05-08T11:00:00Z"
+        },
+        "7-8": {
+          "same_as": "6-7"
+        }
+      }
+    },
+    {
+      "id": "venue-08",
+      "host_ts": "2026-05-10T10:00:00Z",
+      "address_check": "110 Lantern Loop, Fableton, FS",
+      "basis": "Invented matching basis 8.",
+      "chase": [
+        "Invented chase item 8."
+      ],
+      "email_notes": [
+        "Invented email note 8."
+      ],
+      "extra_recipients": [],
+      "slots": {
+        "6-7": {
+          "performer_ts": "2026-05-09T11:00:00Z"
+        },
+        "7-8": {
+          "same_as": "6-7"
+        }
+      }
+    },
+    {
+      "id": "venue-09",
+      "host_ts": "2026-05-11T10:00:00Z",
+      "address_check": "111 Lantern Loop, Fableton, FS",
+      "basis": "Invented matching basis 9.",
+      "chase": [
+        "Invented chase item 9."
+      ],
+      "email_notes": [
+        "Invented email note 9."
+      ],
+      "extra_recipients": [],
+      "slots": {
+        "6-7": {
+          "performer_ts": "2026-05-10T11:00:00Z"
+        },
+        "7-8": {
+          "same_as": "6-7"
+        }
+      }
+    },
+    {
+      "id": "venue-10",
+      "host_ts": "2026-05-12T10:00:00Z",
+      "address_check": "112 Lantern Loop, Fableton, FS",
+      "basis": "Invented matching basis 10.",
+      "chase": [
+        "Invented chase item 10."
+      ],
+      "email_notes": [
+        "Invented email note 10."
+      ],
+      "extra_recipients": [],
+      "slots": {
+        "6-7": {
+          "performer_ts": "2026-05-11T11:00:00Z"
+        },
+        "7-8": {
+          "same_as": "6-7"
+        }
+      }
+    },
+    {
+      "id": "venue-11",
+      "host_ts": "2026-05-13T10:00:00Z",
+      "address_check": "113 Lantern Loop, Fableton, FS",
+      "basis": "Invented matching basis 11.",
+      "chase": [
+        "Invented chase item 11."
+      ],
+      "email_notes": [
+        "Invented email note 11."
+      ],
+      "extra_recipients": [],
+      "slots": {
+        "6-7": {
+          "performer_ts": "2026-05-12T11:00:00Z"
+        },
+        "7-8": {
+          "same_as": "6-7"
+        }
+      }
+    },
+    {
+      "id": "venue-12",
+      "host_ts": "2026-05-14T10:00:00Z",
+      "address_check": "114 Lantern Loop, Fableton, FS",
+      "basis": "Invented matching basis 12.",
+      "chase": [
+        "Invented chase item 12."
+      ],
+      "email_notes": [
+        "Invented email note 12."
+      ],
+      "extra_recipients": [],
+      "slots": {
+        "6-7": {
+          "performer_ts": "2026-05-13T11:00:00Z"
+        },
+        "7-8": {
+          "same_as": "6-7"
+        }
+      }
+    },
+    {
+      "id": "venue-13",
+      "host_ts": "2026-05-15T10:00:00Z",
+      "address_check": "115 Lantern Loop, Fableton, FS",
+      "basis": "Invented matching basis 13.",
+      "chase": [
+        "Invented chase item 13."
+      ],
+      "email_notes": [
+        "Invented email note 13."
+      ],
+      "extra_recipients": [],
+      "slots": {
+        "6-7": {
+          "performer_ts": "2026-05-14T11:00:00Z"
+        },
+        "7-8": {
+          "same_as": "6-7"
+        }
+      }
+    },
+    {
+      "id": "venue-14",
+      "host_ts": "2026-05-16T10:00:00Z",
+      "address_check": "116 Lantern Loop, Fableton, FS",
+      "basis": "Invented matching basis 14.",
+      "chase": [
+        "Invented chase item 14."
+      ],
+      "email_notes": [
+        "Invented email note 14."
+      ],
+      "extra_recipients": [],
+      "slots": {
+        "6-7": {
+          "performer_ts": "2026-05-15T11:00:00Z"
+        },
+        "7-8": {
+          "same_as": "6-7"
+        }
+      }
+    },
+    {
+      "id": "venue-15",
+      "host_ts": "2026-05-17T10:00:00Z",
+      "address_check": "117 Lantern Loop, Fableton, FS",
+      "basis": "Invented matching basis 15.",
+      "chase": [
+        "Invented chase item 15."
+      ],
+      "email_notes": [
+        "Invented email note 15."
+      ],
+      "extra_recipients": [],
+      "slots": {
+        "6-7": {
+          "performer_ts": "2026-05-16T11:00:00Z"
+        },
+        "7-8": {
+          "same_as": "6-7"
+        }
+      }
+    },
+    {
+      "id": "venue-16",
+      "host_ts": "2026-05-18T10:00:00Z",
+      "address_check": "118 Lantern Loop, Fableton, FS",
+      "basis": "Invented matching basis 16.",
+      "chase": [
+        "Invented chase item 16."
+      ],
+      "email_notes": [
+        "Invented email note 16."
+      ],
+      "extra_recipients": [],
+      "slots": {
+        "6-7": {
+          "performer_ts": "2026-05-17T11:00:00Z"
+        },
+        "7-8": {
+          "same_as": "6-7"
+        }
+      }
+    },
+    {
+      "id": "venue-17",
+      "host_ts": "2026-05-19T10:00:00Z",
+      "address_check": "119 Lantern Loop, Fableton, FS",
+      "basis": "Invented matching basis 17.",
+      "chase": [
+        "Invented chase item 17."
+      ],
+      "email_notes": [
+        "Invented email note 17."
+      ],
+      "extra_recipients": [],
+      "slots": {
+        "6-7": {
+          "performer_ts": "2026-05-18T11:00:00Z"
+        },
+        "7-8": {
+          "open": true
+        }
+      }
+    },
+    {
+      "id": "venue-18",
+      "host_ts": "2026-05-20T10:00:00Z",
+      "address_check": "120 Lantern Loop, Fableton, FS",
+      "basis": "Invented matching basis 18.",
+      "chase": [
+        "Invented chase item 18."
+      ],
+      "email_notes": [
+        "Invented email note 18."
+      ],
+      "extra_recipients": [],
+      "slots": {
+        "6-7": {
+          "performer_ts": "2026-05-19T11:00:00Z"
+        },
+        "7-8": {
+          "open": true
+        }
+      }
+    },
+    {
+      "id": "venue-19",
+      "host_ts": "2026-05-21T10:00:00Z",
+      "address_check": "121 Lantern Loop, Fableton, FS",
+      "basis": "Invented matching basis 19.",
+      "chase": [
+        "Invented chase item 19."
+      ],
+      "email_notes": [
+        "Invented email note 19."
+      ],
+      "extra_recipients": [],
+      "slots": {
+        "6-7": {
+          "performer_ts": "2026-05-20T11:00:00Z"
+        },
+        "7-8": {
+          "open": true
+        }
+      }
+    },
+    {
+      "id": "venue-20",
+      "host_ts": "2026-05-22T10:00:00Z",
+      "address_check": "122 Lantern Loop, Fableton, FS",
+      "basis": "Invented matching basis 20.",
+      "chase": [
+        "Invented chase item 20."
+      ],
+      "email_notes": [
+        "Invented email note 20."
+      ],
+      "extra_recipients": [],
+      "slots": {
+        "6-7": {
+          "performer_ts": "2026-05-21T11:00:00Z"
+        },
+        "7-8": {
+          "open": true
+        }
+      }
+    },
+    {
+      "id": "virtual-hold-venue",
+      "virtual_venue": "virtual-hold-venue",
+      "address_check": "901 Moonbeam Mews, Fableton, FS",
+      "basis": "Invented basis for the act-side hold.",
+      "chase": [
+        "Invented chase for the held venue."
+      ],
+      "email_notes": [
+        "Invented held-venue email note."
+      ],
+      "slots": {
+        "6-7": {
+          "held_for_virtual_performer": "virtual-act-1",
+          "decide_by": "2026-09-01",
+          "id_for_fallback": "venue-01"
+        },
+        "7-8": {
+          "open": true
+        }
+      }
+    },
+    {
+      "id": "virtual-withdrawn-venue",
+      "virtual_venue": "virtual-withdrawn-venue",
+      "address_check": "902 Moonbeam Mews, Fableton, FS",
+      "basis": "Invented basis for the withdrawn placeholder.",
+      "chase": [
+        "Invented chase for the withdrawn placeholder."
+      ],
+      "email_notes": [
+        "Invented withdrawn-venue email note."
+      ],
+      "withdrawn": {
+        "on": "2026-08-15",
+        "reason": "Invented placeholder withdrawal reason."
+      },
+      "slots": {
+        "6-7": {
+          "canceled": true
+        },
+        "7-8": {
+          "canceled": true
+        }
+      }
+    }
+  ],
+  "unmatched_venues": [
+    {
+      "host_ts": "2026-05-23T10:00:00Z",
+      "address_check": "123 Lantern Loop, Fableton, FS",
+      "status": "unmatched",
+      "email_note": "Invented unmatched venue note."
+    }
+  ],
+  "floating_performers": [
+    {
+      "performer_ts": "2026-05-27T11:00:00Z",
+      "status": "floating",
+      "status_display": "Invented floating performer status.",
+      "email_notes": [
+        "Invented floating performer note."
+      ],
+      "action": "No action beyond the synthetic fixture."
+    }
+  ],
+  "superseded": {
+    "hosts": {
+      "2026-05-02T10:00:00Z": {
+        "canonical": "2026-05-01T10:00:00Z",
+        "reason": "Invented corrected host submission."
+      },
+      "2026-05-04T10:00:00Z": {
+        "canonical": "2026-05-03T10:00:00Z",
+        "reason": "Invented duplicate host submission."
+      }
+    },
+    "performers": {
+      "2026-05-02T11:00:00Z": {
+        "canonical": "2026-05-01T11:00:00Z",
+        "reason": "Invented corrected performer submission."
+      }
+    }
+  },
+  "performer_overrides": {
+    "2026-05-03T11:00:00Z": {
+      "on": "2026-08-03",
+      "reason": "Invented override reason 3.",
+      "fields": {
+        "band": {
+          "original": "Lantern Ensemble 03",
+          "value": "Lantern Ensemble Three Revised"
+        }
+      }
+    },
+    "2026-05-05T11:00:00Z": {
+      "on": "2026-08-05",
+      "reason": "Invented override reason 5.",
+      "fields": {
+        "email": {
+          "original": "performer-05@example.invalid",
+          "value": "performer-05-revised@example.invalid"
+        }
+      }
+    },
+    "2026-05-07T11:00:00Z": {
+      "on": "2026-08-07",
+      "reason": "Invented override reason 7.",
+      "fields": {
+        "listen": {
+          "original": "https://audio.example.invalid/ensemble-07 ask for the demo track",
+          "value": "https://revised-audio.example.invalid/ensemble-07 revised demo note"
+        }
+      }
+    },
+    "2026-05-09T11:00:00Z": {
+      "on": "2026-08-09",
+      "reason": "Invented override reason 9.",
+      "fields": {
+        "websites": {
+          "original": "https://bands.example.invalid/ensemble-09",
+          "value": "-"
+        }
+      }
+    }
+  },
+  "virtual_performers": {
+    "virtual-act-1": {
+      "display_name": "Paper Comet Collective",
+      "reach_via": "manual_contact",
+      "manual_contact": "manual-paper-comet",
+      "note": "Invented manual-contact placeholder note."
+    },
+    "virtual-act-2": {
+      "display_name": "Porcelain Echo 2",
+      "reach_via": "host",
+      "note": "Invented host-reached placeholder note 2."
+    },
+    "virtual-act-3": {
+      "display_name": "Porcelain Echo 3",
+      "reach_via": "host",
+      "note": "Invented host-reached placeholder note 3."
+    },
+    "virtual-act-4": {
+      "display_name": "Porcelain Echo 4",
+      "reach_via": "host",
+      "note": "Invented host-reached placeholder note 4."
+    },
+    "virtual-act-5": {
+      "display_name": "Porcelain Echo 5",
+      "reach_via": "host",
+      "note": "Invented host-reached placeholder note 5."
+    },
+    "virtual-act-6": {
+      "display_name": "Porcelain Echo 6",
+      "reach_via": "host",
+      "note": "Invented host-reached placeholder note 6."
+    }
+  },
+  "virtual_venues": {
+    "virtual-hold-venue": {
+      "address_display": "901 Moonbeam Mews, Fableton, FS",
+      "host_display_name": "Synthetic Hold Host",
+      "reach_via_performer_ts": "2026-05-01T11:00:00Z",
+      "note": "Invented act-side hold venue note."
+    },
+    "virtual-withdrawn-venue": {
+      "address_display": "902 Moonbeam Mews, Fableton, FS",
+      "host_display_name": "Synthetic Withdrawn Host",
+      "reach_via_performer_ts": "2026-05-03T11:00:00Z",
+      "note": "Invented withdrawn venue note.",
+      "withdrawn": {
+        "on": "2026-08-15",
+        "reason": "Invented placeholder withdrawal reason."
+      }
+    }
+  },
+  "manual_contacts": {
+    "manual-paper-comet": {
+      "display_name": "Synthetic Manual Contact",
+      "email": "manual-paper-comet@example.invalid",
+      "source": "2025 Archive Tab"
+    },
+    "manual-extra-one": {
+      "display_name": "Synthetic Extra Recipient One",
+      "email": "manual-extra-one@example.invalid",
+      "source": "2025 Hosts Archive Tab"
+    },
+    "manual-extra-two": {
+      "display_name": "Synthetic Extra Recipient Two",
+      "email": "manual-extra-two@example.invalid",
+      "source": "2025 Performers Archive Tab"
+    }
+  },
+  "geocode_unimproved_allowlist": {}
+}

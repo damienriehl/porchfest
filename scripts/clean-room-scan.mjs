@@ -24,6 +24,11 @@ const KNOWN_PRIVATE_FILENAMES = [
   /^matches(?:[-_.].*)?\.json$/i,
   /^geocache(?:[-_.].*)?\.json$/i,
 ];
+const SYNTHETIC_FIXTURE_ARTIFACTS = new Set([
+  "packages/core/test/fixtures/season-synthetic/out/submissions.json",
+  "packages/core/test/fixtures/season-synthetic/private/matches-2026.json",
+  "packages/core/test/fixtures/season-synthetic/private/geocache.json",
+]);
 const EMAIL_ADDRESS = /\b[A-Z0-9._%+-]+@([A-Z0-9.-]+\.[A-Z]{2,})\b/gi;
 const PHONE_NUMBER = /\b(?:\+?1[ .-])?\(?[2-9]\d{2}\)?[ .-]\d{3}[ .-]\d{4}\b/g;
 const GENERATED_BODY_HEADER =
@@ -38,11 +43,14 @@ export function inspectPath(path, location) {
   const normalized = normalizePath(path);
   const segments = normalized.toLowerCase().split("/");
   const findings = [];
+  const syntheticFixtureArtifact = SYNTHETIC_FIXTURE_ARTIFACTS.has(
+    normalized.toLowerCase(),
+  );
 
   const privateSegment = segments.find((segment) =>
     PRIVATE_DIRECTORIES.has(segment),
   );
-  if (privateSegment) {
+  if (privateSegment && !syntheticFixtureArtifact) {
     findings.push({
       kind: `prohibited ${privateSegment}/ directory`,
       location: `${location}:${normalized}`,
@@ -63,6 +71,7 @@ export function inspectPath(path, location) {
     });
   }
   if (
+    !syntheticFixtureArtifact &&
     KNOWN_PRIVATE_FILENAMES.some((pattern) =>
       pattern.test(basename(normalized)),
     )
