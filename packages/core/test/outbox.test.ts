@@ -601,6 +601,17 @@ describe("outbox", () => {
     expect([...contactOrder].sort((a, b) => a - b)).toEqual(contactOrder);
   });
 
+  it("shares disclosed match details without sending organizer-only performer answers to the host", () => {
+    const message = matchWave().messages[0]?.textBody ?? "";
+
+    expect(message).toContain("wren@example.invalid");
+    expect(message).toContain("ash@example.invalid");
+    expect(message).toContain("Park on the north side of the street.");
+    expect(message).not.toContain("folk / jazz");
+    expect(message).not.toContain("A porch with a roof");
+    expect(message).not.toContain("can lend gear");
+  });
+
   it("renders every ordered continuation window in an act schedule", () => {
     const venue = venueIds.get("oak")!;
     const slots = seasons.listVenueSlots(venue.id);

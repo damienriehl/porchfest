@@ -10,6 +10,7 @@ import {
   renderPerformerPreview,
   renderSignupPage,
   renderTextarea,
+  PERFORMER_SIGNUP_AUDIENCES,
   type SignupError,
   type SignupValues,
 } from "./signup-view.js";
@@ -34,8 +35,8 @@ export function renderPerformerForm(options: {
   const availabilityRows = Array.from({ length: windowCount }, (_, index) => {
     const number = index + 1;
     return `<div class="availability-row">
-      ${renderField({ id: `availability_start_${number}`, name: "availability_start", label: `Available from ${number}`, value: starts[index] ?? "", errors: [], type: "datetime-local" })}
-      ${renderField({ id: `availability_end_${number}`, name: "availability_end", label: `Available until ${number}`, value: ends[index] ?? "", errors: [], type: "datetime-local" })}
+      ${renderField({ id: `availability_start_${number}`, name: "availability_start", label: `Available from ${number}`, value: starts[index] ?? "", errors: [], type: "datetime-local", audience: PERFORMER_SIGNUP_AUDIENCES.availability_start })}
+      ${renderField({ id: `availability_end_${number}`, name: "availability_end", label: `Available until ${number}`, value: ends[index] ?? "", errors: [], type: "datetime-local", audience: PERFORMER_SIGNUP_AUDIENCES.availability_end })}
     </div>`;
   }).join("");
 
@@ -52,21 +53,21 @@ export function renderPerformerForm(options: {
     }
     <fieldset>
       <legend>Who you are</legend>
-      ${renderField({ id: "contact_name", label: "Your name", value: firstValue(values, "contact_name"), errors, required: true, autocomplete: "name" })}
-      ${renderField({ id: "contact_email", label: "Email", value: firstValue(values, "contact_email"), errors, required: true, type: "email", autocomplete: "email" })}
-      ${renderField({ id: "contact_phone", label: "Phone", value: firstValue(values, "contact_phone"), errors, type: "tel", autocomplete: "tel" })}
+      ${renderField({ id: "contact_name", label: "Your name", value: firstValue(values, "contact_name"), errors, required: true, autocomplete: "name", audience: PERFORMER_SIGNUP_AUDIENCES.contact_name })}
+      ${renderField({ id: "contact_email", label: "Email", value: firstValue(values, "contact_email"), errors, required: true, type: "email", autocomplete: "email", audience: PERFORMER_SIGNUP_AUDIENCES.contact_email })}
+      ${renderField({ id: "contact_phone", label: "Phone", value: firstValue(values, "contact_phone"), errors, type: "tel", autocomplete: "tel", audience: PERFORMER_SIGNUP_AUDIENCES.contact_phone })}
     </fieldset>
     <fieldset>
       <legend>Your act</legend>
-      ${renderField({ id: "act_name", label: "Act name", value: firstValue(values, "act_name"), errors, required: true })}
-      ${renderField({ id: "genres", label: "Genres", value: firstValue(values, "genres"), errors, required: true, help: "Use the words listeners would use to find your music." })}
-      ${renderTextarea({ id: "description", label: "Act description", value: firstValue(values, "description"), errors, required: true, help: "A short public description for the map and organizer materials." })}
-      ${renderTextarea({ id: "links", label: "Music and website links", value: firstValue(values, "links"), errors, help: "One http:// or https:// link per line." })}
+      ${renderField({ id: "act_name", label: "Act name", value: firstValue(values, "act_name"), errors, required: true, audience: PERFORMER_SIGNUP_AUDIENCES.act_name })}
+      ${renderField({ id: "genres", label: "Genres", value: firstValue(values, "genres"), errors, required: true, help: "Use the words listeners would use to find your music.", audience: PERFORMER_SIGNUP_AUDIENCES.genres })}
+      ${renderTextarea({ id: "description", label: "Act description", value: firstValue(values, "description"), errors, required: true, help: "A short public description for the map and organizer materials.", audience: PERFORMER_SIGNUP_AUDIENCES.description })}
+      ${renderTextarea({ id: "links", label: "Music and website links", value: firstValue(values, "links"), errors, help: "One http:// or https:// link per line.", audience: PERFORMER_SIGNUP_AUDIENCES.links })}
     </fieldset>
     <fieldset>
       <legend>How you play</legend>
-      ${renderField({ id: "duration_minutes", label: "Set duration in minutes", value: firstValue(values, "duration_minutes"), errors, required: true, type: "number", inputmode: "numeric", min: "5", max: "240", step: "5" })}
-      ${renderBooleanChoices({ id: "requires_amplification", label: "Does your act need amplification?", value: firstValue(values, "requires_amplification"), errors })}
+      ${renderField({ id: "duration_minutes", label: "Set duration in minutes", value: firstValue(values, "duration_minutes"), errors, required: true, type: "number", inputmode: "numeric", min: "5", max: "240", step: "5", audience: PERFORMER_SIGNUP_AUDIENCES.duration_minutes })}
+      ${renderBooleanChoices({ id: "requires_amplification", label: "Does your act need amplification?", value: firstValue(values, "requires_amplification"), errors, audience: PERFORMER_SIGNUP_AUDIENCES.requires_amplification })}
       <div class="field ${availabilityError ? "has-error" : ""}" id="availability_start">
         <h3 class="field-heading">Available time windows <span aria-hidden="true">*</span></h3>
         ${renderFieldError("availability_start", availabilityError)}
@@ -77,13 +78,13 @@ export function renderPerformerForm(options: {
         }</p>
         ${availabilityRows}
       </div>
-      ${renderTextarea({ id: "house_preference", label: "Porch or neighborhood preference", value: firstValue(values, "house_preference"), errors, help: "Name a host, area, accessibility need, or say that you have no preference." })}
-      ${renderTextarea({ id: "shared_member_note", label: "Is anyone in your act also in another Porchfest act this year?", value: firstValue(values, "shared_member_note"), errors, help: "Name the other act(s) so we never book you into two porches at once." })}
-      ${renderBooleanChoices({ id: "can_lend_gear", label: "Can your act lend gear?", value: firstValue(values, "can_lend_gear"), errors })}
+      ${renderTextarea({ id: "house_preference", label: "Porch or neighborhood preference", value: firstValue(values, "house_preference"), errors, help: "Name a host, area, accessibility need, or say that you have no preference.", audience: PERFORMER_SIGNUP_AUDIENCES.house_preference })}
+      ${renderTextarea({ id: "shared_member_note", label: "Is anyone in your act also in another Porchfest act this year?", value: firstValue(values, "shared_member_note"), errors, help: "Name the other act(s) so we never book you into two porches at once.", audience: PERFORMER_SIGNUP_AUDIENCES.shared_member_note })}
+      ${renderBooleanChoices({ id: "can_lend_gear", label: "Can your act lend gear?", value: firstValue(values, "can_lend_gear"), errors, help: "Organizers use this answer while planning and do not include it in the confirmed match message.", audience: PERFORMER_SIGNUP_AUDIENCES.can_lend_gear })}
     </fieldset>
     <fieldset>
       <legend>Anything else</legend>
-      ${renderTextarea({ id: "performer_notes", label: "Notes for the organizers", value: firstValue(values, "performer_notes"), errors, help: "Anything else that might be helpful?" })}
+      ${renderTextarea({ id: "performer_notes", label: "Notes for the organizers", value: firstValue(values, "performer_notes"), errors, help: "Anything else that might be helpful?", audience: PERFORMER_SIGNUP_AUDIENCES.performer_notes })}
     </fieldset>
     ${renderChallenge(options.challenge, errors)}
     ${renderHoneypot()}

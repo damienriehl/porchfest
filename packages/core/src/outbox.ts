@@ -598,9 +598,6 @@ export function createOutboxRepository(
           `- ${act.name} need amplification; the porch reports power: ${yesNoUnknown(venue.hasPower)}.`,
         );
       }
-      if (act.canLendGear === true) {
-        logistics.push(`- ${act.name} can lend gear.`);
-      }
     }
     if (logistics.length === 0) {
       logistics.push("- Nothing recorded yet - please coordinate directly.");

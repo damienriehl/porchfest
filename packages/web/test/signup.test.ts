@@ -15,6 +15,41 @@ const PUBLIC_BASE_URL = "https://porchfest.example";
 const temporaryRoots: string[] = [];
 const runtimes: PorchfestRuntime[] = [];
 
+const EXPECTED_HOST_AUDIENCES = {
+  contact_name: "Shared with a confirmed match",
+  contact_email: "Shared with a confirmed match",
+  contact_phone: "Shared with a confirmed match",
+  venue_title: "Public map",
+  venue_address: "Public map",
+  space_description: "Public map",
+  has_power: "Public map",
+  rain_backup: "Public map",
+  requested_act_names: "Organizer-only",
+  genre_preferences: "Organizer-only",
+  gear: "Public map",
+  drinks: "Public map",
+  amenities: "Public map",
+  notes: "Shared with a confirmed match",
+} as const;
+
+const EXPECTED_PERFORMER_AUDIENCES = {
+  contact_name: "Shared with a confirmed match",
+  contact_email: "Shared with a confirmed match",
+  contact_phone: "Shared with a confirmed match",
+  act_name: "Public map",
+  genres: "Public map",
+  description: "Public map",
+  links: "Public map",
+  duration_minutes: "Public map",
+  requires_amplification: "Public map",
+  availability_start: "Organizer-only",
+  availability_end: "Organizer-only",
+  house_preference: "Organizer-only",
+  shared_member_note: "Organizer-only",
+  can_lend_gear: "Organizer-only",
+  performer_notes: "Organizer-only",
+} as const;
+
 afterEach(async () => {
   for (const runtime of runtimes.splice(0)) runtime.close();
   await Promise.all(
@@ -28,6 +63,7 @@ async function makeRuntime(
   options: {
     antibot?: AntibotPort;
     rateLimit?: number;
+    timeSlots?: readonly { startsAt: string; endsAt: string }[];
   } = {},
 ) {
   const dataDirectory = await mkdtemp(join(tmpdir(), "porchfest-signup-"));
@@ -56,7 +92,7 @@ async function makeRuntime(
     eventDate: "2031-06-01",
     eventCity: "Exampleton",
     eventState: "WI",
-    timeSlots: [],
+    timeSlots: options.timeSlots ?? [],
     openSignups: true,
   });
 
@@ -300,6 +336,34 @@ describe("public signup forms", () => {
     expect(html).toContain('data-signup-preview="host"');
     expect(html).toContain('type="module"');
     expect(html).toContain("/signup/assets/signup-preview.js");
+  });
+
+  it("labels every host and performer field with the canonical audience before submission", async () => {
+    const { runtime, seasonId } = await makeRuntime();
+    const host = await csrfToken(runtime, "/signup/host", seasonId);
+    const performer = await csrfToken(runtime, "/signup/performer", seasonId);
+
+    for (const [field, audience] of Object.entries(EXPECTED_HOST_AUDIENCES)) {
+      expect(host.html).toContain(
+        `data-audience-field="${field}" data-audience-label="${audience}"`,
+      );
+    }
+    for (const [field, audience] of Object.entries(
+      EXPECTED_PERFORMER_AUDIENCES,
+    )) {
+      expect(performer.html).toContain(
+        `data-audience-field="${field}" data-audience-label="${audience}"`,
+      );
+    }
+    expect(host.html).toContain(
+      "No means there is no covered or indoor backup space; organizers and a confirmed match will need to plan accordingly",
+    );
+    expect(host.html).toContain(
+      "A checked amenity is available to the performers matched with your porch",
+    );
+    expect(host.html).toContain(
+      "Your full street address will appear on the public map",
+    );
   });
 
   it("lets the preview module no-op when its container is absent", async () => {
@@ -589,6 +653,83 @@ describe("public signup forms", () => {
     expect(html).toMatch(/organizer.*review/i);
     expect(html).toMatch(/no confirmation email will follow/i);
     expect(html).toContain("The Test Porch");
+  });
+
+  it("keeps canonical audiences aligned from both forms through receipts and a match message", async () => {
+    const { runtime, seasonId } = await makeRuntime({
+      timeSlots: [{ startsAt: "14:00", endsAt: "15:00" }],
+    });
+    const hostForm = await csrfToken(runtime, "/signup/host", seasonId);
+    const hostInput = hostValues(seasonId, hostForm.token);
+    hostInput.set(
+      "requested_act_names",
+      "ORGANIZER_ONLY_REQUESTED_ACT_SENTINEL",
+    );
+    const hostResponse = await submit(runtime, "/signup/host", hostInput);
+    const hostReceipt = await hostResponse.text();
+    const performerForm = await csrfToken(
+      runtime,
+      "/signup/performer",
+      seasonId,
+    );
+    const performerInput = performerValues(seasonId, performerForm.token);
+    performerInput.set(
+      "performer_notes",
+      "ORGANIZER_ONLY_PERFORMER_NOTE_SENTINEL",
+    );
+    const performerResponse = await submit(
+      runtime,
+      "/signup/performer",
+      performerInput,
+    );
+    const performerReceipt = await performerResponse.text();
+
+    expect(hostResponse.status).toBe(201);
+    expect(performerResponse.status).toBe(201);
+    for (const [field, audience] of Object.entries(EXPECTED_HOST_AUDIENCES)) {
+      expect(hostReceipt).toContain(
+        `data-submission-field="${field}" data-audience-label="${audience}"`,
+      );
+    }
+    for (const [field, audience] of Object.entries(
+      EXPECTED_PERFORMER_AUDIENCES,
+    )) {
+      if (field === "availability_end") continue;
+      expect(performerReceipt).toContain(
+        `data-submission-field="${field}" data-audience-label="${audience}"`,
+      );
+    }
+
+    const queue = runtime.core.seasons.listActivityQueue(seasonId);
+    const venueItem = queue.find(({ recordType }) => recordType === "venue");
+    const actItem = queue.find(({ recordType }) => recordType === "act");
+    expect(venueItem?.recordType).toBe("venue");
+    expect(actItem?.recordType).toBe("act");
+    if (venueItem?.recordType !== "venue" || actItem?.recordType !== "act") {
+      throw new Error("expected submitted venue and act records");
+    }
+    const venue = venueItem.record;
+    const act = actItem.record;
+    const slot = runtime.core.seasons.listVenueSlots(venue.id)[0];
+    expect(slot).toBeDefined();
+    runtime.core.seasons.assignSlot(slot!.id, slot!.version, act.id);
+    const generated = runtime.core.outbox.generateWave({
+      seasonId,
+      kind: "match",
+    });
+    const message = generated.messages[0]?.textBody ?? "";
+
+    expect(message).toContain("Synthetic Venue Address");
+    expect(message).toContain("host@example.invalid");
+    expect(message).toContain("performer@example.invalid");
+    expect(message).toContain("Use the side gate & wave.");
+    expect(message).toContain("The Test Fixtures");
+    expect(message).not.toContain("ORGANIZER_ONLY_REQUESTED_ACT_SENTINEL");
+    expect(message).not.toContain("Folk and acoustic rock");
+    expect(message).not.toContain("Near the park");
+    expect(message).not.toContain("Drummer also plays in Fixture Friends");
+    expect(message).not.toContain("ORGANIZER_ONLY_PERFORMER_NOTE_SENTINEL");
+    expect(message).not.toContain("can lend gear");
   });
 
   it("links both receipts back to another signup for the same season", async () => {
