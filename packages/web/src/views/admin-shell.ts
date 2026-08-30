@@ -124,10 +124,19 @@ export function renderSetupPage(options: {
   readonly csrfToken: string;
   readonly values: Readonly<Record<string, string>>;
   readonly errors: readonly SetupFieldError[];
-  readonly mode?: "first" | "additional";
+  readonly mode?: "first" | "additional" | "edit";
+  readonly seasonId?: number;
+  readonly version?: number;
+  readonly formError?: string;
+  readonly saved?: boolean;
 }): string {
   const mode = options.mode ?? "first";
-  const action = mode === "first" ? "/admin/setup" : "/admin/seasons/new";
+  const action =
+    mode === "first"
+      ? "/admin/setup"
+      : mode === "additional"
+        ? "/admin/seasons/new"
+        : `/admin/seasons/${options.seasonId ?? ""}/edit`;
   const value = (name: string) => escapeHtml(options.values[name] ?? "");
   const errorFor = (name: string) =>
     options.errors.find((error) => error.field === name);
@@ -163,16 +172,44 @@ export function renderSetupPage(options: {
         .join("")}</ul>
     </section>`;
 
+  const notice = options.formError
+    ? `<section class="error-summary" role="alert" tabindex="-1"><h2>Event details were not changed</h2><p>${escapeHtml(options.formError)}</p></section>`
+    : options.saved
+      ? '<section class="confirmation-card" role="status"><p>Event details saved.</p></section>'
+      : "";
+
+  const title =
+    mode === "first"
+      ? "First-run setup"
+      : mode === "additional"
+        ? "Open another season"
+        : "Edit event details";
+  const heading =
+    mode === "first"
+      ? "Open your first season"
+      : mode === "additional"
+        ? "Open another season"
+        : "Edit event details";
+  const lede =
+    mode === "first"
+      ? "Everything a season needs to accept a signup, in one pass. You can change any of it later."
+      : mode === "additional"
+        ? "Create a separate season with its own dates, signups, and records. This does not edit an existing season."
+        : "Update the event configuration. Schedule changes are refused while dependent participant, assignment, hold, venue-slot, or outbox data remains.";
+
   return page(
-    mode === "first" ? "First-run setup" : "Open another season",
+    title,
     `    <header class="signup-header">
       <p class="eyebrow">Organizers</p>
-      <h1>${mode === "first" ? "Open your first season" : "Open another season"}</h1>
-      <p class="lede">${mode === "first" ? "Everything a season needs to accept a signup, in one pass. You can change any of it later." : "Create a separate season with its own dates, signups, and records. This does not edit an existing season."}</p>
+      <h1>${heading}</h1>
+      <p class="lede">${lede}</p>
+      ${mode === "edit" ? `<p><a href="/admin/seasons/${options.seasonId ?? ""}">Back to season settings &amp; state</a></p>` : ""}
     </header>
+    ${notice}
     ${summary}
     <form class="signup-form" id="signup-form" method="post" action="${action}">
       <input type="hidden" name="_csrf" value="${escapeHtml(options.csrfToken)}">
+      ${mode === "edit" ? `<input type="hidden" name="version" value="${options.version ?? ""}">` : ""}
       <fieldset>
         <legend>The event</legend>
         ${field("display_name", "Season name", "What neighbours will see, such as “SAP Porchfest 2027”.")}
@@ -186,9 +223,13 @@ export function renderSetupPage(options: {
         <legend>Signups</legend>
         ${field("signup_opens_on", "Signups open", "Optional. Leave blank if you are opening them by hand.", 'type="date"')}
         ${field("signup_closes_on", "Signups close", "Optional.", 'type="date"')}
-        <div class="field">
+        ${
+          mode === "edit"
+            ? ""
+            : `<div class="field">
           <label class="choice"><input type="checkbox" name="open_signups" value="yes"${options.values.open_signups === "yes" ? " checked" : ""}><span>Start accepting signups right away</span></label>
-        </div>
+        </div>`
+        }
       </fieldset>
       <fieldset>
         <legend>Time slots</legend>
@@ -231,7 +272,7 @@ export function renderSetupPage(options: {
       </fieldset>`
           : ""
       }
-      <button class="primary-action" type="submit">${mode === "first" ? "Open the first season" : "Open another season"}</button>
+      <button class="primary-action" type="submit">${mode === "first" ? "Open the first season" : mode === "additional" ? "Open another season" : "Save event details"}</button>
     </form>`,
   );
 }

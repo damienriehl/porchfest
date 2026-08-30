@@ -137,6 +137,16 @@ function submitSeason(
   });
 }
 
+async function createConfiguredSeason(
+  runtime: PorchfestRuntime,
+  cookie: string,
+) {
+  const csrf = await setupCsrf(runtime, cookie);
+  const response = await submitSetup(runtime, cookie, completeSetup(csrf));
+  expect(response.status).toBe(303);
+  return runtime.core.seasons.getSeason(1);
+}
+
 describe("first-run setup", () => {
   it("sends an organizer with no season straight to setup", async () => {
     const { runtime, cookie } = await bootAndSignIn();
@@ -579,5 +589,217 @@ describe("setup refuses what it cannot honour", () => {
     const response = await runtime.request(`${PUBLIC_BASE_URL}/admin/setup`);
 
     expect(response.status).toBe(401);
+  });
+});
+
+describe("season event-details editor", () => {
+  it("reads back and saves every setup field and replaces the published slots", async () => {
+    const { runtime, cookie } = await bootAndSignIn();
+    const created = await createConfiguredSeason(runtime, cookie);
+    const editPath = `/admin/seasons/${created.id}/edit`;
+
+    const seasonPage = await runtime.request(
+      `${PUBLIC_BASE_URL}/admin/seasons/${created.id}`,
+      { headers: { cookie } },
+    );
+    expect(await seasonPage.text()).toContain(`href="${editPath}"`);
+
+    const editPage = await runtime.request(`${PUBLIC_BASE_URL}${editPath}`, {
+      headers: { cookie },
+    });
+    const originalHtml = await editPage.text();
+    expect(editPage.status).toBe(200);
+    for (const value of [
+      "SAP Porchfest 2027",
+      "2027-09-11",
+      "Exampleton",
+      "WI",
+      "America/Chicago",
+      "2027-05-01",
+      "2027-07-01",
+      "14:00",
+      "15:00",
+      "Saint Anthony Park",
+      "44.99",
+      "https://sapporchfest.example/",
+      "organizers@example.invalid",
+    ]) {
+      expect(originalHtml).toContain(value);
+    }
+    expect(originalHtml).toContain(`name="version" value="${created.version}"`);
+    const csrf = originalHtml.match(/name="_csrf" value="([^"]+)"/)?.[1] ?? "";
+
+    const saved = await submitSeason(
+      runtime,
+      cookie,
+      editPath,
+      completeSetup(csrf, {
+        version: String(created.version),
+        display_name: "Edited Porchfest 2028",
+        year: "2028",
+        event_date: "2028-09-09",
+        event_city: "North Exampleton",
+        event_state: "MN",
+        timezone: "America/New_York",
+        signup_opens_on: "2028-04-01",
+        signup_closes_on: "2028-06-30",
+        slot_start_1: "13:30",
+        slot_end_1: "14:15",
+        slot_start_2: "",
+        slot_end_2: "",
+        locality_name: "New Locality",
+        bounds_north: "45.1",
+        bounds_south: "44.9",
+        bounds_east: "-93.1",
+        bounds_west: "-93.4",
+        public_site_url: "https://new.example.invalid/info",
+        public_map_url: "https://new.example.invalid/map",
+        sender_name: "New Organizers",
+        sender_email: "new-organizers@example.invalid",
+      }),
+    );
+    expect(saved.status).toBe(303);
+    expect(saved.headers.get("location")).toBe(`${editPath}?saved=1`);
+
+    const readback = await runtime.request(
+      `${PUBLIC_BASE_URL}${editPath}?saved=1`,
+      { headers: { cookie } },
+    );
+    const html = await readback.text();
+    expect(readback.status).toBe(200);
+    expect(html).toContain("Event details saved");
+    for (const value of [
+      "Edited Porchfest 2028",
+      "2028-09-09",
+      "North Exampleton",
+      "MN",
+      "America/New_York",
+      "2028-04-01",
+      "2028-06-30",
+      "13:30",
+      "New Locality",
+      "45.1",
+      "https://new.example.invalid/info",
+      "new-organizers@example.invalid",
+    ]) {
+      expect(html).toContain(value);
+    }
+    expect(runtime.core.setup.listTimeSlots(created.id)).toHaveLength(1);
+  });
+
+  it("returns an actionable 409 for a stale form and overwrites nothing", async () => {
+    const { runtime, cookie } = await bootAndSignIn();
+    const created = await createConfiguredSeason(runtime, cookie);
+    const editPath = `/admin/seasons/${created.id}/edit`;
+    const csrf = await csrfFor(runtime, cookie, editPath);
+
+    runtime.core.setup.updateSeasonDetails(created.id, created.version, {
+      ...{
+        year: created.year,
+        displayName: created.displayName,
+        timezone: created.timezone,
+        eventDate: created.eventDate ?? "",
+        eventCity: created.eventCity,
+        eventState: created.eventState,
+        timeSlots: [
+          { startsAt: "14:00", endsAt: "15:00" },
+          { startsAt: "15:00", endsAt: "16:00" },
+        ],
+        openSignups: false,
+      },
+      senderName: "Winner",
+    });
+    const stale = await submitSeason(
+      runtime,
+      cookie,
+      editPath,
+      completeSetup(csrf, {
+        version: String(created.version),
+        display_name: "Stale name",
+        sender_name: "Stale sender",
+      }),
+    );
+    const html = await stale.text();
+
+    expect(stale.status).toBe(409);
+    expect(html).toContain("Someone else changed these event details");
+    expect(html).toContain("Review the refreshed values");
+    expect(html).toContain("Winner");
+    expect(html).not.toContain('value="Stale name"');
+    expect(runtime.core.seasons.getSeason(created.id)).toMatchObject({
+      displayName: created.displayName,
+      senderName: "Winner",
+      version: created.version + 1,
+    });
+  });
+
+  it.each([
+    ["timezone", { timezone: "Mars/Olympus" }, "valid IANA timezone"],
+    ["partial bounds", { bounds_east: "" }, "decimal degrees"],
+    ["out-of-range bounds", { bounds_north: "91" }, "north edge"],
+    ["site URL", { public_site_url: "javascript:alert(1)" }, "full http"],
+    ["map URL", { public_map_url: "not a URL" }, "full http"],
+    ["sender email", { sender_email: "not-an-email" }, "name@example.com"],
+    [
+      "replacement slot",
+      { slot_start_1: "16:00", slot_end_1: "15:00" },
+      "end after it starts",
+    ],
+  ])(
+    "reuses setup validation for invalid %s",
+    async (_label, overrides, message) => {
+      const { runtime, cookie } = await bootAndSignIn();
+      const created = await createConfiguredSeason(runtime, cookie);
+      const editPath = `/admin/seasons/${created.id}/edit`;
+      const csrf = await csrfFor(runtime, cookie, editPath);
+
+      const response = await submitSeason(
+        runtime,
+        cookie,
+        editPath,
+        completeSetup(csrf, {
+          version: String(created.version),
+          ...overrides,
+        }),
+      );
+
+      expect(response.status).toBe(422);
+      expect(await response.text()).toContain(message);
+      expect(runtime.core.seasons.getSeason(created.id).version).toBe(
+        created.version,
+      );
+    },
+  );
+
+  it("protects the editor mutation with sign-in, Origin, and CSRF", async () => {
+    const { runtime, cookie } = await bootAndSignIn();
+    const created = await createConfiguredSeason(runtime, cookie);
+    const editPath = `/admin/seasons/${created.id}/edit`;
+    const csrf = await csrfFor(runtime, cookie, editPath);
+    const body = completeSetup(csrf, { version: String(created.version) });
+
+    expect(await submitSeason(runtime, "", editPath, body)).toMatchObject({
+      status: 401,
+    });
+    expect(
+      await submitSeason(
+        runtime,
+        cookie,
+        editPath,
+        completeSetup(csrf, { version: String(created.version) }),
+        "https://unrelated.example",
+      ),
+    ).toMatchObject({ status: 403 });
+    expect(
+      await submitSeason(
+        runtime,
+        cookie,
+        editPath,
+        completeSetup("", { version: String(created.version) }),
+      ),
+    ).toMatchObject({ status: 403 });
+    expect(runtime.core.seasons.getSeason(created.id).version).toBe(
+      created.version,
+    );
   });
 });

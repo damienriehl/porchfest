@@ -60,6 +60,8 @@ describe("application scaffold", () => {
       { method: "GET", path: "/admin/seasons", tier: "organizer" },
       { method: "GET", path: "/admin/seasons/new", tier: "organizer" },
       { method: "POST", path: "/admin/seasons/new", tier: "organizer" },
+      { method: "GET", path: "/admin/seasons/:id/edit", tier: "organizer" },
+      { method: "POST", path: "/admin/seasons/:id/edit", tier: "organizer" },
       { method: "POST", path: "/admin/sign-out", tier: "organizer" },
       { method: "GET", path: "/admin/retention", tier: "organizer" },
       {

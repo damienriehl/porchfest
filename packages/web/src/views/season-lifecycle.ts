@@ -44,7 +44,7 @@ export function renderSeasonLifecyclePage(options: {
     `    <header class="signup-header">
       <p class="eyebrow">${escapeHtml(options.season.displayName)}</p>
       <h1>Season settings &amp; state</h1>
-      <p class="lede"><a href="/admin?season=${options.season.id}">Back to activity queue</a> · <a href="/admin/seasons/${options.season.id}/outbox">Email outbox</a> · <a href="/seasons/${options.season.id}/coordinates">Coordinate review &amp; map publication</a></p>
+      <p class="lede"><a href="/admin?season=${options.season.id}">Back to activity queue</a> · <a href="/admin/seasons/${options.season.id}/edit">Edit event details</a> · <a href="/admin/seasons/${options.season.id}/outbox">Email outbox</a> · <a href="/seasons/${options.season.id}/coordinates">Coordinate review &amp; map publication</a></p>
     </header>
     ${notice}
     <section aria-labelledby="current-season-state">
