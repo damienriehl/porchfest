@@ -5,6 +5,16 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=deploy/common.sh
 source "$script_dir/common.sh"
 
+# Usage: deploy/offsite.sh [ARCHIVE]
+# ARCHIVE must be inside PORCHFEST_ARCHIVE_DIR and defaults to its newest deployment archive.
+usage() {
+  printf 'Usage: %s [ARCHIVE]\n' "$0" >&2
+  exit 2
+}
+
+[[ $# -le 1 ]] || usage
+requested_archive="${1:-}"
+
 load_dotenv_if_present
 init_deploy_config
 require_value PORCHFEST_BACKUP_AGE_RECIPIENT
@@ -15,11 +25,22 @@ require_command sha256sum
 ensure_archive_dir_safe
 assert_pinned_volume
 
-archive="$(newest_archive)"
+if [[ -n "$requested_archive" ]]; then
+  [[ -f "$requested_archive" && ! -L "$requested_archive" ]] \
+    || die "requested archive does not exist as a regular file: $requested_archive"
+  requested_archive_dir="$(cd -- "$(dirname -- "$requested_archive")" && pwd -P)"
+  archive="$requested_archive_dir/$(basename -- "$requested_archive")"
+  case "$archive" in
+    "$archive_dir/"*) ;;
+    *) die "requested archive must live inside PORCHFEST_ARCHIVE_DIR" ;;
+  esac
+else
+  archive="$(newest_archive)"
+fi
 [[ -n "$archive" && -f "$archive" ]] || die "no local archive is available for off-site backup"
 metadata="$(archive_metadata_path "$archive")"
 plain_sha_file="$(archive_sha_path "$archive")"
-[[ -f "$metadata" && -f "$plain_sha_file" ]] || die "newest archive is missing metadata or SHA-256 evidence"
+[[ -f "$metadata" && -f "$plain_sha_file" ]] || die "archive is missing metadata or SHA-256 evidence"
 archive_sha="$(verify_archive_sha "$archive")"
 
 encrypted="${archive}.age"

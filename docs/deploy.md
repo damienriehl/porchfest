@@ -104,6 +104,14 @@ bash deploy/offsite.sh
 docker compose up -d --build app
 ```
 
+`bash deploy/offsite.sh` encrypts and copies the newest deployment archive by default. To copy a
+specific archive, pass its path as the first argument; it must live inside `PORCHFEST_ARCHIVE_DIR`
+and have its matching `.json` metadata and `.sha256` sidecars:
+
+```sh
+bash deploy/offsite.sh /var/backups/porchfest-neighborhood/archive-name.tar.gz
+```
+
 `deploy.sh` performs those steps in order, with off-site copy controlled by
 `PORCHFEST_DEPLOY_OFFSITE=1`, then waits for health and runs the post-checks. It does not rebuild or
 restart the proxy. The gate is successful only when all of these invariants hold:

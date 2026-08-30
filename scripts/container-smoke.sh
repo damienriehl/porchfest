@@ -295,6 +295,21 @@ export PORCHFEST_CADDY_DATA_VOLUME="$caddy_data_volume"
 export PORCHFEST_CADDY_CONFIG_VOLUME="$caddy_config_volume"
 export PORCHFEST_ARCHIVE_DIR="$archive_dir"
 export PUBLIC_BASE_URL=
-bash scripts/restore-rehearsal.sh
+rehearsal_output=""
+if rehearsal_output="$(bash scripts/restore-rehearsal.sh 2>&1)"; then
+  :
+else
+  rehearsal_status=$?
+  printf '%s\n' "$rehearsal_output" >&2
+  printf 'ERROR: restore rehearsal exited with status %s\n' "$rehearsal_status" >&2
+  exit "$rehearsal_status"
+fi
+failed_rehearsal_output="$(grep -E '^(ERROR|REFUSED)' <<<"$rehearsal_output" || true)"
+if [[ -n "$failed_rehearsal_output" ]]; then
+  printf '%s\n' "$rehearsal_output" >&2
+  echo "ERROR: restore rehearsal emitted failure output" >&2
+  exit 1
+fi
+printf '%s\n' "$rehearsal_output"
 rm -rf -- "$archive_dir"
 archive_dir=""

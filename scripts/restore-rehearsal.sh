@@ -28,6 +28,7 @@ previous_fixture_project="${PORCHFEST_COMPOSE_PROJECT}-previous-fixture"
 previous_fixture_volume="${PORCHFEST_DATA_VOLUME}-previous-fixture"
 previous_image_container="${PORCHFEST_COMPOSE_PROJECT}-previous-image"
 fake_dir=""
+docker_shim_dir=""
 
 cleanup() {
   docker compose -p "$previous_fixture_project" -f "$project_dir/compose.yaml" \
@@ -40,6 +41,9 @@ cleanup() {
   docker image rm "$prev_image" >/dev/null 2>&1 || true
   if [[ -n "$fake_dir" ]]; then
     rm -rf -- "$fake_dir"
+  fi
+  if [[ -n "$docker_shim_dir" ]]; then
+    rm -rf -- "$docker_shim_dir"
   fi
 }
 trap cleanup EXIT
@@ -236,18 +240,20 @@ docker compose -p "$previous_fixture_project" -f "$project_dir/compose.yaml" \
 docker volume rm "$previous_fixture_volume" >/dev/null
 
 real_docker="$(command -v docker)"
-tag_failure_shim="$fake_dir/docker"
+docker_shim_dir="$(mktemp -d)"
+tag_failure_shim="$docker_shim_dir/docker"
 {
   printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail'
   printf '%s\n' 'if [[ "${1:-}" == tag && "${2:-}" == "$PORCHFEST_FAIL_TAG_SOURCE" && "${3:-}" == "$PORCHFEST_FAIL_TAG_TARGET" ]]; then'
   printf '%s\n' '  printf '\''injected docker tag failure\n'\'' >&2'
   printf '%s\n' '  exit 42'
   printf '%s\n' 'fi'
-  printf '%s\n' 'exec "$PORCHFEST_REAL_DOCKER" "$@"'
+  printf '%s\n' 'exec "${PORCHFEST_REAL_DOCKER:?}" "$@"'
 } >"$tag_failure_shim"
 chmod +x "$tag_failure_shim"
 rollback_failure_output="$fake_dir/rollback-tag-failure.txt"
-if PATH="$fake_dir:$PATH" \
+if env \
+  PATH="$docker_shim_dir:$PATH" \
   PORCHFEST_REAL_DOCKER="$real_docker" \
   PORCHFEST_FAIL_TAG_SOURCE="$prev_image" \
   PORCHFEST_FAIL_TAG_TARGET="$PORCHFEST_APP_IMAGE" \
@@ -268,6 +274,15 @@ if grep -Fq 'rollback_result=PASS' "$rollback_failure_output"; then
   printf 'ERROR: failed schema-moved rollback printed rollback_result=PASS\n' >&2
   exit 1
 fi
+rm -rf -- "$docker_shim_dir"
+docker_shim_dir=""
+
+resolved_docker="$(command -v docker)"
+[[ "$resolved_docker" == "$real_docker" ]] || {
+  printf 'ERROR: docker shim leaked beyond rollback rehearsal (expected %s, found %s)\n' \
+    "$real_docker" "$resolved_docker" >&2
+  exit 1
+}
 echo "OK: schema-moved rollback refuses foreign archives, selects its own, and restores its safety archive after failure"
 
 if command -v age-keygen >/dev/null 2>&1 && command -v age >/dev/null 2>&1; then
@@ -324,7 +339,7 @@ if command -v age-keygen >/dev/null 2>&1 && command -v age >/dev/null 2>&1; then
     PORCHFEST_BACKUP_AGE_RECIPIENT="$recipient" \
     PORCHFEST_BACKUP_REMOTE=porchfest-test-remote:backups \
     PORCHFEST_BACKUP_KEEP=1 \
-    "$project_dir/deploy/offsite.sh" >/dev/null
+    "$project_dir/deploy/offsite.sh" "$archive" >/dev/null
   grep -q '^copy ' "$rclone_log"
   grep -q '^lsf ' "$rclone_log"
   grep -Fq 'porchfest-test-remote:backups/' "$rclone_log"
@@ -346,7 +361,7 @@ if command -v age-keygen >/dev/null 2>&1 && command -v age >/dev/null 2>&1; then
     PORCHFEST_BACKUP_AGE_RECIPIENT="$recipient" \
     PORCHFEST_BACKUP_REMOTE=porchfest-test-remote:backups \
     PORCHFEST_BACKUP_KEEP=1 \
-    "$project_dir/deploy/offsite.sh" >"$missing_output" 2>&1; then
+    "$project_dir/deploy/offsite.sh" "$archive" >"$missing_output" 2>&1; then
     printf 'ERROR: offsite reported success when the remote listing failed\n' >&2
     exit 1
   fi
@@ -355,5 +370,12 @@ if command -v age-keygen >/dev/null 2>&1 && command -v age >/dev/null 2>&1; then
 else
   echo "OK: off-site backup shim skipped explicitly (age and age-keygen are not installed)"
 fi
+
+resolved_docker="$(command -v docker)"
+[[ "$resolved_docker" == "$real_docker" ]] || {
+  printf 'ERROR: docker shim leaked beyond rollback rehearsal (expected %s, found %s)\n' \
+    "$real_docker" "$resolved_docker" >&2
+  exit 1
+}
 
 echo "OK: archive restored with matching counts and integrity, rollback paths passed, and external-proxy Compose validated"
