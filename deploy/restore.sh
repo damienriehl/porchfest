@@ -45,6 +45,7 @@ fi
 
 metadata="$(archive_metadata_path "$archive")"
 [[ -f "$metadata" ]] || die "archive metadata is missing: $metadata"
+assert_archive_belongs_to_deployment "$metadata"
 archive_sha="$(verify_archive_sha "$archive")"
 archive_schema_when="$(json_number "$metadata" schema.when)"
 [[ -n "$archive_schema_when" ]] || die "archive metadata has no schema journal timestamp"

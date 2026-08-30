@@ -100,6 +100,19 @@ archive="$(archive_from_result_file "$archive_result")"
   printf 'ERROR: archive rehearsal produced no archive\n' >&2
   exit 1
 }
+[[ "$(basename -- "$archive")" == "${PORCHFEST_COMPOSE_PROJECT}-"* ]] || {
+  printf 'ERROR: archive filename is not prefixed by the Compose project\n' >&2
+  exit 1
+}
+archive_metadata="$(archive_metadata_path "$archive")"
+[[ "$(json_string "$archive_metadata" compose_project)" == "$PORCHFEST_COMPOSE_PROJECT" ]] || {
+  printf 'ERROR: archive evidence does not record the Compose project\n' >&2
+  exit 1
+}
+[[ "$(json_string "$archive_metadata" data_volume)" == "$PORCHFEST_DATA_VOLUME" ]] || {
+  printf 'ERROR: archive evidence does not record the literal data volume\n' >&2
+  exit 1
+}
 
 PORCHFEST_RESTORE_VOLUME="$restore_volume" \
   PORCHFEST_RESTORE_PROJECT="$restore_project" \
@@ -184,6 +197,40 @@ env \
   printf 'ERROR: previous-schema fixture produced no rollback archive\n' >&2
   exit 1
 }
+foreign_archive="$(archive_from_result_file "$previous_archive_result")"
+foreign_metadata="$(archive_metadata_path "$foreign_archive")"
+own_archive="$PORCHFEST_ARCHIVE_DIR/${PORCHFEST_COMPOSE_PROJECT}-porchfest-previous-fixture.tar.gz"
+cp -- "$foreign_archive" "$own_archive"
+foreign_archive_sha="$(verify_archive_sha "$foreign_archive")"
+printf '%s  %s\n' "$foreign_archive_sha" "$(basename -- "$own_archive")" \
+  >"$(archive_sha_path "$own_archive")"
+cp -- "$foreign_metadata" "$(archive_metadata_path "$own_archive")"
+PORCHFEST_OWN_ARCHIVE_METADATA="$(archive_metadata_path "$own_archive")" \
+  PORCHFEST_OWN_ARCHIVE_PATH="$own_archive" \
+  node -e '
+    const fs = require("node:fs");
+    const path = process.env.PORCHFEST_OWN_ARCHIVE_METADATA;
+    const evidence = JSON.parse(fs.readFileSync(path, "utf8"));
+    evidence.compose_project = process.env.PORCHFEST_COMPOSE_PROJECT;
+    evidence.data_volume = process.env.PORCHFEST_DATA_VOLUME;
+    evidence.volume = process.env.PORCHFEST_DATA_VOLUME;
+    evidence.archive.path = process.env.PORCHFEST_OWN_ARCHIVE_PATH;
+    fs.writeFileSync(path, `${JSON.stringify(evidence, null, 2)}\n`);
+  '
+touch -t 203001010100 "$(archive_metadata_path "$own_archive")"
+touch -t 203001010101 "$foreign_metadata"
+
+foreign_restore_output="$fake_dir/foreign-restore.txt"
+if PORCHFEST_RESTORE_VOLUME="${restore_volume}-foreign" \
+  PORCHFEST_RESTORE_PROJECT="${restore_project}-foreign" \
+  "$project_dir/deploy/restore.sh" "$foreign_archive" >"$foreign_restore_output" 2>&1; then
+  printf 'ERROR: restore accepted a foreign-project archive\n' >&2
+  exit 1
+fi
+grep -Fq 'refusing foreign archive evidence' "$foreign_restore_output"
+grep -Fq \
+  "expected compose_project=$PORCHFEST_COMPOSE_PROJECT and data_volume=$PORCHFEST_DATA_VOLUME" \
+  "$foreign_restore_output"
 docker compose -p "$previous_fixture_project" -f "$project_dir/compose.yaml" \
   down --remove-orphans >/dev/null
 docker volume rm "$previous_fixture_volume" >/dev/null
@@ -215,11 +262,13 @@ grep -Fq 'safety_archive_restored=' "$rollback_failure_output"
 grep -Fq \
   'rollback failed at docker tag previous image; the pre-rollback safety archive was restored automatically and the app was restarted' \
   "$rollback_failure_output"
+grep -Fq "REFUSED: foreign archive evidence $foreign_metadata" "$rollback_failure_output"
+grep -Fxq "rollback_archive_selected=$own_archive" "$rollback_failure_output"
 if grep -Fq 'rollback_result=PASS' "$rollback_failure_output"; then
   printf 'ERROR: failed schema-moved rollback printed rollback_result=PASS\n' >&2
   exit 1
 fi
-echo "OK: schema-moved rollback stops on docker tag failure and restores its safety archive"
+echo "OK: schema-moved rollback refuses foreign archives, selects its own, and restores its safety archive after failure"
 
 if command -v age-keygen >/dev/null 2>&1 && command -v age >/dev/null 2>&1; then
   identity="$fake_dir/identity.txt"

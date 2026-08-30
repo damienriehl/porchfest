@@ -47,7 +47,7 @@ rclone copy "$(dirname -- "$archive")" "$remote/" --files-from "$copy_manifest"
 remote_listing="$(rclone lsf --files-only --format tp --time-format unixnano "$remote/")" \
   || die "could not verify the off-site backup listing"
 mapfile -t remote_archives < <(
-  sed -n '/;porchfest-.*\.tar\.gz\.age$/p' <<<"$remote_listing" \
+  sed -n "\\#;${compose_project}-.*\\.tar\\.gz\\.age\$#p" <<<"$remote_listing" \
     | sort -t ';' -k1,1nr \
     | cut -d ';' -f 2-
 )

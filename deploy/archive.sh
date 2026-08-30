@@ -75,7 +75,7 @@ database_schema_when="$(volume_schema_when)"
 [[ "$database_schema_when" == "$schema_when" ]] || die "database migration journal does not match the archived image"
 
 stamp="$(date -u +%Y%m%dT%H%M%SZ)-$$"
-archive="$archive_dir/porchfest-${compose_project}-${schema_when}-${stamp}.tar.gz"
+archive="$archive_dir/${compose_project}-porchfest-${schema_when}-${stamp}.tar.gz"
 umask 077
 docker run --rm \
   --volume "$data_volume:/source:ro" \
@@ -103,9 +103,7 @@ else
 fi
 
 mapfile -t archives < <(
-  find "$archive_dir" -maxdepth 1 -type f -name 'porchfest-*.tar.gz' -printf '%T@\t%p\n' \
-    | sort -nr \
-    | cut -f 2-
+  deployment_archives
 )
 for ((index = archive_keep; index < ${#archives[@]}; index++)); do
   old="${archives[index]}"

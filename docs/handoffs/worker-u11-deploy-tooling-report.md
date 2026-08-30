@@ -229,6 +229,7 @@ gate still exited 0 and cleaned its test resources.
 | 17   | `0fbbcd6`                                                          | Parse evidence JSON with Python, falling back to Node in the app image; remove regex readers.                                                                    |
 | 18   | `fix(deploy): stop schema-moved rollback on its first failed step` | Check every rollback step directly, report the failed step, and restore the safety archive before exiting non-zero.                                              |
 | 19   | `fix(deploy): namespace Traefik objects per compose project`       | Prefix every Traefik router, middleware, and service object with the Compose project so shared proxy deployments do not collide.                                 |
+| 20   | `fix(deploy): scope rollback archive selection to the deployment`  | Record project and literal volume identity, refuse foreign or legacy archives, and scope archive selection and retention per deployment.                         |
 
 Cross-item gate and cleanup commits:
 

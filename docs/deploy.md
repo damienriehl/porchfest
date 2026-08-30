@@ -163,11 +163,15 @@ current image and the Compose-project-scoped previous-image tag:
 - Equal entries: retag the previous image as the configured app image and recreate only `app` with
   `--no-build`. The data volume is unchanged.
 - Current entry newer: image-only rollback is refused. The script locates the newest archive whose
-  record matches the previous image, restores it into a fresh rehearsal volume, and requires every
-  check to pass before touching production data. It then takes a no-restart safety archive, removes
-  and recreates only the exact pinned volume, restores the chosen archive, and boots the previous
-  image. If that destructive phase fails, it automatically restores the safety archive into the
-  pinned volume, reports the recovery, and exits as a failed rollback.
+  record matches the previous image **and** whose `compose_project` and literal `data_volume` evidence
+  match the active deployment, restores it into a fresh rehearsal volume, and requires every check
+  to pass before touching production data. Archives are named with a `<compose-project>-` prefix, but
+  the evidence fields are the authority: rollback skips foreign evidence even when its schema is an
+  exact match, and direct restore refuses it. Legacy evidence without both identity fields is foreign
+  and must not be used. The script then takes a no-restart safety archive, removes and recreates only
+  the exact pinned volume, restores the chosen archive, and boots the previous image. If that
+  destructive phase fails, it automatically restores the safety archive into the pinned volume,
+  reports the recovery, and exits as a failed rollback.
 
 The script never runs `docker compose down -v`; throwaway restore projects use `compose down`
 without `-v`, and only caller-created rehearsal volumes are explicitly removed. If no matching

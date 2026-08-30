@@ -85,6 +85,8 @@ init_deploy_config() {
 
   [[ "$archive_keep" =~ ^[1-9][0-9]*$ ]] || die "PORCHFEST_ARCHIVE_KEEP must be a positive integer"
   [[ "$backup_keep" =~ ^[1-9][0-9]*$ ]] || die "PORCHFEST_BACKUP_KEEP must be a positive integer"
+  [[ "$compose_project" =~ ^[a-z0-9][a-z0-9_-]*$ ]] \
+    || die "PORCHFEST_COMPOSE_PROJECT must use lowercase letters, digits, hyphens, or underscores"
   [[ "$data_volume" != *'${'* && "$data_volume" != *'$('* ]] || die "PORCHFEST_DATA_VOLUME must be a literal name"
   [[ "$app_image" != *@* ]] || die "PORCHFEST_APP_IMAGE must be a taggable image reference, not a digest"
 }
@@ -350,6 +352,8 @@ write_evidence_json() {
     printf '  "image_id": "%s",\n' "$(json_escape "$current_id")"
     printf '  "previous_image": "%s",\n' "$(json_escape "$prev_ref")"
     printf '  "previous_image_id": "%s",\n' "$(json_escape "$prev_id")"
+    printf '  "compose_project": "%s",\n' "$(json_escape "$compose_project")"
+    printf '  "data_volume": "%s",\n' "$(json_escape "$data_volume")"
     printf '  "volume": "%s",\n' "$(json_escape "$data_volume")"
     printf '  "integrity": "%s",\n' "$(json_escape "$integrity")"
     printf '  "counts": {\n'
@@ -380,6 +384,27 @@ json_string() {
   local path="$1"
   local key="$2"
   json_extract "$path" string "$key" || die "archive metadata has no valid $key string"
+}
+
+archive_belongs_to_deployment() {
+  local metadata="$1"
+  local recorded_project recorded_volume
+  ARCHIVE_IDENTITY_ERROR=""
+  if ! recorded_project="$(json_extract "$metadata" string compose_project 2>/dev/null)" ||
+    ! recorded_volume="$(json_extract "$metadata" string data_volume 2>/dev/null)"; then
+    ARCHIVE_IDENTITY_ERROR="missing required compose_project and data_volume evidence fields"
+    return 1
+  fi
+  if [[ "$recorded_project" != "$compose_project" || "$recorded_volume" != "$data_volume" ]]; then
+    ARCHIVE_IDENTITY_ERROR="records compose_project=$recorded_project and data_volume=$recorded_volume; expected compose_project=$compose_project and data_volume=$data_volume"
+    return 1
+  fi
+}
+
+assert_archive_belongs_to_deployment() {
+  local metadata="$1"
+  archive_belongs_to_deployment "$metadata" \
+    || die "refusing foreign archive evidence $metadata: $ARCHIVE_IDENTITY_ERROR"
 }
 
 assert_counts_match_json() {
@@ -428,11 +453,22 @@ ensure_archive_dir_safe() {
   archive_dir="$resolved_archive"
 }
 
+deployment_archives() {
+  local candidate metadata
+  while IFS= read -r candidate; do
+    metadata="$(archive_metadata_path "$candidate")"
+    [[ -f "$metadata" ]] || continue
+    archive_belongs_to_deployment "$metadata" || continue
+    printf '%s\n' "$candidate"
+  done < <(
+    find "$archive_dir" -maxdepth 1 -type f -name '*.tar.gz' -printf '%T@\t%p\n' \
+      | sort -nr \
+      | cut -f 2-
+  )
+}
+
 newest_archive() {
-  find "$archive_dir" -maxdepth 1 -type f -name 'porchfest-*.tar.gz' -printf '%T@\t%p\n' \
-    | sort -nr \
-    | head -n 1 \
-    | cut -f 2-
+  deployment_archives | sed -n '1p'
 }
 
 archive_from_result_file() {

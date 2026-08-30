@@ -36,6 +36,8 @@ EOF
 metadata="$temp_dir/evidence.json"
 cat >"$metadata" <<'EOF'
 {
+  "compose_project": "smoke-123",
+  "data_volume": "smoke-123-data",
   "archive": {"mode": "600", "when": 999},
   "counts": {
     "contacts": 1,
@@ -48,8 +50,18 @@ cat >"$metadata" <<'EOF'
   "schema": {"tag": "0001_test", "when": 123}
 }
 EOF
+compose_project="smoke-123"
+data_volume="smoke-123-data"
 [[ "$(json_number "$metadata" schema.when)" == 123 ]] || fail "JSON number lookup ignored its object path"
 [[ "$(json_string "$metadata" archive.mode)" == 600 ]] || fail "JSON string lookup ignored its object path"
+archive_belongs_to_deployment "$metadata" || fail "matching archive evidence was treated as foreign"
+legacy_metadata="$temp_dir/legacy-evidence.json"
+printf '%s\n' '{"schema":{"when":123}}' >"$legacy_metadata"
+if archive_belongs_to_deployment "$legacy_metadata"; then
+  fail "archive evidence without deployment identity was accepted"
+fi
+grep -Fq 'missing required compose_project and data_volume evidence fields' \
+  <<<"$ARCHIVE_IDENTITY_ERROR" || fail "legacy archive refusal was not actionable"
 expected_counts=$'seasons=1\nvenues=1\nacts=1\ncontacts=1\nassignments=1\noutbox_messages=1'
 [[ "$(counts_from_json "$metadata")" == "$expected_counts" ]] || fail "JSON count parsing depends on key order"
 
@@ -78,7 +90,6 @@ for image_and_expected in \
 done
 
 app_image="localhost:5000/porchfest:current"
-compose_project="smoke-123"
 [[ "$(rollback_image_ref)" == 'localhost:5000/porchfest:prev-smoke-123' ]] \
   || fail "rollback tag is not compose-project scoped"
 

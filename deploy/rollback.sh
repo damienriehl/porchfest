@@ -90,21 +90,32 @@ else
   reason="current image ships a newer Drizzle journal entry than the previous image"
 
   matching_metadata=""
+  foreign_metadata_seen=0
   while IFS= read -r candidate; do
+    if ! archive_belongs_to_deployment "$candidate"; then
+      printf 'REFUSED: foreign archive evidence %s: %s\n' "$candidate" "$ARCHIVE_IDENTITY_ERROR" >&2
+      foreign_metadata_seen=1
+      continue
+    fi
     if [[ "$(json_number "$candidate" schema.when)" == "$previous_when" ]]; then
       matching_metadata="$candidate"
       break
     fi
   done < <(
-    find "$archive_dir" -maxdepth 1 -type f -name 'porchfest-*.tar.gz.json' -printf '%T@\t%p\n' \
+    find "$archive_dir" -maxdepth 1 -type f -name '*.tar.gz.json' -printf '%T@\t%p\n' \
       | sort -nr \
       | cut -f 2-
   )
-  [[ -n "$matching_metadata" ]] || die "schema moved; image-only rollback refused and no archive matches previous schema $previous_when:$previous_tag"
+  if [[ -z "$matching_metadata" && "$foreign_metadata_seen" == 1 ]]; then
+    die "schema moved; image-only rollback refused and no archive for compose_project=$compose_project and data_volume=$data_volume matches previous schema $previous_when:$previous_tag; foreign archives were refused"
+  fi
+  [[ -n "$matching_metadata" ]] \
+    || die "schema moved; image-only rollback refused and no archive for compose_project=$compose_project and data_volume=$data_volume matches previous schema $previous_when:$previous_tag"
   archive="${matching_metadata%.json}"
   [[ -f "$archive" ]] || die "matching archive recorded by metadata is missing"
   archive_sha="$(verify_archive_sha "$archive")"
   archive_mode="$(stat -c '%a' "$archive")"
+  printf 'rollback_archive_selected=%s\n' "$archive"
 
   rehearsal_volume="${data_volume}-rollback-rehearsal-$$"
   rehearsal_project="${compose_project}-rollback-rehearsal-$$"
