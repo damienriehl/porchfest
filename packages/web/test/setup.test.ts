@@ -59,11 +59,19 @@ async function bootAndSignIn() {
   return { runtime, cookie };
 }
 
-async function setupCsrf(runtime: PorchfestRuntime, cookie: string) {
-  const page = await runtime.request(`${PUBLIC_BASE_URL}/admin/setup`, {
+async function csrfFor(
+  runtime: PorchfestRuntime,
+  cookie: string,
+  path = "/admin/setup",
+) {
+  const page = await runtime.request(`${PUBLIC_BASE_URL}${path}`, {
     headers: { cookie },
   });
   return (await page.text()).match(/name="_csrf" value="([^"]+)"/)?.[1] ?? "";
+}
+
+async function setupCsrf(runtime: PorchfestRuntime, cookie: string) {
+  return csrfFor(runtime, cookie);
 }
 
 function completeSetup(csrf: string, overrides: Record<string, string> = {}) {
@@ -104,6 +112,24 @@ function submitSetup(
     method: "POST",
     headers: {
       origin: PUBLIC_BASE_URL,
+      cookie,
+      "content-type": "application/x-www-form-urlencoded",
+    },
+    body,
+  });
+}
+
+function submitSeason(
+  runtime: PorchfestRuntime,
+  cookie: string,
+  path: string,
+  body: URLSearchParams,
+  origin = PUBLIC_BASE_URL,
+) {
+  return runtime.request(`${PUBLIC_BASE_URL}${path}`, {
+    method: "POST",
+    headers: {
+      origin,
       cookie,
       "content-type": "application/x-www-form-urlencoded",
     },
@@ -172,6 +198,191 @@ describe("first-run setup", () => {
     });
 
     expect(signup.status).toBe(201);
+  });
+
+  it("redirects setup to the seasons page after the first season exists", async () => {
+    const { runtime, cookie } = await bootAndSignIn();
+    const csrf = await setupCsrf(runtime, cookie);
+    await submitSetup(runtime, cookie, completeSetup(csrf));
+
+    const response = await runtime.request(`${PUBLIC_BASE_URL}/admin/setup`, {
+      headers: { cookie },
+    });
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe("/admin/seasons");
+  });
+
+  it("refuses a repeated stale first-run submission without adding a season", async () => {
+    const { runtime, cookie } = await bootAndSignIn();
+    const csrf = await setupCsrf(runtime, cookie);
+    const body = completeSetup(csrf);
+
+    const first = await submitSetup(runtime, cookie, body);
+    const stale = await submitSetup(runtime, cookie, completeSetup(csrf));
+
+    expect(first.status).toBe(303);
+    expect(stale.status).toBe(409);
+    expect(await stale.text()).toContain(
+      "first season has already been created",
+    );
+    expect(runtime.core.setup.seasonCount()).toBe(1);
+  });
+
+  it("allows only one of two first-run tabs to create a season", async () => {
+    const { runtime, cookie } = await bootAndSignIn();
+    const csrf = await setupCsrf(runtime, cookie);
+
+    const responses = await Promise.all([
+      submitSetup(runtime, cookie, completeSetup(csrf)),
+      submitSetup(
+        runtime,
+        cookie,
+        completeSetup(csrf, { display_name: "Other tab", year: "2028" }),
+      ),
+    ]);
+
+    expect(responses.map((response) => response.status).sort()).toEqual([
+      303, 409,
+    ]);
+    expect(runtime.core.setup.seasonCount()).toBe(1);
+  });
+
+  it("lists seasons and opens another through a distinct creation route", async () => {
+    const { runtime, cookie } = await bootAndSignIn();
+    const firstCsrf = await setupCsrf(runtime, cookie);
+    await submitSetup(runtime, cookie, completeSetup(firstCsrf));
+
+    const seasons = await runtime.request(`${PUBLIC_BASE_URL}/admin/seasons`, {
+      headers: { cookie },
+    });
+    const seasonsHtml = await seasons.text();
+    expect(seasons.status).toBe(200);
+    expect(seasonsHtml).toContain("SAP Porchfest 2027");
+    expect(seasonsHtml).toContain("Accepting signups (signups_open)");
+    expect(seasonsHtml).toContain('href="/admin/seasons/new"');
+    expect(seasonsHtml).toContain("Open another season");
+
+    const newSeason = await runtime.request(
+      `${PUBLIC_BASE_URL}/admin/seasons/new`,
+      { headers: { cookie } },
+    );
+    const newSeasonHtml = await newSeason.text();
+    expect(newSeason.status).toBe(200);
+    expect(newSeasonHtml).toContain("Open another season");
+    expect(newSeasonHtml).toContain('action="/admin/seasons/new"');
+    const csrf = newSeasonHtml.match(/name="_csrf" value="([^"]+)"/)?.[1] ?? "";
+
+    const created = await submitSeason(
+      runtime,
+      cookie,
+      "/admin/seasons/new",
+      completeSetup(csrf, {
+        display_name: "SAP Porchfest 2028",
+        year: "2028",
+        event_date: "2028-09-09",
+      }),
+    );
+
+    expect(created.status).toBe(303);
+    expect(runtime.core.setup.seasonCount()).toBe(2);
+    expect(runtime.core.seasons.getSeason(2).displayName).toBe(
+      "SAP Porchfest 2028",
+    );
+  });
+
+  it("requires confirmation before opening another season in an existing year", async () => {
+    const { runtime, cookie } = await bootAndSignIn();
+    const firstCsrf = await setupCsrf(runtime, cookie);
+    await submitSetup(runtime, cookie, completeSetup(firstCsrf));
+    const csrf = await csrfFor(runtime, cookie, "/admin/seasons/new");
+
+    const refused = await submitSeason(
+      runtime,
+      cookie,
+      "/admin/seasons/new",
+      completeSetup(csrf, { display_name: "Second 2027 season" }),
+    );
+    const refusedHtml = await refused.text();
+    expect(refused.status).toBe(422);
+    expect(refusedHtml).toContain("Confirm that you want another 2027 season");
+    expect(refusedHtml).toContain('name="confirm_duplicate_year"');
+    expect(runtime.core.setup.seasonCount()).toBe(1);
+
+    const confirmed = await submitSeason(
+      runtime,
+      cookie,
+      "/admin/seasons/new",
+      completeSetup(csrf, {
+        display_name: "Second 2027 season",
+        confirm_duplicate_year: "yes",
+      }),
+    );
+
+    expect(confirmed.status).toBe(303);
+    expect(runtime.core.setup.seasonCount()).toBe(2);
+  });
+
+  it("protects both season-creation mutations with sign-in, Origin, and CSRF", async () => {
+    const { runtime, cookie } = await bootAndSignIn();
+    const setupToken = await setupCsrf(runtime, cookie);
+
+    const signedOut = await submitSeason(
+      runtime,
+      "",
+      "/admin/setup",
+      completeSetup(setupToken),
+    );
+    expect(signedOut.status).toBe(401);
+
+    const wrongOrigin = await submitSeason(
+      runtime,
+      cookie,
+      "/admin/setup",
+      completeSetup(setupToken),
+      "https://unrelated.example",
+    );
+    expect(wrongOrigin.status).toBe(403);
+
+    const missingCsrf = await submitSeason(
+      runtime,
+      cookie,
+      "/admin/setup",
+      completeSetup(""),
+    );
+    expect(missingCsrf.status).toBe(403);
+    expect(runtime.core.setup.seasonCount()).toBe(0);
+
+    await submitSetup(runtime, cookie, completeSetup(setupToken));
+    const additionalToken = await csrfFor(
+      runtime,
+      cookie,
+      "/admin/seasons/new",
+    );
+    const additionalWrongOrigin = await submitSeason(
+      runtime,
+      cookie,
+      "/admin/seasons/new",
+      completeSetup(additionalToken, { year: "2028" }),
+      "https://unrelated.example",
+    );
+    const additionalMissingCsrf = await submitSeason(
+      runtime,
+      cookie,
+      "/admin/seasons/new",
+      completeSetup("", { year: "2028" }),
+    );
+    const additionalSignedOut = await submitSeason(
+      runtime,
+      "",
+      "/admin/seasons/new",
+      completeSetup(additionalToken, { year: "2028" }),
+    );
+
+    expect(additionalWrongOrigin.status).toBe(403);
+    expect(additionalMissingCsrf.status).toBe(403);
+    expect(additionalSignedOut.status).toBe(401);
+    expect(runtime.core.setup.seasonCount()).toBe(1);
   });
 
   it("stores every R34 field the organizer entered", async () => {

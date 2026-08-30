@@ -21,6 +21,8 @@ import type { RouteRegistry } from "../router/registry.js";
 import { renderQueuePage } from "../views/admin-records.js";
 import {
   renderAdminShell,
+  renderFirstRunConflictPage,
+  renderSeasonsPage,
   renderSetupPage,
   renderSignInPage,
   type SetupFieldError,
@@ -30,6 +32,8 @@ export const ADMIN_PATH = "/admin";
 export const ADMIN_SIGN_IN_PATH = "/admin/sign-in";
 export const ADMIN_SIGN_OUT_PATH = "/admin/sign-out";
 export const ADMIN_SETUP_PATH = "/admin/setup";
+export const ADMIN_SEASONS_PATH = "/admin/seasons";
+export const ADMIN_NEW_SEASON_PATH = "/admin/seasons/new";
 
 export interface AdminRouteOptions {
   readonly core: CoreRuntime;
@@ -188,15 +192,20 @@ export function registerAdminRoutes(options: AdminRouteOptions): void {
     method: "GET",
     path: ADMIN_SETUP_PATH,
     tier: "organizer",
-    handler: () =>
-      new Response(
+    handler: () => {
+      if (!options.core.setup.needsFirstRun()) {
+        return redirect(ADMIN_SEASONS_PATH);
+      }
+      return new Response(
         renderSetupPage({
           csrfToken: options.csrfTokenFor(ADMIN_SETUP_PATH),
           values: { open_signups: "yes" },
           errors: [],
+          mode: "first",
         }),
         { status: 200, headers: adminHeaders() },
-      ),
+      );
+    },
   });
 
   options.routes.register({
@@ -214,27 +223,9 @@ export function registerAdminRoutes(options: AdminRouteOptions): void {
       }
 
       try {
-        const { season } = options.core.setup.createSeason({
-          year: Number(fields.year ?? ""),
-          displayName: fields.display_name ?? "",
-          timezone: fields.timezone ?? "",
-          eventDate: fields.event_date ?? "",
-          eventCity: fields.event_city ?? "",
-          eventState: fields.event_state ?? "",
-          signupOpensOn: fields.signup_opens_on ?? null,
-          signupClosesOn: fields.signup_closes_on ?? null,
-          timeSlots: [1, 2, 3, 4, 5, 6].map((index) => ({
-            startsAt: fields[`slot_start_${index}`] ?? "",
-            endsAt: fields[`slot_end_${index}`] ?? "",
-          })),
-          localityName: fields.locality_name ?? null,
-          bounds: boundsFrom(fields),
-          publicSiteUrl: fields.public_site_url ?? null,
-          publicMapUrl: fields.public_map_url ?? null,
-          senderName: fields.sender_name ?? null,
-          senderEmail: fields.sender_email ?? null,
-          openSignups: fields.open_signups === "yes",
-        });
+        const { season } = options.core.setup.createFirstSeason(
+          setupInputFrom(fields),
+        );
         return new Response(null, {
           status: 303,
           headers: {
@@ -244,12 +235,90 @@ export function registerAdminRoutes(options: AdminRouteOptions): void {
           },
         });
       } catch (error) {
+        if (error instanceof SeasonSetupError && error.field === "firstRun") {
+          return new Response(renderFirstRunConflictPage(), {
+            status: 409,
+            headers: adminHeaders(),
+          });
+        }
         if (error instanceof SeasonSetupError) {
           return setupRefusal(options, fields, [
             { field: formFieldFor(error.field), message: error.message },
           ]);
         }
         return setupRefusal(options, fields, [
+          {
+            field: "display_name",
+            message:
+              "That season could not be created. Your answers are still here.",
+          },
+        ]);
+      }
+    },
+  });
+
+  options.routes.register({
+    method: "GET",
+    path: ADMIN_SEASONS_PATH,
+    tier: "organizer",
+    handler: () => {
+      const seasons = options.core.setup.listSeasons();
+      if (seasons.length === 0) return redirect(ADMIN_SETUP_PATH);
+      return new Response(renderSeasonsPage({ seasons }), {
+        status: 200,
+        headers: adminHeaders(),
+      });
+    },
+  });
+
+  options.routes.register({
+    method: "GET",
+    path: ADMIN_NEW_SEASON_PATH,
+    tier: "organizer",
+    handler: () => {
+      if (options.core.setup.needsFirstRun()) return redirect(ADMIN_SETUP_PATH);
+      return new Response(
+        renderSetupPage({
+          csrfToken: options.csrfTokenFor(ADMIN_NEW_SEASON_PATH),
+          values: { open_signups: "yes" },
+          errors: [],
+          mode: "additional",
+        }),
+        { status: 200, headers: adminHeaders() },
+      );
+    },
+  });
+
+  options.routes.register({
+    method: "POST",
+    path: ADMIN_NEW_SEASON_PATH,
+    tier: "organizer",
+    handler: async (context: Context) => {
+      let fields: Readonly<Record<string, string>>;
+      try {
+        fields = await readFields(context);
+      } catch {
+        return additionalSeasonRefusal(options, {}, [
+          { field: "display_name", message: "That form could not be read." },
+        ]);
+      }
+
+      try {
+        const { season } = options.core.setup.createAdditionalSeason(
+          setupInputFrom(fields),
+          fields.confirm_duplicate_year === "yes",
+        );
+        return redirect(`${ADMIN_PATH}?season=${season.id}`);
+      } catch (error) {
+        if (error instanceof SeasonSetupError) {
+          if (error.field === "additionalSeason") {
+            return redirect(ADMIN_SETUP_PATH);
+          }
+          return additionalSeasonRefusal(options, fields, [
+            { field: formFieldFor(error.field), message: error.message },
+          ]);
+        }
+        return additionalSeasonRefusal(options, fields, [
           {
             field: "display_name",
             message:
@@ -332,6 +401,30 @@ function boundsFrom(fields: Readonly<Record<string, string>>) {
   };
 }
 
+function setupInputFrom(fields: Readonly<Record<string, string>>) {
+  return {
+    year: Number(fields.year ?? ""),
+    displayName: fields.display_name ?? "",
+    timezone: fields.timezone ?? "",
+    eventDate: fields.event_date ?? "",
+    eventCity: fields.event_city ?? "",
+    eventState: fields.event_state ?? "",
+    signupOpensOn: fields.signup_opens_on ?? null,
+    signupClosesOn: fields.signup_closes_on ?? null,
+    timeSlots: [1, 2, 3, 4, 5, 6].map((index) => ({
+      startsAt: fields[`slot_start_${index}`] ?? "",
+      endsAt: fields[`slot_end_${index}`] ?? "",
+    })),
+    localityName: fields.locality_name ?? null,
+    bounds: boundsFrom(fields),
+    publicSiteUrl: fields.public_site_url ?? null,
+    publicMapUrl: fields.public_map_url ?? null,
+    senderName: fields.sender_name ?? null,
+    senderEmail: fields.sender_email ?? null,
+    openSignups: fields.open_signups === "yes",
+  };
+}
+
 /** Map a domain field name onto the form control that carries it, so the error
  *  summary's anchor lands on something that exists. */
 function formFieldFor(field: string): string {
@@ -349,12 +442,24 @@ function formFieldFor(field: string): string {
     publicMapUrl: "public_map_url",
     senderName: "sender_name",
     senderEmail: "sender_email",
+    confirmDuplicateYear: "confirm_duplicate_year",
     "bounds.north": "bounds_north",
     "bounds.south": "bounds_south",
     "bounds.east": "bounds_east",
     "bounds.west": "bounds_west",
   };
   return map[field] ?? field;
+}
+
+function redirect(location: string): Response {
+  return new Response(null, {
+    status: 303,
+    headers: {
+      ...adminHeaders(),
+      "content-type": "text/plain; charset=UTF-8",
+      location,
+    },
+  });
 }
 
 function setupRefusal(
@@ -367,6 +472,23 @@ function setupRefusal(
       csrfToken: options.csrfTokenFor(ADMIN_SETUP_PATH),
       values,
       errors,
+      mode: "first",
+    }),
+    { status: 422, headers: adminHeaders() },
+  );
+}
+
+function additionalSeasonRefusal(
+  options: AdminRouteOptions,
+  values: Readonly<Record<string, string>>,
+  errors: readonly SetupFieldError[],
+): Response {
+  return new Response(
+    renderSetupPage({
+      csrfToken: options.csrfTokenFor(ADMIN_NEW_SEASON_PATH),
+      values,
+      errors,
+      mode: "additional",
     }),
     { status: 422, headers: adminHeaders() },
   );

@@ -10,6 +10,7 @@ import {
   type SeasonAction,
   type SeasonState,
 } from "../src/season.js";
+import { createSeasonSetup } from "../src/setup.js";
 import { seasonStates } from "../src/storage/schema.js";
 import { rankPairings } from "../src/matching.js";
 import { openTestDatabase, type TestDatabase } from "./support/db.js";
@@ -126,6 +127,46 @@ describe("season domain", () => {
       )
       .run(seasonId, position, startsAt, startsAt + 3600);
   }
+
+  function seasonSetupInput(year = 2105) {
+    return {
+      year,
+      displayName: `Synthetic Porchfest ${year}`,
+      timezone: "America/Chicago",
+      eventDate: `${year}-09-11`,
+      eventCity: "Exampleton",
+      eventState: "WI",
+      timeSlots: [{ startsAt: "14:00", endsAt: "15:00" }],
+      openSignups: false,
+    } as const;
+  }
+
+  it("atomically refuses a second first-season creation", () => {
+    const setup = createSeasonSetup(database.db, () => pinnedNow);
+
+    const first = setup.createFirstSeason(seasonSetupInput());
+
+    expect(first.season.id).toBe(1);
+    expect(() => setup.createFirstSeason(seasonSetupInput(2106))).toThrow(
+      "first season has already been created",
+    );
+    expect(setup.seasonCount()).toBe(1);
+    expect(setup.listTimeSlots(first.season.id)).toHaveLength(1);
+  });
+
+  it("requires an explicit confirmation before opening another season in the same year", () => {
+    const setup = createSeasonSetup(database.db, () => pinnedNow);
+    setup.createFirstSeason(seasonSetupInput());
+
+    expect(() =>
+      setup.createAdditionalSeason(seasonSetupInput(), false),
+    ).toThrow("Confirm that you want another 2105 season");
+    expect(setup.seasonCount()).toBe(1);
+
+    const second = setup.createAdditionalSeason(seasonSetupInput(), true);
+    expect(second.season.id).toBe(2);
+    expect(setup.seasonCount()).toBe(2);
+  });
 
   it("materializes every season time slot for a venue idempotently", () => {
     const season = insertSeason(2105, "locked");

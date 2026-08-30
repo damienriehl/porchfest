@@ -12,7 +12,10 @@ import {
   parseWallClock,
   zonedWallClockToUtc,
 } from "./time.js";
-import type { CoreExecutor } from "./storage/repository-errors.js";
+import type {
+  CoreDatabase,
+  CoreExecutor,
+} from "./storage/repository-errors.js";
 
 export class SeasonSetupError extends Error {
   override readonly name = "SeasonSetupError";
@@ -66,15 +69,19 @@ const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_PATTERN = /^\d{2}:\d{2}$/;
 
 export function createSeasonSetup(
-  db: CoreExecutor,
+  db: CoreDatabase,
   now: () => Date = () => new Date(),
 ) {
-  function seasonCount(): number {
-    const row = db
+  function seasonCountIn(executor: CoreExecutor): number {
+    const row = executor
       .select({ total: sql<number>`count(*)` })
       .from(seasons)
       .get();
     return row?.total ?? 0;
+  }
+
+  function seasonCount(): number {
+    return seasonCountIn(db);
   }
 
   /** True when this deployment has never opened a season — the first-run state. */
@@ -82,12 +89,15 @@ export function createSeasonSetup(
     return seasonCount() === 0;
   }
 
-  function createSeason(input: SeasonSetupInput): SeasonSetupResult {
-    const validated = validate(input);
+  function insertSeason(
+    executor: CoreExecutor,
+    validated: ValidatedSetup,
+    openSignups: boolean,
+  ): SeasonSetupResult {
     const stamp = now();
     const mutable = { version: 1, createdAt: stamp, updatedAt: stamp };
 
-    const season = db
+    const season = executor
       .insert(seasons)
       .values({
         year: validated.year,
@@ -95,7 +105,7 @@ export function createSeasonSetup(
         // R34 explicitly includes the signup state: an organizer finishing setup
         // expects a season that can accept a signup, not one they must then find
         // a second screen to open.
-        state: input.openSignups ? "signups_open" : "setup",
+        state: openSignups ? "signups_open" : "setup",
         timezone: validated.timezone,
         eventDate: validated.eventDate,
         eventCity: validated.eventCity,
@@ -118,7 +128,8 @@ export function createSeasonSetup(
       .get();
 
     if (validated.timeSlots.length > 0) {
-      db.insert(seasonTimeSlots)
+      executor
+        .insert(seasonTimeSlots)
         .values(
           validated.timeSlots.map((slot, index) => ({
             seasonId: season.id,
@@ -132,6 +143,64 @@ export function createSeasonSetup(
     }
 
     return { season, timeSlotCount: validated.timeSlots.length };
+  }
+
+  /** General creation remains available to imports and trusted domain callers.
+   * Organizer routes use the intention-revealing first/additional commands. */
+  function createSeason(input: SeasonSetupInput): SeasonSetupResult {
+    const validated = validate(input);
+    return insertSeason(db, validated, input.openSignups);
+  }
+
+  /** Create the deployment's first season only when the database is still empty.
+   * The emptiness check and insert share one immediate transaction so two open
+   * setup tabs cannot both pass a route-level preflight and create rows. */
+  function createFirstSeason(input: SeasonSetupInput): SeasonSetupResult {
+    const validated = validate(input);
+    return db.transaction(
+      (tx) => {
+        if (seasonCountIn(tx) !== 0) {
+          throw new SeasonSetupError(
+            "firstRun",
+            "The first season has already been created. Review the seasons already open before adding another.",
+          );
+        }
+        return insertSeason(tx, validated, input.openSignups);
+      },
+      { behavior: "immediate" },
+    );
+  }
+
+  /** Open a new season without implying that it edits an existing one. A second
+   * row for the same year is legal, but only after an explicit confirmation. */
+  function createAdditionalSeason(
+    input: SeasonSetupInput,
+    confirmDuplicateYear: boolean,
+  ): SeasonSetupResult {
+    const validated = validate(input);
+    return db.transaction(
+      (tx) => {
+        if (seasonCountIn(tx) === 0) {
+          throw new SeasonSetupError(
+            "additionalSeason",
+            "Open the first season before opening another one.",
+          );
+        }
+        const sameYear = tx
+          .select({ id: seasons.id })
+          .from(seasons)
+          .where(eq(seasons.year, validated.year))
+          .get();
+        if (sameYear && !confirmDuplicateYear) {
+          throw new SeasonSetupError(
+            "confirmDuplicateYear",
+            `Confirm that you want another ${validated.year} season. This creates a separate season; it does not edit the existing one.`,
+          );
+        }
+        return insertSeason(tx, validated, input.openSignups);
+      },
+      { behavior: "immediate" },
+    );
   }
 
   /** Seasons newest first. The admin uses this to pick a default landing season
@@ -157,6 +226,8 @@ export function createSeasonSetup(
     needsFirstRun,
     seasonCount,
     createSeason,
+    createFirstSeason,
+    createAdditionalSeason,
     listSeasons,
     listTimeSlots,
   });

@@ -1,4 +1,4 @@
-import type { Organizer } from "@porchfest/core";
+import type { Organizer, Season } from "@porchfest/core";
 import { escapeHtml } from "./signup-view.js";
 import { ADMIN_SIGN_IN_PATH, ADMIN_SIGN_OUT_PATH } from "../routes/admin.js";
 
@@ -124,7 +124,10 @@ export function renderSetupPage(options: {
   readonly csrfToken: string;
   readonly values: Readonly<Record<string, string>>;
   readonly errors: readonly SetupFieldError[];
+  readonly mode?: "first" | "additional";
 }): string {
+  const mode = options.mode ?? "first";
+  const action = mode === "first" ? "/admin/setup" : "/admin/seasons/new";
   const value = (name: string) => escapeHtml(options.values[name] ?? "");
   const errorFor = (name: string) =>
     options.errors.find((error) => error.field === name);
@@ -161,14 +164,14 @@ export function renderSetupPage(options: {
     </section>`;
 
   return page(
-    "First-run setup",
+    mode === "first" ? "First-run setup" : "Open another season",
     `    <header class="signup-header">
       <p class="eyebrow">Organizers</p>
-      <h1>Open your first season</h1>
-      <p class="lede">Everything a season needs to accept a signup, in one pass. You can change any of it later.</p>
+      <h1>${mode === "first" ? "Open your first season" : "Open another season"}</h1>
+      <p class="lede">${mode === "first" ? "Everything a season needs to accept a signup, in one pass. You can change any of it later." : "Create a separate season with its own dates, signups, and records. This does not edit an existing season."}</p>
     </header>
     ${summary}
-    <form class="signup-form" id="signup-form" method="post" action="/admin/setup">
+    <form class="signup-form" id="signup-form" method="post" action="${action}">
       <input type="hidden" name="_csrf" value="${escapeHtml(options.csrfToken)}">
       <fieldset>
         <legend>The event</legend>
@@ -219,7 +222,66 @@ export function renderSetupPage(options: {
         ${field("sender_name", "Sender name", "The name organizer email comes from.")}
         ${field("sender_email", "Sender address", "The address organizer email comes from.", 'type="email"')}
       </fieldset>
-      <button class="primary-action" type="submit">Open the season</button>
+      ${
+        mode === "additional"
+          ? `<fieldset>
+        <legend>Creation confirmation</legend>
+        <label class="choice" for="confirm_duplicate_year"><input id="confirm_duplicate_year" type="checkbox" name="confirm_duplicate_year" value="yes"${options.values.confirm_duplicate_year === "yes" ? " checked" : ""}><span>If another season already uses this year, create a separate season anyway</span></label>
+        <p class="help">Leave this clear for a new year. A matching year is refused until you confirm it here.</p>
+      </fieldset>`
+          : ""
+      }
+      <button class="primary-action" type="submit">${mode === "first" ? "Open the first season" : "Open another season"}</button>
     </form>`,
   );
+}
+
+export function renderSeasonsPage(options: {
+  readonly seasons: readonly Season[];
+}): string {
+  const rows = options.seasons
+    .map(
+      (season) => `<li>
+        <a href="/admin/seasons/${season.id}">${escapeHtml(season.displayName)}</a>
+        <span class="help">${season.year} · ${seasonStateLabel(season.state)}</span>
+      </li>`,
+    )
+    .join("");
+  return page(
+    "Seasons",
+    `    <header class="signup-header">
+      <p class="eyebrow">Organizers</p>
+      <h1>Seasons</h1>
+      <p class="lede">Review an existing season or intentionally create a separate one.</p>
+      <p><a class="primary-action" href="/admin/seasons/new">Open another season</a></p>
+    </header>
+    <section class="signup-form" aria-labelledby="season-list-title">
+      <h2 id="season-list-title">Existing seasons</h2>
+      <ul>${rows}</ul>
+    </section>`,
+  );
+}
+
+export function renderFirstRunConflictPage(): string {
+  return page(
+    "First season already created",
+    `    <header class="signup-header">
+      <p class="eyebrow">Organizers</p>
+      <h1>The first season has already been created</h1>
+      <p class="lede">Another setup tab finished first. Nothing from this stale form was added.</p>
+      <p><a class="primary-action" href="/admin/seasons">Review seasons</a></p>
+    </header>`,
+  );
+}
+
+function seasonStateLabel(state: Season["state"]): string {
+  const labels: Readonly<Record<Season["state"], string>> = {
+    setup: "Preparing the season",
+    signups_open: "Accepting signups",
+    signups_closed: "Signups closed",
+    assigning: "Building the schedule",
+    locked: "Schedule confirmed",
+    archived: "Season closed and archived",
+  };
+  return `${labels[state]} (${escapeHtml(state)})`;
 }
