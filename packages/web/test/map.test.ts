@@ -12,6 +12,7 @@ import {
   type PorchfestRuntime,
   type PorchfestTestingRuntime,
 } from "../src/composition.js";
+import { normalizeRfc3339Offset } from "../src/routes/map.js";
 
 const PUBLIC_BASE_URL = "https://porchfest.example";
 const CURRENT_YEAR = new Date().getUTCFullYear();
@@ -224,6 +225,24 @@ async function mapDocument(runtime: PorchfestRuntime) {
   const text = await response.text();
   return { response, text, document: JSON.parse(text) as VenuesMapDocument };
 }
+
+describe("RFC 3339 offset normalization", () => {
+  it.each([
+    ["GMT", "Z"],
+    ["GMT+00:00", "Z"],
+    ["GMT-00:00", "Z"],
+    ["GMT+0", "Z"],
+    ["GMT+00", "Z"],
+    ["GMT+5", "+05:00"],
+    ["GMT-5:30", "-05:30"],
+  ])("normalizes %s to %s", (timeZoneName, expected) => {
+    expect(normalizeRfc3339Offset(timeZoneName)).toBe(expected);
+  });
+
+  it("rejects an unrecognized ICU offset", () => {
+    expect(normalizeRfc3339Offset("UTC")).toBeNull();
+  });
+});
 
 describe("public map page and data (U9)", () => {
   it("R16 serves a working honest map page for an unconfigured deployment", async () => {

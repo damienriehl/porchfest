@@ -339,14 +339,25 @@ function publishedAct(
   };
 }
 
+export function normalizeRfc3339Offset(timeZoneName: string): string | null {
+  if (timeZoneName === "GMT") return "Z";
+
+  const match = /^GMT([+-])(\d{1,2})(?::(\d{2}))?$/.exec(timeZoneName);
+  if (match === null) return null;
+
+  const [, sign, hour, minute = "00"] = match;
+  if (sign === undefined || hour === undefined) return null;
+
+  const offset = `${sign}${hour.padStart(2, "0")}:${minute}`;
+  return offset === "+00:00" || offset === "-00:00" ? "Z" : offset;
+}
+
 function rfc3339Time(value: Date, formatter: Intl.DateTimeFormat): string {
   const parts = formatter.formatToParts(value);
   const part = (type: Intl.DateTimeFormatPartTypes): string =>
     parts.find((candidate) => candidate.type === type)?.value ?? "";
-  const timeZoneName = part("timeZoneName");
-  const offset =
-    timeZoneName === "GMT" ? "Z" : timeZoneName.replace(/^GMT/, "");
-  if (!/^(?:Z|[+-]\d{2}:\d{2})$/.test(offset)) {
+  const offset = normalizeRfc3339Offset(part("timeZoneName"));
+  if (offset === null) {
     throw new Error(
       `cannot format RFC 3339 offset for ${formatter.resolvedOptions().timeZone}`,
     );
