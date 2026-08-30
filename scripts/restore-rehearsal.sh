@@ -27,7 +27,8 @@ prev_image="$(image_tag_ref "$PORCHFEST_APP_IMAGE" "prev-${PORCHFEST_COMPOSE_PRO
 fake_dir=""
 
 cleanup() {
-  docker compose -p "$restore_project" -f "$project_dir/compose.yaml" rm -sf app >/dev/null 2>&1 || true
+  docker compose -p "$restore_project" -f "$project_dir/compose.yaml" \
+    down --remove-orphans >/dev/null 2>&1 || true
   docker volume rm "$restore_volume" >/dev/null 2>&1 || true
   docker image rm "$prev_image" >/dev/null 2>&1 || true
   if [[ -n "$fake_dir" ]]; then
@@ -95,6 +96,10 @@ archive="$(newest_archive)"
 PORCHFEST_RESTORE_VOLUME="$restore_volume" \
   PORCHFEST_RESTORE_PROJECT="$restore_project" \
   "$project_dir/deploy/restore.sh" "$archive" | grep '^restore_result=PASS$' >/dev/null
+if docker network inspect "${restore_project}_default" >/dev/null 2>&1; then
+  printf 'ERROR: restore rehearsal leaked its default network\n' >&2
+  exit 1
+fi
 
 PORCHFEST_PROXY_NETWORK=porchfest-proxy-test \
   PORCHFEST_DOMAIN=porchfest.example \

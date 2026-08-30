@@ -26,9 +26,8 @@ restore_project="${PORCHFEST_RESTORE_PROJECT:-${compose_project}-restore-$$}"
 temp_dir="$(mktemp -d)"
 archive="$source_archive"
 cleanup_restore() {
-  PORCHFEST_COMPOSE_PROJECT="$restore_project" \
-    PORCHFEST_DATA_VOLUME="$restore_volume" \
-    docker compose -p "$restore_project" -f "$project_dir/compose.yaml" rm -sf app >/dev/null 2>&1 || true
+  docker compose -p "$restore_project" -f "$project_dir/compose.yaml" \
+    down --remove-orphans >/dev/null 2>&1 || true
   rm -rf -- "$temp_dir"
 }
 trap cleanup_restore EXIT
