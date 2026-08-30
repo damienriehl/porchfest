@@ -57,7 +57,6 @@ docker exec "$app_container" node -e '
 
 export PORCHFEST_UTILITY_IMAGE="${PORCHFEST_UTILITY_IMAGE:-alpine:3.22}"
 export PORCHFEST_ARCHIVE_KEEP=2
-export PORCHFEST_HEALTH_ATTEMPTS=45
 
 fake_dir="$(mktemp -d)"
 dotenv_probe="$fake_dir/dotenv-probe"

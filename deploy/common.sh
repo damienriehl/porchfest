@@ -5,6 +5,7 @@
 
 deploy_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 project_dir="$(cd -- "$deploy_dir/.." && pwd -P)"
+readonly CONTAINER_HEALTH_TIMEOUT_SECONDS=150
 readonly COUNT_TABLES="seasons venues acts contacts assignments outbox_messages"
 
 die() {
@@ -41,7 +42,7 @@ load_dotenv_if_present() {
         PORCHFEST_BACKUP_AGE_RECIPIENT | PORCHFEST_BACKUP_KEEP | PORCHFEST_BACKUP_REMOTE | \
         PORCHFEST_COMPOSE_PROJECT | PORCHFEST_DATA_VOLUME | PORCHFEST_DEPLOY_DIR | \
         PORCHFEST_DEPLOY_HOST | PORCHFEST_DEPLOY_OFFSITE | PORCHFEST_DEPLOY_PROBE_ORGANIZER | \
-        PORCHFEST_EXTERNAL_CONNECT_TIMEOUT | PORCHFEST_EXTERNAL_MAX_TIME | PORCHFEST_HEALTH_ATTEMPTS | \
+        PORCHFEST_EXTERNAL_CONNECT_TIMEOUT | PORCHFEST_EXTERNAL_MAX_TIME | \
         PORCHFEST_RESTORE_IDENTITY | PORCHFEST_RESTORE_PROJECT | PORCHFEST_RESTORE_VOLUME | \
         PORCHFEST_UTILITY_IMAGE)
         ;;
@@ -115,10 +116,12 @@ assert_pinned_volume() {
 
 wait_for_container_health() {
   local container="$1"
-  local attempts="${2:-90}"
+  local timeout_seconds="${2:-$CONTAINER_HEALTH_TIMEOUT_SECONDS}"
   local status=""
   local _
-  for _ in $(seq 1 "$attempts"); do
+  [[ "$timeout_seconds" =~ ^[0-9]+$ && "$timeout_seconds" -ge "$CONTAINER_HEALTH_TIMEOUT_SECONDS" ]] \
+    || die "container health timeout must be at least $CONTAINER_HEALTH_TIMEOUT_SECONDS seconds"
+  for _ in $(seq 1 "$timeout_seconds"); do
     status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container" 2>/dev/null || true)"
     case "$status" in
       healthy) return 0 ;;
@@ -130,7 +133,9 @@ wait_for_container_health() {
 }
 
 wait_for_app_health() {
-  wait_for_container_health "$(app_container_id)" "${PORCHFEST_HEALTH_ATTEMPTS:-90}"
+  # 20s start period + three 30s probe intervals = 110s. The 150s budget adds
+  # 40s of scheduler/startup margin and cannot under-run two full probes.
+  wait_for_container_health "$(app_container_id)" "$CONTAINER_HEALTH_TIMEOUT_SECONDS"
 }
 
 image_tag_ref() {
