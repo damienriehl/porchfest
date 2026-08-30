@@ -3,7 +3,8 @@ artifact_contract: "ce-handoff/v1"
 created_at: "2026-08-30T00:55:00Z"
 title: "U9 is complete on main; U10 (2026 season import) is next; the organizer UAT is Damien's"
 summary: "PR #36 (U9D-b) squash-merged 2026-08-30 as b8f3b31 at 792 tests: public /map and /map/data.json, explicit map publication in locked with a preflight, coordinate-review screen with bounded season geocoding, OpenStreetMap geocoder behind GEO_* env, venues-map schema 1.3.1. Next agent: build U10 per the plan. Human: run docs/operations/organizer-uat.md; delete merged remote branches."
-keywords: ["porchfest", "u9", "u10", "import", "map", "schema-1.3.1", "uat", "node-24"]
+keywords:
+  ["porchfest", "u9", "u10", "import", "map", "schema-1.3.1", "uat", "node-24"]
 resume_focus: "Build U10 (2026 season import), then U11 deploy; schedule the cross-repo schema 1.3.1 catch-up before U12"
 repository: "porchfest"
 branch: "main"
