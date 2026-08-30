@@ -18,6 +18,7 @@ import type { SeasonSetupRepository } from "../setup.js";
 import { endOfDateInTimeZone, parseWallClock } from "../time.js";
 import type {
   Act,
+  Assignment,
   Contact,
   CoordinatePrecision,
   CoordinateRejectionCode,
@@ -182,8 +183,9 @@ interface ImportState {
   readonly matchedVenueIds: Map<string, number>;
   readonly importKeys: Map<string, ImportKey>;
   readonly reportedAnnotationKeys: Set<string>;
-  readonly canonicalActs: Map<number, Act>;
+  readonly canonicalActIds: Map<number, number>;
   readonly venueSlots: Map<number, readonly Slot[]>;
+  readonly assignmentsById: Map<number, Assignment>;
 }
 
 interface MutableImportReport {
@@ -296,8 +298,9 @@ function importGoal1SeasonInTransaction(
         .map((key) => [importKeyCacheKey(key.source, key.naturalKey), key]),
     ),
     reportedAnnotationKeys: new Set(),
-    canonicalActs: new Map(),
+    canonicalActIds: new Map(),
     venueSlots: new Map(),
+    assignmentsById: new Map(),
   };
 
   importHosts(state, artifacts.matches);
@@ -312,9 +315,9 @@ function importGoal1SeasonInTransaction(
   annotateUnmatchedAndFloating(state, artifacts.matches);
   importCoordinates(state, artifacts.geocache);
   const approvedActs = new Set(
-    core.seasons
-      .listAssignments(season.id)
-      .map((assignment) => canonicalAct(state, assignment.actId).id),
+    [...state.assignmentsById.values()].map(
+      (assignment) => canonicalAct(state, assignment.actId).id,
+    ),
   );
   report.summary = {
     slateVenues: new Set(state.matchedVenueIds.values()).size,
@@ -618,7 +621,12 @@ function importVirtualActs(state: ImportState, matches: JsonObject): void {
   const matchVenues = array(matches.venues).map((value) =>
     object(value, "venue entry"),
   );
-  for (const [virtualKey, rawVirtual] of entries(matches.virtual_performers)) {
+  const virtualPerformers = entries(matches.virtual_performers);
+  const foundHostReach = indexFoundVirtualHostReach(
+    virtualPerformers.map(([virtualKey]) => virtualKey),
+    matchVenues,
+  );
+  for (const [virtualKey, rawVirtual] of virtualPerformers) {
     const virtual = object(rawVirtual, `virtual performer ${virtualKey}`);
     const found = findImportKey(state, SOURCE.virtualAct, virtualKey);
     if (found !== null) {
@@ -629,9 +637,8 @@ function importVirtualActs(state: ImportState, matches: JsonObject): void {
         virtualPerformerKey: virtualKey,
         actId: act.id,
         reachVia: classifyFoundVirtualReach(
-          virtualKey,
           optionalString(virtual.reach_via),
-          matchVenues,
+          foundHostReach.get(virtualKey),
         ),
         status: "found",
       });
@@ -811,13 +818,18 @@ function applySupersessionGroup(
       );
       continue;
     }
-    const alreadySuperseded =
-      recordType === "venue"
-        ? state.core.seasons.resolveVenue(source.id).canonical.id ===
-          canonical.id
-        : source.canonicalActId === null
-          ? false
-          : canonicalAct(state, source.id).id === canonical.id;
+    let alreadySuperseded: boolean;
+    if (recordType === "venue") {
+      const sourceVenue = state.hostVenues.get(sourceKey)!;
+      alreadySuperseded =
+        state.core.seasons.resolveVenue(sourceVenue.id).canonical.id ===
+        canonical.id;
+    } else {
+      const sourceAct = state.performerActs.get(sourceKey)!;
+      alreadySuperseded =
+        sourceAct.canonicalActId !== null &&
+        canonicalAct(state, sourceAct.id).id === canonical.id;
+    }
     if (!alreadySuperseded) {
       if (recordType === "venue") {
         const supersededVenue = state.core.seasons.supersedeVenue(
@@ -958,6 +970,8 @@ function importVenueSlate(state: ImportState, matches: JsonObject): void {
     state.matchedVenueIds.set(entryId, venue.id);
     annotateVenueEntry(state, venue, entryId, venueEntry);
   }
+
+  refreshAssignments(state);
 
   for (const rawVenue of array(matches.venues)) {
     const venueEntry = object(rawVenue, "venue entry");
@@ -1124,6 +1138,7 @@ function importVenueSlate(state: ImportState, matches: JsonObject): void {
         recordType: "assignment",
         recordId: assignment.id,
       });
+      state.assignmentsById.set(assignment.id, assignment);
       increment(state.report, "assignment", "created");
     }
 
@@ -1159,9 +1174,9 @@ function importVenueSlate(state: ImportState, matches: JsonObject): void {
       );
       const sourceSlot = slots[sourceIndex];
       const sourceAssignment = sourceSlot
-        ? state.core.seasons
-            .listAssignments(state.season.id)
-            .find((assignment) => assignment.slotId === sourceSlot.id)
+        ? [...state.assignmentsById.values()].find(
+            (assignment) => assignment.slotId === sourceSlot.id,
+          )
         : undefined;
       if (!sourceSlot || !sourceAssignment) {
         state.report.warnings.push(
@@ -1182,6 +1197,7 @@ function importVenueSlate(state: ImportState, matches: JsonObject): void {
         recordType: "assignment",
         recordId: assignment.id,
       });
+      state.assignmentsById.set(assignment.id, assignment);
       increment(state.report, "assignment", "created");
     }
   }
@@ -1202,9 +1218,10 @@ function applySlotCancellations(state: ImportState, matches: JsonObject): void {
     }
   >();
   const assignmentsBySlot = new Map(
-    state.core.seasons
-      .listAssignments(state.season.id)
-      .map((assignment) => [assignment.slotId, assignment]),
+    [...state.assignmentsById.values()].map((assignment) => [
+      assignment.slotId,
+      assignment,
+    ]),
   );
 
   for (const rawVenue of array(matches.venues)) {
@@ -1300,6 +1317,7 @@ function applySlotCancellations(state: ImportState, matches: JsonObject): void {
             candidate.continuationOfAssignmentId === assignmentToUnassign.id
           ) {
             assignmentsBySlot.delete(assignedSlotId);
+            state.assignmentsById.delete(candidate.id);
           }
         }
       }
@@ -1324,11 +1342,9 @@ function applySlotCancellations(state: ImportState, matches: JsonObject): void {
       );
     }
     const act = state.core.seasons.getAct(importedAct.id);
-    const hasRemainingAssignment = state.core.seasons
-      .listAssignments(state.season.id)
-      .some(
-        (assignment) => canonicalAct(state, assignment.actId).id === act.id,
-      );
+    const hasRemainingAssignment = [...state.assignmentsById.values()].some(
+      (assignment) => canonicalAct(state, assignment.actId).id === act.id,
+    );
     if (!hasRemainingAssignment && act.status !== "withdrawn") {
       state.core.seasons.setRecordStatus(
         "act",
@@ -1345,21 +1361,26 @@ function liveAssignmentImportKey(
   key: ImportKey | null,
 ): ImportKey | null {
   if (key === null) return null;
-  return state.core.seasons
-    .listAssignments(state.season.id)
-    .some((assignment) => assignment.id === key.recordId)
-    ? key
-    : null;
+  return state.assignmentsById.has(key.recordId) ? key : null;
+}
+
+function refreshAssignments(state: ImportState): void {
+  state.assignmentsById.clear();
+  for (const assignment of state.core.seasons.listAssignments(
+    state.season.id,
+  )) {
+    state.assignmentsById.set(assignment.id, assignment);
+  }
 }
 
 function canonicalAct(state: ImportState, actId: number): Act {
-  const cached = state.canonicalActs.get(actId);
-  if (cached) return cached;
+  const cachedId = state.canonicalActIds.get(actId);
+  if (cachedId !== undefined) return state.core.seasons.getAct(cachedId);
   const resolution = state.core.seasons.resolveAct(actId);
-  state.canonicalActs.set(resolution.canonical.id, resolution.canonical);
-  state.canonicalActs.set(actId, resolution.canonical);
+  state.canonicalActIds.set(resolution.canonical.id, resolution.canonical.id);
+  state.canonicalActIds.set(actId, resolution.canonical.id);
   for (const superseded of resolution.superseded) {
-    state.canonicalActs.set(superseded.id, resolution.canonical);
+    state.canonicalActIds.set(superseded.id, resolution.canonical.id);
   }
   return resolution.canonical;
 }
@@ -1852,29 +1873,46 @@ interface VirtualActReachResolution {
 }
 
 function classifyFoundVirtualReach(
-  virtualKey: string,
   reachVia: string | null,
-  venues: readonly JsonObject[],
+  hostReach: "slot" | "chase" | undefined,
 ): ImportPlaceholderReachVia {
   if (reachVia === "manual_contact") return "manual_contact";
   if (reachVia !== "host") return "timestamp";
-  const slotNamed = venues.some((entry) =>
-    Object.values(objectOrEmpty(entry.slots)).some((rawSlot) => {
-      const slot = object(rawSlot, "virtual performer slot");
-      return (
-        slot.virtual_performer === virtualKey ||
-        slot.held_for_virtual_performer === virtualKey
-      );
-    }),
+  return hostReach ?? "slot";
+}
+
+function indexFoundVirtualHostReach(
+  virtualKeys: readonly string[],
+  venues: readonly JsonObject[],
+): Map<string, "slot" | "chase"> {
+  const originalKeyByNormalized = new Map(
+    virtualKeys.map((key) => [key.toLocaleLowerCase("en"), key]),
   );
-  if (slotNamed) return "slot";
-  return venues.some((entry) =>
-    stringList(entry.chase).some((chase) =>
-      chaseHasExactVirtualKey(chase, virtualKey),
-    ),
-  )
-    ? "chase"
-    : "slot";
+  const reachByKey = new Map<string, "slot" | "chase">();
+  for (const venue of venues) {
+    for (const rawSlot of Object.values(objectOrEmpty(venue.slots))) {
+      const slot = object(rawSlot, "virtual performer slot");
+      for (const value of [
+        slot.virtual_performer,
+        slot.held_for_virtual_performer,
+      ]) {
+        if (typeof value !== "string") continue;
+        const key = originalKeyByNormalized.get(value.toLocaleLowerCase("en"));
+        if (key) reachByKey.set(key, "slot");
+      }
+    }
+  }
+  for (const venue of venues) {
+    for (const chase of stringList(venue.chase)) {
+      for (const token of chaseTokens(chase)) {
+        const key = originalKeyByNormalized.get(token.toLocaleLowerCase("en"));
+        if (key && reachByKey.get(key) !== "slot") {
+          reachByKey.set(key, "chase");
+        }
+      }
+    }
+  }
+  return reachByKey;
 }
 
 function resolveVirtualActReach(
@@ -1943,10 +1981,13 @@ function resolveVenueEntryContact(
 
 function chaseHasExactVirtualKey(chase: string, virtualKey: string): boolean {
   const normalizedKey = virtualKey.toLocaleLowerCase("en");
-  return chase
-    .split(/[^\p{L}\p{N}_-]+/u)
-    .filter(Boolean)
-    .some((token) => token.toLocaleLowerCase("en") === normalizedKey);
+  return chaseTokens(chase).some(
+    (token) => token.toLocaleLowerCase("en") === normalizedKey,
+  );
+}
+
+function chaseTokens(chase: string): string[] {
+  return chase.split(/[^\p{L}\p{N}_-]+/u).filter(Boolean);
 }
 
 function mapHost(row: JsonObject) {

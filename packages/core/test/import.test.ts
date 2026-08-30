@@ -197,6 +197,7 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
     const base = core.seasons;
     const resolveCalls = new Map<number, number>();
     const slotCalls = new Map<number, number>();
+    let assignmentListCalls = 0;
     core = {
       ...core,
       seasons: {
@@ -209,6 +210,10 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
           slotCalls.set(venueId, (slotCalls.get(venueId) ?? 0) + 1);
           return base.listVenueSlots(venueId);
         },
+        listAssignments(seasonId: number) {
+          assignmentListCalls += 1;
+          return base.listAssignments(seasonId);
+        },
       },
     };
 
@@ -216,6 +221,7 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
 
     expect(Math.max(...resolveCalls.values())).toBe(1);
     expect(Math.max(...slotCalls.values())).toBeLessThanOrEqual(1);
+    expect(assignmentListCalls).toBe(1);
   });
 
   it("R29: re-running an invalid geocache entry preserves its null-normalized row version", async () => {
