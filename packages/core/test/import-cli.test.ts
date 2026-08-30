@@ -104,6 +104,34 @@ describe("Goal-1 import CLI", () => {
     ).toBe(true);
   });
 
+  it("accepts an explicit event year from the flag or environment", async () => {
+    const copiedArtifacts = await temporary("porchfest-goal1-event-year-");
+    await cp(fixtureDirectory, copiedArtifacts, { recursive: true });
+    const slatePath = join(copiedArtifacts, "slate.synthetic.json");
+    const slate = JSON.parse(await readFile(slatePath, "utf8"));
+    delete slate.event.date;
+    slate.event.date_display = "Wednesday, September 16";
+    await writeFile(slatePath, `${JSON.stringify(slate, null, 2)}\n`);
+    const baseArgs = [
+      "--artifacts",
+      copiedArtifacts,
+      ...fixtureFileArgs,
+      "--bounds",
+      "9.5,19.5,10.5,20.5",
+      "--dry-run",
+    ];
+
+    const flagOutput = captureOutput();
+    expect(
+      await main([...baseArgs, "--event-year", "2026"], {}, flagOutput),
+    ).toBe(0);
+
+    const envOutput = captureOutput();
+    expect(
+      await main(baseArgs, { PORCHFEST_GOAL1_EVENT_YEAR: "2026" }, envOutput),
+    ).toBe(0);
+  });
+
   it("rolls back normal and dry-run imports when a late artifact error occurs", async () => {
     const copiedArtifacts = await temporary("porchfest-goal1-invalid-");
     await cp(fixtureDirectory, copiedArtifacts, { recursive: true });

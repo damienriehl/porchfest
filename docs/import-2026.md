@@ -28,7 +28,7 @@ There is deliberately no artifact-directory default inside the repository. The
 Run the complete import inside a rolled-back SQLite transaction:
 
 ```bash
-npm run import:goal1 -- --dry-run
+npm run import:goal1 -- --dry-run --event-year 2026
 ```
 
 The command prints the same JSON `ImportReport` as a real run. `records` splits
@@ -42,6 +42,7 @@ If the Goal-1 geocoder source is unavailable, supply the season box explicitly a
 
 ```bash
 npm run import:goal1 -- --dry-run \
+  --event-year 2026 \
   --bounds "44.0,-94.0,46.0,-92.0" \
   --locality "Imported season locality"
 ```
@@ -55,8 +56,12 @@ The real-artifact gate is never a CI test. With the environment above and a
 disposable data directory outside the repository, run exactly:
 
 ```bash
-npm run import:goal1 -- --dry-run
+npm run import:goal1 -- --dry-run --event-year 2026
 ```
+
+The real artifact's display date omits its year, so the fidelity run requires
+`--event-year 2026` (or `PORCHFEST_GOAL1_EVENT_YEAR=2026`). The importer never
+infers that year from the current date or host timezone.
 
 The plan's expected fidelity summary is:
 
@@ -86,7 +91,7 @@ silently accepted by the importer.
 After the dry-run matches the approved slate:
 
 ```bash
-npm run import:goal1
+npm run import:goal1 -- --event-year 2026
 ```
 
 The importer stores every Goal-1 natural key in `import_keys`. Re-running the

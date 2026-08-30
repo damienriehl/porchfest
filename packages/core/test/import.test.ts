@@ -239,16 +239,33 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
 
       process.env.TZ = "Pacific/Auckland";
       const first = importGoal1Season(core, options);
+      matches.event.date_display = "Wednesday, September 16";
+      await writeFile(path, `${JSON.stringify(matches, null, 2)}\n`);
       process.env.TZ = "America/Los_Angeles";
-      const second = importGoal1Season(core, options);
+      const second = importGoal1Season(core, { ...options, eventYear: 2026 });
 
       expect(second.seasonId).toBe(first.seasonId);
-      expect(database.db.select().from(seasons).all()).toHaveLength(1);
+      const importedSeasons = database.db.select().from(seasons).all();
+      expect(importedSeasons).toHaveLength(1);
+      expect(importedSeasons[0]!.eventDate).toBe("2026-09-16");
 
-      matches.event.date_display = "the synthetic festival date";
+      matches.event.date_display = "wednesday September 16 2026";
+      await writeFile(path, `${JSON.stringify(matches, null, 2)}\n`);
+      const alternatePunctuation = importGoal1Season(core, options);
+      expect(alternatePunctuation.seasonId).toBe(first.seasonId);
+
+      matches.event.date_display = "Wednesday, September 16";
       await writeFile(path, `${JSON.stringify(matches, null, 2)}\n`);
       expect(() => importGoal1Season(core, options)).toThrow(
-        "Event date_display must use a month-name date such as September 16, 2026: the synthetic festival date",
+        "Event date_display has no year; pass --event-year YYYY",
+      );
+
+      matches.event.date_display = "Funday, September 16";
+      await writeFile(path, `${JSON.stringify(matches, null, 2)}\n`);
+      expect(() =>
+        importGoal1Season(core, { ...options, eventYear: 2026 }),
+      ).toThrow(
+        "Event date_display must use a month-name date such as September 16, 2026: Funday, September 16",
       );
     } finally {
       if (previousTimezone === undefined) delete process.env.TZ;

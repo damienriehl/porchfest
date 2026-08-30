@@ -82,6 +82,7 @@ export interface Goal1ImportOptions {
   readonly artifactFiles?: Goal1ArtifactFileMap;
   readonly localityName: string;
   readonly bounds: BoundingBox;
+  readonly eventYear?: number;
   readonly timezone?: string;
   readonly now?: () => Date;
   readonly dryRun?: boolean;
@@ -215,7 +216,7 @@ function importGoal1SeasonInTransaction(
   );
   const event = object(artifacts.matches.event, "matches event");
   const timezone = options.timezone ?? "America/Chicago";
-  const eventDate = eventDateValue(event);
+  const eventDate = eventDateValue(event, options.eventYear);
   const seasonNaturalKey = `${eventDate}:${requiredString(event.name, "event name")}`;
   const report = emptyReport();
   const seasonKey = core.importKeys.findSeason(SOURCE.season, seasonNaturalKey);
@@ -1821,12 +1822,12 @@ function keyedRows(
   return result;
 }
 
-function eventDateValue(event: JsonObject): string {
+function eventDateValue(event: JsonObject, eventYear?: number): string {
   const direct = optionalString(event.date);
   if (direct && /^\d{4}-\d{2}-\d{2}$/.test(direct)) return direct;
   const display = requiredString(event.date_display, "event date_display");
   const match =
-    /^(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),\s*(\d{4})$/i.exec(
+    /^(?:(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),?\s+)?(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})(?:,?\s+(\d{4}))?$/i.exec(
       display,
     );
   const monthNames = [
@@ -1844,12 +1845,21 @@ function eventDateValue(event: JsonObject): string {
     "december",
   ] as const;
   if (match) {
+    const displayYear = match[3];
+    if (displayYear === undefined && eventYear === undefined) {
+      throw new Error(
+        `Event date_display has no year; pass --event-year YYYY: ${display}`,
+      );
+    }
+    const year = displayYear === undefined ? eventYear! : Number(displayYear);
+    if (!Number.isInteger(year) || year < 1000 || year > 9999) {
+      throw new Error(`eventYear must be a four-digit year: ${year}`);
+    }
     const month =
       monthNames.indexOf(
         match[1]!.toLowerCase() as (typeof monthNames)[number],
       ) + 1;
     const day = Number(match[2]);
-    const year = Number(match[3]);
     const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
     const daysInMonth = [
       31,

@@ -18,7 +18,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const usage =
-  "Usage: npm run import:goal1 -- --artifacts <dir> [--submissions-file <path>] [--slate-file <path>] [--geocache-file <path>] [--data-dir <dir>] [--dry-run] [--locality <name>] [--bounds <south,west,north,east>]";
+  "Usage: npm run import:goal1 -- --artifacts <dir> [--submissions-file <path>] [--slate-file <path>] [--geocache-file <path>] [--data-dir <dir>] [--event-year YYYY] [--dry-run] [--locality <name>] [--bounds <south,west,north,east>]";
 
 export interface ImportGoal1Output {
   readonly stdout: (message: string) => void;
@@ -29,6 +29,7 @@ interface CliOptions {
   readonly artifactsDirectory: string;
   readonly artifactFiles: Goal1ArtifactFileMap;
   readonly dataDirectory: string;
+  readonly eventYear: number | null;
   readonly dryRun: boolean;
   readonly localityName: string | null;
   readonly bounds: BoundingBox | null;
@@ -71,6 +72,7 @@ export async function main(
         artifactFiles: options.artifactFiles,
         localityName,
         bounds,
+        ...(options.eventYear === null ? {} : { eventYear: options.eventYear }),
         dryRun: options.dryRun,
       };
       const report: ImportReport = importGoal1Season(core, importOptions);
@@ -117,6 +119,10 @@ function parseArgs(
 ): CliOptions {
   let artifacts = env.PORCHFEST_GOAL1_ARTIFACTS?.trim() || null;
   let dataDirectory = env.PORCHFEST_DATA_DIR?.trim() || "./data";
+  const configuredEventYear = env.PORCHFEST_GOAL1_EVENT_YEAR?.trim();
+  let eventYear = configuredEventYear
+    ? parseEventYear(configuredEventYear)
+    : null;
   const artifactFiles = { ...goal1ArtifactFiles };
   let localityName: string | null = null;
   let bounds: BoundingBox | null = null;
@@ -152,6 +158,10 @@ function parseArgs(
       dataDirectory = nextValue("--data-dir");
     } else if (argument.startsWith("--data-dir=")) {
       dataDirectory = requiredOptionValue(argument, "--data-dir");
+    } else if (argument === "--event-year") {
+      eventYear = parseEventYear(nextValue("--event-year"));
+    } else if (argument.startsWith("--event-year=")) {
+      eventYear = parseEventYear(requiredOptionValue(argument, "--event-year"));
     } else if (argument === "--locality") {
       localityName = nextValue("--locality");
     } else if (argument.startsWith("--locality=")) {
@@ -172,6 +182,7 @@ function parseArgs(
     artifactsDirectory: resolve(artifacts),
     artifactFiles,
     dataDirectory: resolve(dataDirectory),
+    eventYear,
     dryRun,
     localityName,
     bounds,
@@ -182,6 +193,15 @@ function requiredOptionValue(argument: string, name: string): string {
   const value = argument.slice(name.length + 1).trim();
   if (!value) throw new ImportGoal1Error(`${name} requires a value. ${usage}`);
   return value;
+}
+
+function parseEventYear(value: string): number {
+  if (!/^\d{4}$/.test(value)) {
+    throw new ImportGoal1Error(
+      "--event-year or PORCHFEST_GOAL1_EVENT_YEAR must be a four-digit year.",
+    );
+  }
+  return Number(value);
 }
 
 function parseBounds(value: string): BoundingBox {
