@@ -4,9 +4,9 @@ Porchfest is an MIT-licensed platform for running your own neighborhood porchfes
 organizer review, performer-to-porch matching, participant communication, and a public event map.
 It is designed to stay portable and self-hostable instead of requiring a particular cloud vendor.
 
-This repository currently contains the U2 public scaffold. The server, workspace boundaries,
-provider seams, security defaults, container deployment, and test harness are present; season data,
-signup forms, organizer workflows, matching, and actual delivery providers land in later units.
+The repository contains the complete single-instance application: first-run season setup, signups,
+organizer review, matching, an immutable review-before-send outbox, participant changes, retention,
+and a publishable public map.
 
 ## Reference deployment
 
@@ -20,11 +20,19 @@ Requirements:
 - A host whose ports 80 and 443 are reachable (for a public deployment)
 - A DNS name pointing at that host (for publicly trusted TLS)
 
-Start a local zero-configuration instance:
+### From clone to first season
+
+The shortest stranger path uses the reference Caddy topology and its local development certificate:
 
 ```sh
+git clone https://github.com/example/porchfest.git
+cd porchfest
+cp .env.example .env
+# In .env, remove the external-proxy COMPOSE_FILE line for this local path and
+# keep PUBLIC_BASE_URL=https://localhost.
 docker compose up --build -d
 curl --insecure https://localhost/health
+docker compose logs app
 ```
 
 Caddy uses its local certificate authority for `https://localhost`, so the command deliberately
@@ -34,13 +42,20 @@ accepts that development certificate. A successful response is:
 { "ok": true, "service": "porchfest" }
 ```
 
-For a public host:
+On the first boot, the app log prints a one-hour, single-use bootstrap sign-in URL. Open it, enter
+the first organizer's name and email, and submit. The app sends a deployment with no season to
+`/admin/setup`; that form creates the event, timezone, slots, signup window, locality, public URLs,
+and sender identity. If the log has rotated, `docker compose exec app npm run organizer:link`
+issues a replacement without direct database access.
+
+For a public host with its own proxy, follow [the deployment runbook](docs/deploy.md). For the
+reference Caddy topology:
 
 1. Copy `.env.example` to `.env`.
 2. Replace `PUBLIC_BASE_URL` with the canonical HTTPS origin whose DNS points at the host.
 3. Either delete the `PORCHFEST_SESSION_SECRET` line (recommended, so first boot creates one in the
    data volume) or replace its placeholder with a unique high-entropy value.
-4. Run `docker compose up --build -d`.
+4. Remove the external-proxy `COMPOSE_FILE` override and run `docker compose up --build -d`.
 
 The application refuses to start when the configured session secret is still the public example
 placeholder. With the variable absent or empty, first boot creates a unique key at
@@ -53,25 +68,21 @@ and no direct database access involved. The full procedure is in
 
 ## Zero-configuration provider mode
 
-All three external seams start with null implementations:
+The app boots without SMTP credentials, an anti-bot account, a geocoding provider, or a public base
+URL. The built-in fallback behavior and provider-dependent features are explicit:
 
-- Email is unconfigured and reports copy-paste delivery mode.
-- External anti-bot challenges are unconfigured. The rate-limit and honeypot baseline arrives with
-  the public forms unit.
-- Geocoding is unconfigured and returns no coordinates.
+| Capability               | Works unconfigured                    | Provider configuration                                                     |
+| ------------------------ | ------------------------------------- | -------------------------------------------------------------------------- |
+| Organizer outbox         | Review, copy-paste, and `.eml` export | SMTP enables server-side send and participant magic links                  |
+| Public signup protection | Honeypot and per-IP rate limit        | Turnstile site and secret keys add the external challenge                  |
+| Venue coordinates        | Manual organizer entry and review     | `GEO_PROVIDER=osm` plus a deployment-specific user agent enables geocoding |
 
-That means the app boots without SMTP credentials, an anti-bot account, a geocoding key, or a
-public base URL. The eventual organizer outbox remains usable for copy-paste delivery when email is
-unconfigured; participant magic-link features stay unavailable until email is configured.
+`PUBLIC_BASE_URL` is required when SMTP or magic links are enabled. The no-provider mode is a real
+operating mode, not a demo mode: signup, review, matching, export, and map publication remain usable.
 
-To add or configure a provider later, implement the relevant port in `packages/email`,
-`packages/antibot`, or `packages/geo`, run that package's shared contract suite, and select the
-implementation in the `packages/web` composition root. Provider credentials must come from an
-environment variable or mounted file, never source control or an image.
-
-Two seams now ship a live implementation the environment selects: SMTP email (below) and Turnstile
-anti-bot (`PORCHFEST_TURNSTILE_SITE_KEY` plus `PORCHFEST_TURNSTILE_SECRET_KEY`). Geocoding is still
-null-only.
+Provider credentials must come from an environment variable or mounted file, never source control
+or an image. SMTP, Turnstile, and OpenStreetMap geocoding implementations are selected by the
+environment in `packages/web`'s composition root.
 
 ### Email delivery (SMTP)
 
@@ -101,15 +112,14 @@ into the environment.
 
 ## Where data lives
 
-Compose pins application state to the literal Docker volume name `porchfest-data`, mounted at
-`/data`. Changing the checkout directory or Compose project name therefore does not silently attach
-an empty replacement volume. The generated session secret lives there now; the SQLite database and
-its WAL files will live there when the schema arrives.
+Compose pins application state to the literal Docker volume named by `PORCHFEST_DATA_VOLUME`,
+mounted at `/data`. Changing the checkout directory or Compose project name therefore does not
+silently attach an empty replacement volume. The generated session secret, SQLite database, and
+SQLite sidecar files all live there.
 
 Caddy state uses the separately pinned `porchfest-caddy-data` and `porchfest-caddy-config` volumes.
-Do not treat local volumes as backups. The restore-tested, encrypted off-host backup and rollback
-procedure is a deployment gate for the production unit, not something this scaffold pretends to
-have completed.
+Do not treat local volumes or archives as backups. The restore-tested, encrypted off-host backup and
+two-path rollback procedure is documented in [docs/deploy.md](docs/deploy.md).
 
 ## Development
 
@@ -136,8 +146,8 @@ npm run check:clean-room
   card-to-pin navigation, shipped as browser assets for a server package to mount; it requires
   Leaflet on the host page and nothing else.
 
-The platform does not yet serve the map: there is no static-asset route and nothing serves venue
-JSON, so `@porchfest/map` is currently mountable but not mounted.
+The platform serves the map assets and only exposes a season's venue JSON after an organizer
+explicitly publishes that eligible season.
 
 `core` owns domain and storage ports and may never import an adapter package. `web` is the only
 composition root. Every HTTP route must enter through its central registry with one of three trust
