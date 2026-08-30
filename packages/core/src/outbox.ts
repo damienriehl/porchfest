@@ -595,7 +595,7 @@ export function createOutboxRepository(
     for (const { act } of booked) {
       if (act.requiresAmplification === true) {
         logistics.push(
-          `- ${act.name} need amplification; the porch reports power: ${yesNoUnknown(venue.hasPower)}.`,
+          `- ${act.name} requires amplification; the porch reports power: ${yesNoUnknown(venue.hasPower)}.`,
         );
       }
     }
@@ -614,6 +614,7 @@ export function createOutboxRepository(
       contacts: recipients,
       context: {
         ...eventContext(source),
+        venue_title: venue.title,
         address_display: address,
         space_line: venue.spaceDescription ?? NOT_PROVIDED,
         electrical_line: yesNoUnknown(venue.hasPower),
