@@ -18,15 +18,34 @@ recover_safety_archive() {
   fi
 
   printf 'safety_archive_restored=%s\n' "$safety_archive" >&2
-  if (
-    docker tag "$safety_image_ref" "$app_image" &&
-    compose up -d --no-build app &&
-    wait_for_app_health &&
-    assert_pinned_volume
-  ); then
-    return 0
-  fi
-  return 2
+  docker tag "$safety_image_ref" "$app_image" || return 2
+  compose up -d --no-build app || return 2
+  wait_for_app_health || return 2
+  assert_pinned_volume || return 2
+}
+
+recover_schema_moved_rollback() {
+  local failed_step="$1"
+  local safety_image_ref="$2"
+  local safety_archive="$3"
+  local restore_project="$4"
+  local safety_restore_project="${compose_project}-safety-restore-$$"
+  local recovery_status=0
+
+  printf 'ERROR: rollback step failed (%s); restoring the safety archive into the pinned volume\n' \
+    "$failed_step" >&2
+  compose rm -sf app >/dev/null 2>&1 || true
+  docker compose -p "$restore_project" -f "$project_dir/compose.yaml" \
+    down --remove-orphans >/dev/null 2>&1 || true
+  docker volume rm "$data_volume" >/dev/null 2>&1 || true
+
+  recover_safety_archive "$safety_image_ref" "$safety_archive" "$safety_restore_project" \
+    || recovery_status=$?
+  case "$recovery_status" in
+    0) die "rollback failed at $failed_step; the pre-rollback safety archive was restored automatically and the app was restarted" ;;
+    2) die "rollback failed at $failed_step; the pre-rollback safety archive data was restored automatically, but the app did not restart" ;;
+    *) die "rollback failed at $failed_step and automatic safety-archive restoration also failed" ;;
+  esac
 }
 
 if [[ "${PORCHFEST_ROLLBACK_LIB_ONLY:-0}" == 1 ]]; then
@@ -128,41 +147,40 @@ else
   verify_archive_sha "$safety_archive" >/dev/null
 
   restore_project="${compose_project}-rollback-restore-$$"
-  if (
-    compose rm -f app >/dev/null
-    docker volume rm "$data_volume" >/dev/null
-    PORCHFEST_APP_IMAGE="$prev_ref" \
-      PORCHFEST_RESTORE_VOLUME="$data_volume" \
-      PORCHFEST_RESTORE_PROJECT="$restore_project" \
-      PORCHFEST_ALLOW_PINNED_RESTORE=1 \
-      "$script_dir/restore.sh" "$archive" >/dev/null
-    docker tag "$prev_ref" "$app_image"
-    compose up -d --no-build app
-    wait_for_app_health
-    assert_pinned_volume
-    volume_integrity >/dev/null
-    restored_counts="$(volume_counts)"
-    assert_counts_equal_json "$matching_metadata" "$restored_counts"
-  ); then
-    integrity="$(volume_integrity)"
-    counts="$(volume_counts)"
-  else
-    printf '%s\n' 'ERROR: rollback restore failed; restoring the safety archive into the pinned volume' >&2
-    compose rm -sf app >/dev/null 2>&1 || true
-    docker compose -p "$restore_project" -f "$project_dir/compose.yaml" \
-      down --remove-orphans >/dev/null 2>&1 || true
-    docker volume rm "$data_volume" >/dev/null 2>&1 || true
-
-    safety_restore_project="${compose_project}-safety-restore-$$"
-    recovery_status=0
-    recover_safety_archive "$safety_image_ref" "$safety_archive" "$safety_restore_project" \
-      || recovery_status=$?
-    case "$recovery_status" in
-      0) die "rollback failed; the pre-rollback safety archive was restored automatically and the app was restarted" ;;
-      2) die "rollback failed; the pre-rollback safety archive data was restored automatically, but the app did not restart" ;;
-      *) die "rollback failed and automatic safety-archive restoration also failed" ;;
-    esac
-  fi
+  compose rm -f app >/dev/null || {
+    recover_schema_moved_rollback "compose rm app" "$safety_image_ref" "$safety_archive" "$restore_project"
+  }
+  docker volume rm "$data_volume" >/dev/null || {
+    recover_schema_moved_rollback "docker volume rm $data_volume" "$safety_image_ref" "$safety_archive" "$restore_project"
+  }
+  PORCHFEST_APP_IMAGE="$prev_ref" \
+    PORCHFEST_RESTORE_VOLUME="$data_volume" \
+    PORCHFEST_RESTORE_PROJECT="$restore_project" \
+    PORCHFEST_ALLOW_PINNED_RESTORE=1 \
+    "$script_dir/restore.sh" "$archive" >/dev/null || {
+      recover_schema_moved_rollback "restore rollback archive" "$safety_image_ref" "$safety_archive" "$restore_project"
+    }
+  docker tag "$prev_ref" "$app_image" || {
+    recover_schema_moved_rollback "docker tag previous image" "$safety_image_ref" "$safety_archive" "$restore_project"
+  }
+  compose up -d --no-build app || {
+    recover_schema_moved_rollback "compose up app" "$safety_image_ref" "$safety_archive" "$restore_project"
+  }
+  wait_for_app_health || {
+    recover_schema_moved_rollback "wait for app health" "$safety_image_ref" "$safety_archive" "$restore_project"
+  }
+  assert_pinned_volume || {
+    recover_schema_moved_rollback "assert pinned volume" "$safety_image_ref" "$safety_archive" "$restore_project"
+  }
+  integrity="$(volume_integrity)" || {
+    recover_schema_moved_rollback "check restored volume integrity" "$safety_image_ref" "$safety_archive" "$restore_project"
+  }
+  counts="$(volume_counts)" || {
+    recover_schema_moved_rollback "read restored volume counts" "$safety_image_ref" "$safety_archive" "$restore_project"
+  }
+  assert_counts_equal_json "$matching_metadata" "$counts" || {
+    recover_schema_moved_rollback "compare restored volume counts" "$safety_image_ref" "$safety_archive" "$restore_project"
+  }
 fi
 
 printf 'rollback_path=%s\n' "$path"

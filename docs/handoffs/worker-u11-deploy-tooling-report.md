@@ -208,25 +208,27 @@ gate still exited 0 and cleaned its test resources.
 
 ## Review-fix commits
 
-| Item | Commit(s)            | Implemented decision or fix                                                                                                                                      |
-| ---- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1    | `0fbbcd6`            | Accept optional `export`, quoted trailing comments, and literal values without shell evaluation.                                                                 |
-| 2    | `8efc670`            | Parse `PUBLIC_BASE_URL` with URL-origin semantics and require a valid HTTPS URL.                                                                                 |
-| 3    | `8efc670`, `e4a5d36` | Use EXIT-scoped session/temp cleanup; activate cleanup as soon as a session exists and require a 303 sign-out response.                                          |
-| 4    | `8efc670`            | Never consume bootstrap links; skip organizer sign-in unless `PORCHFEST_DEPLOY_PROBE_ORGANIZER` names an existing organizer.                                     |
-| 5    | `8efc670`            | Capture organizer-link stderr in a protected temporary file and surface it without printing the recovery link.                                                   |
-| 6    | `41e4c0e`, `984e782` | Rehearse first, take an exact no-restart safety archive, replace the pinned volume only after PASS, and automatically restore/report safety recovery on failure. |
-| 7    | `c916513`, `984e782` | Use `compose down` without `-v` for throwaway projects, reject the live project name, and never down the real project.                                           |
-| 8    | `31a70b3`, `30ebc42` | Comment the session secret, `PUBLIC_BASE_URL`, and `COMPOSE_FILE`; copy `.env.example` verbatim and prove its zero-configuration app boot.                       |
-| 9    | `4785774`            | Add `--no-restart`/`PORCHFEST_ARCHIVE_NO_RESTART=1`; rollback uses it so a crash-looping release need not become healthy first.                                  |
-| 10   | `22cfbf7`            | Use archive-quiesce counts; keep seasons exact, reject every decrease, and print every allowed increase.                                                         |
-| 11   | `4785774`, `984e782` | Make archive failures loud and recover even when `compose stop` stops the app but returns nonzero.                                                               |
-| 12   | `73653bf`            | Derive tags from only the final image path component, including registry ports and existing tags.                                                                |
-| 13   | `73653bf`            | Scope the previous tag as `<repository>:prev-<compose-project>`.                                                                                                 |
-| 14   | `fc1e834`            | Pass empty values through Compose so application code owns the five defaults.                                                                                    |
-| 15   | `fc1e834`, `a1e0702` | Add Docker's 2-second start interval and a named 150-second script health budget.                                                                                |
-| 16   | `3cc74cb`, `fe45102` | Use the app image and installed `better-sqlite3` for integrity/count/schema checks; remove `PORCHFEST_SQLITE_IMAGE`.                                             |
-| 17   | `0fbbcd6`            | Parse evidence JSON with Python, falling back to Node in the app image; remove regex readers.                                                                    |
+| Item | Commit(s)                                                          | Implemented decision or fix                                                                                                                                      |
+| ---- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1    | `0fbbcd6`                                                          | Accept optional `export`, quoted trailing comments, and literal values without shell evaluation.                                                                 |
+| 2    | `8efc670`                                                          | Parse `PUBLIC_BASE_URL` with URL-origin semantics and require a valid HTTPS URL.                                                                                 |
+| 3    | `8efc670`, `e4a5d36`                                               | Use EXIT-scoped session/temp cleanup; activate cleanup as soon as a session exists and require a 303 sign-out response.                                          |
+| 4    | `8efc670`                                                          | Never consume bootstrap links; skip organizer sign-in unless `PORCHFEST_DEPLOY_PROBE_ORGANIZER` names an existing organizer.                                     |
+| 5    | `8efc670`                                                          | Capture organizer-link stderr in a protected temporary file and surface it without printing the recovery link.                                                   |
+| 6    | `41e4c0e`, `984e782`                                               | Rehearse first, take an exact no-restart safety archive, replace the pinned volume only after PASS, and automatically restore/report safety recovery on failure. |
+| 7    | `c916513`, `984e782`                                               | Use `compose down` without `-v` for throwaway projects, reject the live project name, and never down the real project.                                           |
+| 8    | `31a70b3`, `30ebc42`                                               | Comment the session secret, `PUBLIC_BASE_URL`, and `COMPOSE_FILE`; copy `.env.example` verbatim and prove its zero-configuration app boot.                       |
+| 9    | `4785774`                                                          | Add `--no-restart`/`PORCHFEST_ARCHIVE_NO_RESTART=1`; rollback uses it so a crash-looping release need not become healthy first.                                  |
+| 10   | `22cfbf7`                                                          | Use archive-quiesce counts; keep seasons exact, reject every decrease, and print every allowed increase.                                                         |
+| 11   | `4785774`, `984e782`                                               | Make archive failures loud and recover even when `compose stop` stops the app but returns nonzero.                                                               |
+| 12   | `73653bf`                                                          | Derive tags from only the final image path component, including registry ports and existing tags.                                                                |
+| 13   | `73653bf`                                                          | Scope the previous tag as `<repository>:prev-<compose-project>`.                                                                                                 |
+| 14   | `fc1e834`                                                          | Pass empty values through Compose so application code owns the five defaults.                                                                                    |
+| 15   | `fc1e834`, `a1e0702`                                               | Add Docker's 2-second start interval and a named 150-second script health budget.                                                                                |
+| 16   | `3cc74cb`, `fe45102`                                               | Use the app image and installed `better-sqlite3` for integrity/count/schema checks; remove `PORCHFEST_SQLITE_IMAGE`.                                             |
+| 17   | `0fbbcd6`                                                          | Parse evidence JSON with Python, falling back to Node in the app image; remove regex readers.                                                                    |
+| 18   | `fix(deploy): stop schema-moved rollback on its first failed step` | Check every rollback step directly, report the failed step, and restore the safety archive before exiting non-zero.                                              |
+| 19   | `fix(deploy): namespace Traefik objects per compose project`       | Prefix every Traefik router, middleware, and service object with the Compose project so shared proxy deployments do not collide.                                 |
 
 Cross-item gate and cleanup commits:
 

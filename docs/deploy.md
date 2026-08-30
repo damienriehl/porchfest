@@ -56,10 +56,12 @@ a unique `0600` secret in that volume, or set a unique high-entropy value. The p
 may live on the server. Its private identity must live only on the separate restore machine.
 
 The override removes Caddy, publishes no app port, joins `app` to the named external network, and
-sets Traefik's HTTP redirect and HTTPS router/service labels. `PORCHFEST_TRUSTED_PROXY_HOPS=1` is
-correct because Traefik is the sole trusted hop. Raise it only when a second trusted proxy, such as
-a CDN proxy, is intentionally placed in front and Traefik is configured to trust that hop. Putting
-a CDN proxy in front without that trust configuration makes every visitor appear to have one IP and
+sets Traefik's HTTP redirect and HTTPS router/service labels. Their object names are prefixed with
+`PORCHFEST_COMPOSE_PROJECT`, so each Porchfest project has isolated routers, redirect middleware,
+and service definitions on a shared Traefik instance. `PORCHFEST_TRUSTED_PROXY_HOPS=1` is correct
+because Traefik is the sole trusted hop. Raise it only when a second trusted proxy, such as a CDN
+proxy, is intentionally placed in front and Traefik is configured to trust that hop. Putting a CDN
+proxy in front without that trust configuration makes every visitor appear to have one IP and
 collapses per-IP signup limiting into one shared bucket.
 
 Validate interpolation before first boot:

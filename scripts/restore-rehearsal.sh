@@ -24,11 +24,18 @@ done
 restore_volume="${PORCHFEST_DATA_VOLUME}-rehearsal"
 restore_project="${PORCHFEST_COMPOSE_PROJECT}-rehearsal"
 prev_image="$(image_tag_ref "$PORCHFEST_APP_IMAGE" "prev-${PORCHFEST_COMPOSE_PROJECT}")"
+previous_fixture_project="${PORCHFEST_COMPOSE_PROJECT}-previous-fixture"
+previous_fixture_volume="${PORCHFEST_DATA_VOLUME}-previous-fixture"
+previous_image_container="${PORCHFEST_COMPOSE_PROJECT}-previous-image"
 fake_dir=""
 
 cleanup() {
+  docker compose -p "$previous_fixture_project" -f "$project_dir/compose.yaml" \
+    down --remove-orphans >/dev/null 2>&1 || true
   docker compose -p "$restore_project" -f "$project_dir/compose.yaml" \
     down --remove-orphans >/dev/null 2>&1 || true
+  docker rm -f "$previous_image_container" >/dev/null 2>&1 || true
+  docker volume rm "$previous_fixture_volume" >/dev/null 2>&1 || true
   docker volume rm "$restore_volume" >/dev/null 2>&1 || true
   docker image rm "$prev_image" >/dev/null 2>&1 || true
   if [[ -n "$fake_dir" ]]; then
@@ -102,13 +109,27 @@ if docker network inspect "${restore_project}_default" >/dev/null 2>&1; then
   exit 1
 fi
 
+external_proxy_config="$fake_dir/external-proxy-config.yaml"
 PORCHFEST_PROXY_NETWORK=porchfest-proxy-test \
   PORCHFEST_DOMAIN=porchfest.example \
   PORCHFEST_TLS_RESOLVER=testresolver \
   docker compose \
     -f "$project_dir/compose.yaml" \
     -f "$project_dir/deploy/compose.external-proxy.yaml" \
-    config >/dev/null
+    config >"$external_proxy_config"
+for expected_label in \
+  "traefik.http.routers.${PORCHFEST_COMPOSE_PROJECT}-http.entrypoints: http" \
+  "traefik.http.routers.${PORCHFEST_COMPOSE_PROJECT}-http.middlewares: ${PORCHFEST_COMPOSE_PROJECT}-https-redirect" \
+  "traefik.http.middlewares.${PORCHFEST_COMPOSE_PROJECT}-https-redirect.redirectscheme.scheme: https" \
+  "traefik.http.routers.${PORCHFEST_COMPOSE_PROJECT}-https.entrypoints: https" \
+  "traefik.http.routers.${PORCHFEST_COMPOSE_PROJECT}-https.service: ${PORCHFEST_COMPOSE_PROJECT}" \
+  "traefik.http.services.${PORCHFEST_COMPOSE_PROJECT}.loadbalancer.server.port: \"9398\""; do
+  grep -Fq "$expected_label" "$external_proxy_config" || {
+    printf 'ERROR: external-proxy Compose omitted project-scoped label: %s\n' \
+      "$expected_label" >&2
+    exit 1
+  }
+done
 
 before_rollback_container="$(docker compose -p "$PORCHFEST_COMPOSE_PROJECT" -f "$project_dir/compose.yaml" ps -q app)"
 "$project_dir/deploy/rollback.sh" | grep '^rollback_path=image-only$' >/dev/null
@@ -117,6 +138,88 @@ after_rollback_container="$(docker compose -p "$PORCHFEST_COMPOSE_PROJECT" -f "$
   printf 'ERROR: image-only rollback did not recreate the app container\n' >&2
   exit 1
 }
+
+docker image rm "$prev_image" >/dev/null
+previous_journal="$fake_dir/previous-journal.json"
+docker create --name "$previous_image_container" "$PORCHFEST_APP_IMAGE" >/dev/null
+docker cp \
+  "$previous_image_container:/app/packages/core/drizzle/meta/_journal.json" \
+  "$previous_journal"
+PORCHFEST_PREVIOUS_JOURNAL="$previous_journal" node -e '
+  const fs = require("node:fs");
+  const path = process.env.PORCHFEST_PREVIOUS_JOURNAL;
+  const journal = JSON.parse(fs.readFileSync(path, "utf8"));
+  if (journal.entries.length < 2) process.exit(2);
+  journal.entries.pop();
+  fs.writeFileSync(path, `${JSON.stringify(journal, null, 2)}\n`);
+'
+docker cp \
+  "$previous_journal" \
+  "$previous_image_container:/app/packages/core/drizzle/meta/_journal.json"
+docker commit "$previous_image_container" "$prev_image" >/dev/null
+docker rm "$previous_image_container" >/dev/null
+
+env \
+  PORCHFEST_COMPOSE_PROJECT="$previous_fixture_project" \
+  PORCHFEST_APP_IMAGE="$prev_image" \
+  PORCHFEST_DATA_VOLUME="$previous_fixture_volume" \
+  PUBLIC_BASE_URL= \
+  PORCHFEST_SESSION_SECRET= \
+  docker compose -p "$previous_fixture_project" -f "$project_dir/compose.yaml" \
+    up -d --no-build app >/dev/null
+previous_fixture_container="$(
+  docker compose -p "$previous_fixture_project" -f "$project_dir/compose.yaml" ps -q app
+)"
+wait_for_container_health "$previous_fixture_container"
+previous_archive_result="$fake_dir/previous-archive-result.txt"
+env \
+  PORCHFEST_COMPOSE_PROJECT="$previous_fixture_project" \
+  PORCHFEST_APP_IMAGE="$prev_image" \
+  PORCHFEST_DATA_VOLUME="$previous_fixture_volume" \
+  PORCHFEST_ARCHIVE_DIR="$PORCHFEST_ARCHIVE_DIR" \
+  PORCHFEST_ARCHIVE_KEEP=2 \
+  PORCHFEST_ARCHIVE_RESULT_FILE="$previous_archive_result" \
+  "$project_dir/deploy/archive.sh" --no-restart >/dev/null
+[[ -s "$previous_archive_result" ]] || {
+  printf 'ERROR: previous-schema fixture produced no rollback archive\n' >&2
+  exit 1
+}
+docker compose -p "$previous_fixture_project" -f "$project_dir/compose.yaml" \
+  down --remove-orphans >/dev/null
+docker volume rm "$previous_fixture_volume" >/dev/null
+
+real_docker="$(command -v docker)"
+tag_failure_shim="$fake_dir/docker"
+{
+  printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail'
+  printf '%s\n' 'if [[ "${1:-}" == tag && "${2:-}" == "$PORCHFEST_FAIL_TAG_SOURCE" && "${3:-}" == "$PORCHFEST_FAIL_TAG_TARGET" ]]; then'
+  printf '%s\n' '  printf '\''injected docker tag failure\n'\'' >&2'
+  printf '%s\n' '  exit 42'
+  printf '%s\n' 'fi'
+  printf '%s\n' 'exec "$PORCHFEST_REAL_DOCKER" "$@"'
+} >"$tag_failure_shim"
+chmod +x "$tag_failure_shim"
+rollback_failure_output="$fake_dir/rollback-tag-failure.txt"
+if PATH="$fake_dir:$PATH" \
+  PORCHFEST_REAL_DOCKER="$real_docker" \
+  PORCHFEST_FAIL_TAG_SOURCE="$prev_image" \
+  PORCHFEST_FAIL_TAG_TARGET="$PORCHFEST_APP_IMAGE" \
+  "$project_dir/deploy/rollback.sh" >"$rollback_failure_output" 2>&1; then
+  printf 'ERROR: schema-moved rollback reported success after docker tag failed\n' >&2
+  exit 1
+fi
+grep -Fq \
+  'rollback step failed (docker tag previous image); restoring the safety archive into the pinned volume' \
+  "$rollback_failure_output"
+grep -Fq 'safety_archive_restored=' "$rollback_failure_output"
+grep -Fq \
+  'rollback failed at docker tag previous image; the pre-rollback safety archive was restored automatically and the app was restarted' \
+  "$rollback_failure_output"
+if grep -Fq 'rollback_result=PASS' "$rollback_failure_output"; then
+  printf 'ERROR: failed schema-moved rollback printed rollback_result=PASS\n' >&2
+  exit 1
+fi
+echo "OK: schema-moved rollback stops on docker tag failure and restores its safety archive"
 
 if command -v age-keygen >/dev/null 2>&1 && command -v age >/dev/null 2>&1; then
   identity="$fake_dir/identity.txt"
@@ -204,4 +307,4 @@ else
   echo "OK: off-site backup shim skipped explicitly (age and age-keygen are not installed)"
 fi
 
-echo "OK: archive restored with matching counts and integrity, same-schema rollback passed, and external-proxy Compose validated"
+echo "OK: archive restored with matching counts and integrity, rollback paths passed, and external-proxy Compose validated"
