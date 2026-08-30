@@ -5,7 +5,7 @@ import {
   type ActLink,
   type Assignment,
   type MatchingAct,
-  type RankedPairing,
+  type RankedSuggestion,
   type Season,
   type Slot,
   type Venue,
@@ -31,7 +31,7 @@ export interface ActAssignmentPageOptions {
   } | null;
   readonly links: readonly ActLink[];
   readonly linkedActs: readonly Act[];
-  readonly suggestions: readonly RankedPairing[];
+  readonly suggestions: readonly RankedSuggestion[];
   readonly csrf: {
     readonly assign: string;
     readonly unassign: string;
@@ -121,7 +121,7 @@ function renderSuggestions(options: ActAssignmentPageOptions): string {
     return '<p class="help">No eligible porch slots are available.</p>';
   const groups: Array<{
     readonly venueId: number;
-    readonly pairings: RankedPairing[];
+    readonly pairings: RankedSuggestion[];
   }> = [];
   for (const pairing of candidates) {
     const group = groups.find((item) => item.venueId === pairing.venue.id);
@@ -147,7 +147,7 @@ function renderSuggestions(options: ActAssignmentPageOptions): string {
 function actCandidate(
   options: ActAssignmentPageOptions,
   slot: Slot | undefined,
-  pairing: RankedPairing,
+  pairing: RankedSuggestion,
 ): string {
   if (!slot) return "";
   const sharedMember = pairing.warnings.some(

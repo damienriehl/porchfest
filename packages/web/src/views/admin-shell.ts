@@ -1,6 +1,7 @@
 import type { Organizer, Season } from "@porchfest/core";
 import { escapeHtml } from "./signup-view.js";
 import { ADMIN_SIGN_IN_PATH, ADMIN_SIGN_OUT_PATH } from "../routes/admin.js";
+import { seasonStateLabel } from "./season-labels.js";
 
 function page(title: string, body: string): string {
   return `<!doctype html>
@@ -120,23 +121,35 @@ export interface SetupFieldError {
   readonly message: string;
 }
 
-export function renderSetupPage(options: {
+interface SetupPageBaseOptions {
   readonly csrfToken: string;
   readonly values: Readonly<Record<string, string>>;
   readonly errors: readonly SetupFieldError[];
-  readonly mode?: "first" | "additional" | "edit";
-  readonly seasonId?: number;
-  readonly version?: number;
-  readonly formError?: string;
-  readonly saved?: boolean;
-}): string {
-  const mode = options.mode ?? "first";
+}
+
+type SetupPageOptions = SetupPageBaseOptions &
+  (
+    | { readonly mode: "first" | "additional" }
+    | {
+        readonly mode: "edit";
+        readonly seasonId: number;
+        readonly version: number;
+        readonly formError?: string;
+        readonly saved?: boolean;
+      }
+  );
+
+export function renderSetupPage(options: SetupPageOptions): string {
+  const mode = options.mode;
+  const editOptions = options.mode === "edit" ? options : null;
+  const formError = editOptions?.formError;
+  const saved = editOptions?.saved ?? false;
   const action =
-    mode === "first"
-      ? "/admin/setup"
-      : mode === "additional"
-        ? "/admin/seasons/new"
-        : `/admin/seasons/${options.seasonId ?? ""}/edit`;
+    editOptions !== null
+      ? `/admin/seasons/${editOptions.seasonId}/edit`
+      : mode === "first"
+        ? "/admin/setup"
+        : "/admin/seasons/new";
   const value = (name: string) => escapeHtml(options.values[name] ?? "");
   const errorFor = (name: string) =>
     options.errors.find((error) => error.field === name);
@@ -172,9 +185,9 @@ export function renderSetupPage(options: {
         .join("")}</ul>
     </section>`;
 
-  const notice = options.formError
-    ? `<section class="error-summary" role="alert" tabindex="-1"><h2>Event details were not changed</h2><p>${escapeHtml(options.formError)}</p></section>`
-    : options.saved
+  const notice = formError
+    ? `<section class="error-summary" role="alert" tabindex="-1"><h2>Event details were not changed</h2><p>${escapeHtml(formError)}</p></section>`
+    : saved
       ? '<section class="confirmation-card" role="status"><p>Event details saved.</p></section>'
       : "";
 
@@ -203,13 +216,13 @@ export function renderSetupPage(options: {
       <p class="eyebrow">Organizers</p>
       <h1>${heading}</h1>
       <p class="lede">${lede}</p>
-      ${mode === "edit" ? `<p><a href="/admin/seasons/${options.seasonId ?? ""}">Back to season settings &amp; state</a></p>` : ""}
+      ${editOptions ? `<p><a href="/admin/seasons/${editOptions.seasonId}">Back to season settings &amp; state</a></p>` : ""}
     </header>
     ${notice}
     ${summary}
     <form class="signup-form" id="signup-form" method="post" action="${action}">
       <input type="hidden" name="_csrf" value="${escapeHtml(options.csrfToken)}">
-      ${mode === "edit" ? `<input type="hidden" name="version" value="${options.version ?? ""}">` : ""}
+      ${editOptions ? `<input type="hidden" name="version" value="${editOptions.version}">` : ""}
       <fieldset>
         <legend>The event</legend>
         ${field("display_name", "Season name", "What neighbours will see, such as “SAP Porchfest 2027”.")}
@@ -284,7 +297,7 @@ export function renderSeasonsPage(options: {
     .map(
       (season) => `<li>
         <a href="/admin/seasons/${season.id}">${escapeHtml(season.displayName)}</a>
-        <span class="help">${season.year} · ${seasonStateLabel(season.state)}</span>
+        <span class="help">${season.year} · ${seasonStateLabel(season.state)} (${escapeHtml(season.state)})</span>
       </li>`,
     )
     .join("");
@@ -313,16 +326,4 @@ export function renderFirstRunConflictPage(): string {
       <p><a class="primary-action" href="/admin/seasons">Review seasons</a></p>
     </header>`,
   );
-}
-
-function seasonStateLabel(state: Season["state"]): string {
-  const labels: Readonly<Record<Season["state"], string>> = {
-    setup: "Preparing the season",
-    signups_open: "Accepting signups",
-    signups_closed: "Signups closed",
-    assigning: "Building the schedule",
-    locked: "Schedule confirmed",
-    archived: "Season closed and archived",
-  };
-  return `${labels[state]} (${escapeHtml(state)})`;
 }

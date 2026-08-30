@@ -142,6 +142,7 @@ export {
   type MatchingSlot,
   type MatchingVenue,
   type RankedPairing,
+  type RankedSuggestion,
   type SuggestionReason,
 } from "./matching.js";
 export type {

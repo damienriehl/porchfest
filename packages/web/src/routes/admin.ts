@@ -22,8 +22,14 @@ import {
   type SessionCookieOptions,
 } from "../auth.js";
 import type { RouteRegistry } from "../router/registry.js";
-import { findSeason, notFound, positiveInteger } from "./admin-http.js";
+import {
+  findSeason,
+  notFound,
+  positiveInteger,
+  redirect,
+} from "./admin-http.js";
 import { seasonSignupUrls } from "./signup-paths.js";
+import { formatZonedDateInput } from "../timezone.js";
 import { renderQueuePage } from "../views/admin-records.js";
 import {
   renderAdminShell,
@@ -236,14 +242,7 @@ export function registerAdminRoutes(options: AdminRouteOptions): void {
         const { season } = options.core.setup.createFirstSeason(
           setupInputFrom(fields),
         );
-        return new Response(null, {
-          status: 303,
-          headers: {
-            ...adminHeaders(),
-            "content-type": "text/plain; charset=UTF-8",
-            location: `${ADMIN_PATH}?season=${season.id}`,
-          },
-        });
+        return redirect(`${ADMIN_PATH}?season=${season.id}`);
       } catch (error) {
         if (error instanceof SeasonSetupError && error.field === "firstRun") {
           return new Response(renderFirstRunConflictPage(), {
@@ -347,22 +346,15 @@ export function registerAdminRoutes(options: AdminRouteOptions): void {
       const season = findSeason(options.core, context.req.param("id"));
       if (!season) return notFound();
       if (!isSeasonActionLegal(season.state, "correction")) {
-        return eventDetailsPage(
-          options,
-          season,
-          409,
-          undefined,
-          `A season in state ${season.state} no longer allows event-detail corrections.`,
-        );
+        return eventDetailsPage(options, season, {
+          status: 409,
+          formError: `A season in state ${season.state} no longer allows event-detail corrections.`,
+        });
       }
-      return eventDetailsPage(
-        options,
-        season,
-        200,
-        undefined,
-        undefined,
-        context.req.query("saved") === "1",
-      );
+      return eventDetailsPage(options, season, {
+        status: 200,
+        saved: context.req.query("saved") === "1",
+      });
     },
   });
 
@@ -377,32 +369,28 @@ export function registerAdminRoutes(options: AdminRouteOptions): void {
       try {
         fields = await readFields(context);
       } catch {
-        return eventDetailsPage(
-          options,
-          season,
-          400,
-          {},
-          "That form could not be read. Review the refreshed values before trying again.",
-        );
+        return eventDetailsPage(options, season, {
+          status: 400,
+          submitted: {},
+          formError:
+            "That form could not be read. Review the refreshed values before trying again.",
+        });
       }
       if (!isSeasonActionLegal(season.state, "correction")) {
-        return eventDetailsPage(
-          options,
-          season,
-          409,
-          fields,
-          `A season in state ${season.state} no longer allows event-detail corrections.`,
-        );
+        return eventDetailsPage(options, season, {
+          status: 409,
+          submitted: fields,
+          formError: `A season in state ${season.state} no longer allows event-detail corrections.`,
+        });
       }
       const version = positiveInteger(fields.version);
       if (version === null) {
-        return eventDetailsPage(
-          options,
-          season,
-          400,
-          fields,
-          "A valid season version is required. Reload the editor before trying again.",
-        );
+        return eventDetailsPage(options, season, {
+          status: 400,
+          submitted: fields,
+          formError:
+            "A valid season version is required. Reload the editor before trying again.",
+        });
       }
 
       try {
@@ -413,32 +401,31 @@ export function registerAdminRoutes(options: AdminRouteOptions): void {
         );
       } catch (error) {
         if (error instanceof SeasonSetupError) {
-          return eventDetailsPage(
-            options,
-            season,
-            422,
-            fields,
-            undefined,
-            false,
-            [{ field: formFieldFor(error.field), message: error.message }],
-          );
+          return eventDetailsPage(options, season, {
+            status: 422,
+            submitted: fields,
+            errors: [
+              { field: formFieldFor(error.field), message: error.message },
+            ],
+          });
         }
         if (error instanceof SeasonConflictError) {
           const current = options.core.seasons.getSeason(season.id);
-          return eventDetailsPage(
-            options,
-            current,
-            409,
-            undefined,
-            `Someone else changed these event details. Review the refreshed values from version ${current.version} before trying again. Nothing from the stale form was saved.`,
-          );
+          return eventDetailsPage(options, current, {
+            status: 409,
+            formError: `Someone else changed these event details. Review the refreshed values from version ${current.version} before trying again. Nothing from the stale form was saved.`,
+          });
         }
         if (
           error instanceof SeasonLifecycleError ||
           error instanceof SeasonActionError
         ) {
           const current = options.core.seasons.getSeason(season.id);
-          return eventDetailsPage(options, current, 409, fields, error.message);
+          return eventDetailsPage(options, current, {
+            status: 409,
+            submitted: fields,
+            formError: error.message,
+          });
         }
         throw error;
       }
@@ -542,27 +529,31 @@ function setupInputFrom(fields: Readonly<Record<string, string>>) {
   };
 }
 
+interface EventDetailsPageState {
+  readonly status: number;
+  readonly submitted?: Readonly<Record<string, string>>;
+  readonly formError?: string;
+  readonly saved?: boolean;
+  readonly errors?: readonly SetupFieldError[];
+}
+
 function eventDetailsPage(
   options: AdminRouteOptions,
   season: Season,
-  status: number,
-  submitted?: Readonly<Record<string, string>>,
-  formError?: string,
-  saved = false,
-  errors: readonly SetupFieldError[] = [],
+  state: EventDetailsPageState,
 ): Response {
   return new Response(
     renderSetupPage({
       csrfToken: options.csrfTokenFor(ADMIN_EDIT_SEASON_PATH),
-      values: submitted ?? seasonValues(options.core, season),
-      errors,
+      values: state.submitted ?? seasonValues(options.core, season),
+      errors: state.errors ?? [],
       mode: "edit",
       seasonId: season.id,
       version: season.version,
-      formError,
-      saved,
+      formError: state.formError,
+      saved: state.saved,
     }),
-    { status, headers: adminHeaders() },
+    { status: state.status, headers: adminHeaders() },
   );
 }
 
@@ -574,8 +565,12 @@ function seasonValues(core: CoreRuntime, season: Season) {
     event_city: season.eventCity,
     event_state: season.eventState,
     timezone: season.timezone,
-    signup_opens_on: zonedDate(season.signupOpensAt, season.timezone),
-    signup_closes_on: zonedDate(season.signupClosesAt, season.timezone),
+    signup_opens_on: season.signupOpensAt
+      ? formatZonedDateInput(season.signupOpensAt, season.timezone)
+      : "",
+    signup_closes_on: season.signupClosesAt
+      ? formatZonedDateInput(season.signupClosesAt, season.timezone)
+      : "",
     locality_name: season.localityName ?? "",
     bounds_north: decimal(season.boundsNorth),
     bounds_south: decimal(season.boundsSouth),
@@ -594,19 +589,6 @@ function seasonValues(core: CoreRuntime, season: Season) {
     values[`slot_end_${index + 1}`] = zonedTime(slot.endsAt, season.timezone);
   });
   return values;
-}
-
-function zonedDate(value: Date | null, timezone: string): string {
-  if (!value) return "";
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: timezone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(value);
-  const part = (type: Intl.DateTimeFormatPartTypes) =>
-    parts.find((entry) => entry.type === type)?.value ?? "";
-  return `${part("year")}-${part("month")}-${part("day")}`;
 }
 
 function zonedTime(value: Date, timezone: string): string {
@@ -649,17 +631,6 @@ function formFieldFor(field: string): string {
     "bounds.west": "bounds_west",
   };
   return map[field] ?? field;
-}
-
-function redirect(location: string): Response {
-  return new Response(null, {
-    status: 303,
-    headers: {
-      ...adminHeaders(),
-      "content-type": "text/plain; charset=UTF-8",
-      location,
-    },
-  });
 }
 
 function setupRefusal(

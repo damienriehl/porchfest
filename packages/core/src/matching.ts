@@ -48,12 +48,11 @@ export interface RankedPairing {
   slot: MatchingSlot;
   venue: MatchingVenue;
   score: number;
-  isBestScoreTie?: boolean;
   reasons: SuggestionReason[];
   warnings: SuggestionReason[];
 }
 
-type RankedSuggestion = RankedPairing & { isBestScoreTie: boolean };
+export type RankedSuggestion = RankedPairing & { isBestScoreTie: boolean };
 
 function normalize(value: string): string {
   return value.toLocaleLowerCase("en").trim().replace(/\s+/g, " ");

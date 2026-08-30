@@ -8,6 +8,7 @@ import {
   HOST_SIGNUP_PATH,
   PERFORMER_SIGNUP_PATH,
 } from "../routes/signup-paths.js";
+import { seasonStateLabel } from "./season-labels.js";
 
 export type SignupValues = Readonly<Record<string, readonly string[]>>;
 
@@ -24,15 +25,6 @@ export const SIGNUP_AUDIENCE_LABELS = Object.freeze({
 } as const);
 
 export type SignupAudience = keyof typeof SIGNUP_AUDIENCE_LABELS;
-
-const SEASON_STATE_LABELS: Readonly<Record<Season["state"], string>> = {
-  setup: "Preparing the season",
-  signups_open: "Accepting signups",
-  signups_closed: "Signups closed",
-  assigning: "Building the schedule",
-  locked: "Schedule confirmed",
-  archived: "Season closed and archived",
-};
 
 const eventDateFormatter = new Intl.DateTimeFormat("en-US", {
   timeZone: "UTC",
@@ -177,7 +169,7 @@ export function renderSignupSeasonPage(options: {
         <div class="choices">${options.seasons
           .map(
             (season) =>
-              `<label class="choice"><input type="radio" name="season" value="${season.id}" required><span><strong>${escapeHtml(season.displayName)}</strong><br><span class="help">${escapeHtml(formatSeasonDate(season))} · ${escapeHtml(formatSeasonLocality(season))} · ${escapeHtml(SEASON_STATE_LABELS[season.state])}</span></span></label>`,
+              `<label class="choice"><input type="radio" name="season" value="${season.id}" required><span><strong>${escapeHtml(season.displayName)}</strong><br><span class="help">${escapeHtml(formatSeasonDate(season))} · ${escapeHtml(formatSeasonLocality(season))} · ${escapeHtml(seasonStateLabel(season.state))}</span></span></label>`,
           )
           .join("")}</div>
       </fieldset>
@@ -213,7 +205,7 @@ export function renderSelectedSeason(season: Season | null): string {
       <div class="submission-row"><dt>Name</dt><dd>${escapeHtml(season.displayName)}</dd></div>
       <div class="submission-row"><dt>Event date</dt><dd>${escapeHtml(formatSeasonDate(season))}</dd></div>
       <div class="submission-row"><dt>Locality</dt><dd>${escapeHtml(formatSeasonLocality(season))}</dd></div>
-      <div class="submission-row"><dt>Signup status</dt><dd>${escapeHtml(SEASON_STATE_LABELS[season.state])}</dd></div>
+      <div class="submission-row"><dt>Signup status</dt><dd>${escapeHtml(seasonStateLabel(season.state))}</dd></div>
     </dl>
   </section>`;
 }
@@ -389,7 +381,6 @@ export function renderField(options: {
   readonly max?: string;
   readonly step?: string;
   readonly audience?: SignupAudience;
-  readonly audienceField?: string;
 }): string {
   const error = options.errors.find(({ field }) => field === options.id);
   const describedBy = [
@@ -417,7 +408,7 @@ export function renderField(options: {
     .filter(Boolean)
     .join(" ");
   return `<div class="field ${error ? "has-error" : ""}">
-    <label for="${escapeHtml(options.id)}">${escapeHtml(options.label)}${options.required ? ' <span aria-hidden="true">*</span>' : ""}${renderAudienceLabel(options.audienceField ?? options.name ?? options.id, options.audience)}</label>
+    <label for="${escapeHtml(options.id)}">${escapeHtml(options.label)}${options.required ? ' <span aria-hidden="true">*</span>' : ""}${renderAudienceLabel(options.name ?? options.id, options.audience)}</label>
     ${renderFieldError(options.id, error)}
     <input ${attributes}>
     ${options.help ? `<p class="help" id="${options.id}-help">${escapeHtml(options.help)}</p>` : ""}
