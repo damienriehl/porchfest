@@ -105,6 +105,47 @@ await withTemporaryDirectory("porchfest-clean-image-", async (imageRoot) => {
 });
 
 await withTemporaryDirectory(
+  "porchfest-clean-synthetic-season-",
+  async (imageRoot) => {
+    const fixtureRoot = join(
+      imageRoot,
+      "packages",
+      "core",
+      "test",
+      "fixtures",
+      "season-synthetic",
+    );
+    await mkdir(fixtureRoot, { recursive: true });
+    await writeFile(
+      join(fixtureRoot, "synthetic.submissions.json"),
+      '{"email":"fixture@example.invalid"}\n',
+    );
+    await writeFile(
+      join(fixtureRoot, "slate.synthetic.json"),
+      '{"note":"synthetic only"}\n',
+    );
+    await writeFile(
+      join(fixtureRoot, "synthetic.geocache.json"),
+      '{"Synthetic Street":{"lat":10,"lng":20}}\n',
+    );
+
+    assert.deepEqual(await scanTree(imageRoot), []);
+  },
+);
+
+assert.deepEqual(
+  await scanTree(
+    fileURLToPath(
+      new URL(
+        "../packages/core/test/fixtures/season-synthetic/",
+        import.meta.url,
+      ),
+    ),
+  ),
+  [],
+);
+
+await withTemporaryDirectory(
   "porchfest-clean-working-nul-",
   async (repository) => {
     git(repository, "init", "--quiet");

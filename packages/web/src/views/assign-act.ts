@@ -23,6 +23,11 @@ export interface ActAssignmentPageOptions {
     readonly assignment: Assignment;
     readonly slot: Slot;
     readonly venue: Venue;
+    readonly continuations: readonly {
+      readonly assignment: Assignment;
+      readonly slot: Slot;
+      readonly venue: Venue;
+    }[];
   } | null;
   readonly links: readonly ActLink[];
   readonly linkedActs: readonly Act[];
@@ -45,6 +50,7 @@ export function renderAssignActPage(options: ActAssignmentPageOptions): string {
   const current = options.currentAssignment?.assignment;
   const currentSlot = options.currentAssignment?.slot;
   const currentVenue = options.currentAssignment?.venue;
+  const continuations = options.currentAssignment?.continuations ?? [];
   const notice = renderNotice(options, assignmentLegal);
 
   return renderOrganizerPage(
@@ -64,7 +70,7 @@ export function renderAssignActPage(options: ActAssignmentPageOptions): string {
       </dl>
     </section>
     <section aria-labelledby="current-assignment-title"><h2 id="current-assignment-title">Current assignment</h2>
-      ${current && currentSlot && currentVenue ? `<p><a href="/admin/venues/${currentVenue.id}/assign">${escapeHtml(currentVenue.title)}</a>, ${escapeHtml(formatZonedWindow(currentSlot, options.season.timezone))}</p>${assignmentLegal ? `<form class="signup-form compact-form" method="post" action="/admin/assignments/${current.id}/unassign"><input type="hidden" name="_csrf" value="${escapeHtml(options.csrf.unassign)}"><input type="hidden" name="version" value="${current.version}"><input type="hidden" name="return_to" value="act"><button class="secondary-action" type="submit">Unassign</button></form>` : ""}` : '<p class="help">Not assigned yet.</p>'}
+      ${current && currentSlot && currentVenue ? `<p><a href="/admin/venues/${currentVenue.id}/assign">${escapeHtml(currentVenue.title)}</a>, ${escapeHtml(formatZonedWindow(currentSlot, options.season.timezone))}</p>${continuations.map(({ slot, venue }) => `<p>Continues in <a href="/admin/venues/${venue.id}/assign">${escapeHtml(venue.title)}</a>, ${escapeHtml(formatZonedWindow(slot, options.season.timezone))}</p>`).join("")}${assignmentLegal ? `<form class="signup-form compact-form" method="post" action="/admin/assignments/${current.id}/unassign"><input type="hidden" name="_csrf" value="${escapeHtml(options.csrf.unassign)}"><input type="hidden" name="version" value="${current.version}"><input type="hidden" name="return_to" value="act"><button class="secondary-action" type="submit">Unassign</button></form>` : ""}` : '<p class="help">Not assigned yet.</p>'}
     </section>
     <section aria-labelledby="candidate-slots-title"><h2 id="candidate-slots-title">Ranked porch slots</h2>
       ${renderCandidateSummary(options, assignmentLegal, current !== undefined)}

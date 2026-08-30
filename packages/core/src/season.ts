@@ -325,6 +325,18 @@ export function createSeasonRepository(
     );
   }
 
+  function createManualContact(
+    input: Parameters<typeof records.createManualContact>[0],
+  ): Contact {
+    return db.transaction(
+      (tx) => {
+        assertCorrectionLegal(input.seasonId, tx);
+        return createRecordRepository(tx, options).createManualContact(input);
+      },
+      { behavior: "immediate" },
+    );
+  }
+
   function createPlaceholderAct(input: CreatePlaceholderActInput): Act {
     // Organizer-created records are corrections, not participant signups. Keep
     // the legality check and both contact/record writes in one immediate unit.
@@ -430,15 +442,43 @@ export function createSeasonRepository(
                   seasonId: assignments.seasonId,
                   actId: assignments.actId,
                   slotId: assignments.slotId,
+                  continuationOfAssignmentId:
+                    assignments.continuationOfAssignmentId,
                 })
                 .from(assignments)
                 .innerJoin(slots, eq(slots.id, assignments.slotId))
                 .where(eq(slots.venueId, id))
                 .all();
 
+        const pendingAssignments = new Map(
+          affected.map((assignment) => [assignment.id, assignment]),
+        );
+        while (pendingAssignments.size > 0) {
+          const parentAssignmentIds = new Set(
+            [...pendingAssignments.values()].flatMap((assignment) =>
+              assignment.continuationOfAssignmentId === null
+                ? []
+                : [assignment.continuationOfAssignmentId],
+            ),
+          );
+          const leafAssignments = [...pendingAssignments.values()].filter(
+            (candidate) => !parentAssignmentIds.has(candidate.id),
+          );
+          if (leafAssignments.length === 0) {
+            throw new SeasonLifecycleError(
+              "assignment continuation family contains a cycle",
+            );
+          }
+          for (const assignment of leafAssignments) {
+            tx.delete(assignments)
+              .where(eq(assignments.id, assignment.id))
+              .run();
+            pendingAssignments.delete(assignment.id);
+          }
+        }
+
         const reopenedSlotIds: number[] = [];
         for (const assignment of affected) {
-          tx.delete(assignments).where(eq(assignments.id, assignment.id)).run();
           tx.update(slots)
             .set({
               state: "open",
@@ -1300,7 +1340,10 @@ export function createSeasonRepository(
     slotId: number,
     expectedVersion: number,
     actId: number,
-    options: { sharedMemberOverride?: string | null } = {},
+    options: {
+      sharedMemberOverride?: string | null;
+      continuesAssignmentFromSlotId?: number;
+    } = {},
   ): Assignment {
     return db.transaction(
       (tx) => {
@@ -1378,6 +1421,7 @@ export function createSeasonRepository(
           (assignment) =>
             canonicalAssignmentActIds.get(assignment.id) === canonicalAct.id,
         );
+        let continuationOfAssignmentId: number | null = null;
         if (assignedConflict !== undefined) {
           const conflictingSlot = tx
             .select()
@@ -1390,10 +1434,18 @@ export function createSeasonRepository(
             );
           }
           const conflictingVenue = getVenue(conflictingSlot.venueId, tx);
-          throw new AssignmentConflictError(
-            "act_already_assigned",
-            `${canonicalRecord.name} are already assigned to ${conflictingVenue.title}, ${formatZonedWindow(conflictingSlot, season.timezone)}`,
-          );
+          const isAdjacentContinuation =
+            options.continuesAssignmentFromSlotId === conflictingSlot.id &&
+            conflictingSlot.venueId === slot.venueId &&
+            (conflictingSlot.endsAt.getTime() === slot.startsAt.getTime() ||
+              slot.endsAt.getTime() === conflictingSlot.startsAt.getTime());
+          if (!isAdjacentContinuation) {
+            throw new AssignmentConflictError(
+              "act_already_assigned",
+              `${canonicalRecord.name} are already assigned to ${conflictingVenue.title}, ${formatZonedWindow(conflictingSlot, season.timezone)}`,
+            );
+          }
+          continuationOfAssignmentId = assignedConflict.id;
         }
 
         const linkedCanonicalIds = new Set<number>();
@@ -1474,6 +1526,7 @@ export function createSeasonRepository(
             seasonId: slot.seasonId,
             actId: canonicalAct.id,
             slotId,
+            continuationOfAssignmentId,
             sharedMemberOverride: override.length === 0 ? null : override,
             createdAt: now(),
             updatedAt: now(),
@@ -1512,6 +1565,17 @@ export function createSeasonRepository(
       assertLegal(season, "correction");
       let canonicalActId: number | undefined;
       if (changes.actId !== undefined) {
+        const hasContinuation =
+          tx
+            .select({ id: assignments.id })
+            .from(assignments)
+            .where(eq(assignments.continuationOfAssignmentId, assignment.id))
+            .get() !== undefined;
+        if (assignment.continuationOfAssignmentId !== null || hasContinuation) {
+          throw new SeasonLifecycleError(
+            `assignment ${assignmentId} belongs to a continuation family; correct the family together`,
+          );
+        }
         const act = tx
           .select()
           .from(acts)
@@ -1611,6 +1675,43 @@ export function createSeasonRepository(
           throw new SeasonLifecycleError(
             `slot ${assignment.slotId} does not exist`,
           );
+        }
+        const continuations = tx
+          .select()
+          .from(assignments)
+          .where(eq(assignments.continuationOfAssignmentId, assignment.id))
+          .all();
+        for (const continuation of continuations) {
+          const continuationSlot = tx
+            .select()
+            .from(slots)
+            .where(eq(slots.id, continuation.slotId))
+            .get();
+          if (!continuationSlot) {
+            throw new SeasonLifecycleError(
+              `slot ${continuation.slotId} does not exist`,
+            );
+          }
+          tx.delete(assignments)
+            .where(eq(assignments.id, continuation.id))
+            .run();
+          const continuationReopened = tx
+            .update(slots)
+            .set({
+              state: "open",
+              version: sql`${slots.version} + 1`,
+              updatedAt: now(),
+            })
+            .where(
+              and(
+                eq(slots.id, continuationSlot.id),
+                eq(slots.version, continuationSlot.version),
+              ),
+            )
+            .run();
+          if (continuationReopened.changes !== 1) {
+            conflict("slot", continuationSlot.id, ["state"]);
+          }
         }
         const deleted = tx
           .delete(assignments)
@@ -1801,12 +1902,14 @@ export function createSeasonRepository(
     getSeason,
     getAct,
     getVenue,
+    getContact,
     getSlot,
     getAssignment,
     getActLink,
     setRecordStatus,
     createHostSignup,
     createPerformerSignup,
+    createManualContact,
     createPlaceholderAct,
     createPlaceholderVenue,
     updateAct,
@@ -1817,6 +1920,9 @@ export function createSeasonRepository(
     supersedeAct,
     supersedeVenue,
     supersedeContact,
+    resolveAct: records.resolveAct,
+    resolveVenue: records.resolveVenue,
+    resolveContact: records.resolveContact,
     transitionSeason,
     publishSeasonMap,
     unpublishSeasonMap,

@@ -7,6 +7,7 @@ import type {
 } from "../src/ports/index.js";
 import { formatZonedWindow } from "../src/matching.js";
 import {
+  buildActSchedule,
   createOutboxRepository,
   OutboxLifecycleError,
   type OutboxRepository,
@@ -598,6 +599,54 @@ describe("outbox", () => {
     );
     expect(contactOrder.every((position) => position >= 0)).toBe(true);
     expect([...contactOrder].sort((a, b) => a - b)).toEqual(contactOrder);
+  });
+
+  it("renders every ordered continuation window in an act schedule", () => {
+    const venue = venueIds.get("oak")!;
+    const slots = seasons.listVenueSlots(venue.id);
+    const act = actIds.get("floating")!;
+    const first = seasons.assignSlot(slots[0]!.id, slots[0]!.version, act.id);
+    const single = buildActSchedule(
+      {
+        assignments: seasons.listAssignments(season.id),
+        slotsById: new Map(slots.map((slot) => [slot.id, slot])),
+        venues: [venue],
+      },
+      act.id,
+      "Sorrel and the Vanes",
+      fixture.season.timezone,
+    );
+    const firstWindow = formatZonedWindow(slots[0]!, fixture.season.timezone);
+    expect(single.slotLines).toBe(`- ${firstWindow} — Sorrel and the Vanes`);
+    expect(single.slotSummary).toBe(firstWindow);
+
+    const continuation = seasons.assignSlot(
+      slots[1]!.id,
+      slots[1]!.version,
+      act.id,
+      {
+        continuesAssignmentFromSlotId: slots[0]!.id,
+      },
+    );
+    const continued = buildActSchedule(
+      {
+        assignments: seasons.listAssignments(season.id),
+        slotsById: new Map(slots.map((slot) => [slot.id, slot])),
+        venues: [venue],
+      },
+      act.id,
+      "Sorrel and the Vanes",
+      fixture.season.timezone,
+    );
+    const secondWindow = formatZonedWindow(slots[1]!, fixture.season.timezone);
+    expect(continued.bookings.map(({ assignment }) => assignment.id)).toEqual([
+      first.id,
+      continuation.id,
+    ]);
+    expect(continued.slotLines).toBe(
+      `- ${firstWindow} — Sorrel and the Vanes\n- ${secondWindow} — Sorrel and the Vanes`,
+    );
+    expect(continued.slotSummary).toBe(`${firstWindow}, ${secondWindow}`);
   });
 
   it("regenerates byte-identical messages from unchanged data", () => {

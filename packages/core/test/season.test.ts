@@ -188,6 +188,121 @@ describe("season domain", () => {
     );
   });
 
+  it("marks an adjacent second assignment as a continuation of the first", () => {
+    const season = insertSeason(2105, "assigning");
+    const venueId = insertVenue(season.id, "Continuation Porch");
+    const firstSlot = insertSlot(season.id, venueId);
+    const secondSlot = insertSlot(season.id, venueId, 1);
+    const actId = insertAct(season.id, "Continuing Act");
+    const first = seasonRepository.assignSlot(
+      firstSlot.id,
+      firstSlot.version,
+      actId,
+    );
+
+    const continuation = seasonRepository.assignSlot(
+      secondSlot.id,
+      secondSlot.version,
+      actId,
+      { continuesAssignmentFromSlotId: firstSlot.id },
+    );
+
+    expect(first.continuationOfAssignmentId).toBeNull();
+    expect(continuation.continuationOfAssignmentId).toBe(first.id);
+
+    seasonRepository.unassignSlot(first.id, first.version);
+    expect(seasonRepository.listAssignments(season.id)).toEqual([]);
+    expect(seasonRepository.getSlot(firstSlot.id).state).toBe("open");
+    expect(seasonRepository.getSlot(secondSlot.id).state).toBe("open");
+  });
+
+  it("withdraws a continued act by deleting the child first and reopening every slot", () => {
+    const season = insertSeason(2105, "assigning");
+    const venueId = insertVenue(season.id, "Act Withdrawal Porch");
+    const firstSlot = insertSlot(season.id, venueId);
+    const secondSlot = insertSlot(season.id, venueId, 1);
+    const act = insertVersionedAct(season.id, "Continued Withdrawal Act");
+    const first = seasonRepository.assignSlot(
+      firstSlot.id,
+      firstSlot.version,
+      act.id,
+    );
+    seasonRepository.assignSlot(secondSlot.id, secondSlot.version, act.id, {
+      continuesAssignmentFromSlotId: firstSlot.id,
+    });
+
+    const result = seasonRepository.setRecordStatus(
+      "act",
+      act.id,
+      act.version,
+      "withdrawn",
+    );
+
+    expect(result.reopenedSlotIds).toEqual([firstSlot.id, secondSlot.id]);
+    expect(seasonRepository.listAssignments(season.id)).toEqual([]);
+    expect(seasonRepository.getSlot(first.slotId).state).toBe("open");
+    expect(seasonRepository.getSlot(secondSlot.id).state).toBe("open");
+  });
+
+  it("withdraws a venue with a continued act and reopens every slot", () => {
+    const season = insertSeason(2105, "assigning");
+    const venue = insertVersionedVenue(season.id, "Venue Withdrawal Porch");
+    const firstSlot = insertSlot(season.id, venue.id);
+    const secondSlot = insertSlot(season.id, venue.id, 1);
+    const actId = insertAct(season.id, "Venue Withdrawal Act");
+    seasonRepository.assignSlot(firstSlot.id, firstSlot.version, actId);
+    seasonRepository.assignSlot(secondSlot.id, secondSlot.version, actId, {
+      continuesAssignmentFromSlotId: firstSlot.id,
+    });
+
+    const result = seasonRepository.setRecordStatus(
+      "venue",
+      venue.id,
+      venue.version,
+      "withdrawn",
+    );
+
+    expect(result.reopenedSlotIds).toEqual([firstSlot.id, secondSlot.id]);
+    expect(seasonRepository.listAssignments(season.id)).toEqual([]);
+    expect(seasonRepository.getSlot(firstSlot.id).state).toBe("open");
+    expect(seasonRepository.getSlot(secondSlot.id).state).toBe("open");
+  });
+
+  it("refuses act corrections for continuation roots and children", () => {
+    const season = insertSeason(2105, "assigning");
+    const venueId = insertVenue(season.id, "Correction Family Porch");
+    const firstSlot = insertSlot(season.id, venueId);
+    const secondSlot = insertSlot(season.id, venueId, 1);
+    const actId = insertAct(season.id, "Continued Correction Act");
+    const replacementId = insertAct(season.id, "Replacement Correction Act");
+    const root = seasonRepository.assignSlot(
+      firstSlot.id,
+      firstSlot.version,
+      actId,
+    );
+    const child = seasonRepository.assignSlot(
+      secondSlot.id,
+      secondSlot.version,
+      actId,
+      { continuesAssignmentFromSlotId: firstSlot.id },
+    );
+
+    expect(() =>
+      seasonRepository.correctAssignment(root.id, root.version, {
+        actId: replacementId,
+      }),
+    ).toThrowError(/continuation family/);
+    expect(() =>
+      seasonRepository.correctAssignment(child.id, child.version, {
+        actId: replacementId,
+      }),
+    ).toThrowError(/continuation family/);
+    expect(seasonRepository.listAssignments(season.id)).toMatchObject([
+      { id: root.id, actId },
+      { id: child.id, actId, continuationOfAssignmentId: root.id },
+    ]);
+  });
+
   it("refuses to assign a withdrawn act by name", () => {
     const season = insertSeason(2105, "assigning");
     const venueId = insertVenue(season.id, "Withdrawal Porch");

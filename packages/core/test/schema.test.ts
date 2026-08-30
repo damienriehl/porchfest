@@ -81,6 +81,67 @@ describe("core schema migration", () => {
     );
   });
 
+  it("adds KTD13 season-scoped natural import keys in migration 0016", async () => {
+    const migration = await readFile(
+      new URL("../drizzle/0016_right_microbe.sql", import.meta.url),
+      "utf8",
+    );
+    expect(migration).toContain("CREATE TABLE `import_keys`");
+    expect(migration).toContain(
+      "CREATE UNIQUE INDEX `import_keys_season_source_natural_key_uidx`",
+    );
+
+    const columns = sqlite
+      .prepare(
+        "select name from pragma_table_info('import_keys') order by name",
+      )
+      .all()
+      .map((row) => (row as { name: string }).name);
+    expect(columns).toEqual([
+      "created_at",
+      "id",
+      "natural_key",
+      "record_id",
+      "record_type",
+      "season_id",
+      "source",
+      "updated_at",
+      "version",
+    ]);
+  });
+
+  it("marks continuation assignments in migration 0017", async () => {
+    const migration = await readFile(
+      new URL("../drizzle/0017_far_havok.sql", import.meta.url),
+      "utf8",
+    );
+    expect(migration).toContain(
+      "ALTER TABLE `assignments` ADD `continuation_of_assignment_id` integer REFERENCES assignments(id)",
+    );
+    expect(migration).toContain(
+      "CREATE INDEX `assignments_continuation_of_assignment_id_idx`",
+    );
+
+    const columns = sqlite
+      .prepare(
+        "select name from pragma_table_info('assignments') order by name",
+      )
+      .all()
+      .map((row) => (row as { name: string }).name);
+    expect(columns).toContain("continuation_of_assignment_id");
+    expect(
+      sqlite
+        .prepare(
+          "select `table`, `from`, `to` from pragma_foreign_key_list('assignments')",
+        )
+        .all(),
+    ).toContainEqual({
+      table: "assignments",
+      from: "continuation_of_assignment_id",
+      to: "id",
+    });
+  });
+
   it("upgrades complete and partial 0013 coordinates into explicit provenance", () => {
     const upgrade = new Database(":memory:");
     upgrade.pragma("foreign_keys = ON");

@@ -6,6 +6,10 @@ import type {
   LocateRequest,
 } from "../src/ports/geo.js";
 import { createGeocodingRepository } from "../src/geocoding.js";
+import {
+  EARTH_RADIUS_METERS,
+  haversineDistanceMeters,
+} from "../src/geo-verify.js";
 import { createSeasonRepository } from "../src/season.js";
 import { createSeasonSetup } from "../src/setup.js";
 import { organizers, venueCoordinates } from "../src/storage/schema.js";
@@ -15,6 +19,10 @@ import { openTestDatabase, type TestDatabase } from "./support/db.js";
 const BOX = { north: 11, south: 10, east: 21, west: 20 } as const;
 const NOW = new Date("2034-05-01T12:00:00.000Z");
 const ADDRESS = "101 Nebula Avenue";
+
+function latitudeOffsetMeters(latitude: number, meters: number): number {
+  return latitude + (meters / EARTH_RADIUS_METERS) * (180 / Math.PI);
+}
 
 function located(
   overrides: Partial<
@@ -290,6 +298,91 @@ describe("core venue geocoding (U9 / KTD11)", () => {
       status: rejectionCode === null ? "verified" : "needs-review",
       rejectionCode,
     });
+  });
+
+  it("treats an exact 30 m cross-check as verified in live and imported paths", async () => {
+    const live = fixture();
+    const crossCheckLatitude = latitudeOffsetMeters(10.5, 30);
+    expect(
+      haversineDistanceMeters(
+        { latitude: 10.5, longitude: 20.5 },
+        { latitude: crossCheckLatitude, longitude: 20.5 },
+      ),
+    ).toBeCloseTo(30, 8);
+    fake.locate.mockResolvedValue(
+      located({}, { latitude: crossCheckLatitude, longitude: 20.5 }),
+    );
+
+    await geocoding().geocodeVenue(live.venue.id, actor);
+
+    expect(stored(live.venue.id)).toMatchObject({
+      crossCheckDistanceM: expect.closeTo(30, 8),
+      status: "verified",
+      rejectionCode: null,
+    });
+
+    const imported = fixture(2035);
+    const result = geocoding().importGeocodedCoordinate(imported.venue.id, {
+      latitude: 10.5,
+      longitude: 20.5,
+      provider: "synthetic-import",
+      ref: "synthetic/ref/exact-boundary",
+      crossCheckDistanceM: 30,
+      precision: "parcel",
+      interpolated: false,
+    });
+
+    expect(result).toMatchObject({
+      kind: "stored",
+      coordinate: {
+        crossCheckDistanceM: 30,
+        status: "verified",
+        rejectionCode: null,
+      },
+    });
+  });
+
+  it("keeps an imported negative cross-check distance out of published coordinates", () => {
+    const { venue } = fixture();
+
+    const result = geocoding().importGeocodedCoordinate(venue.id, {
+      latitude: 10.5,
+      longitude: 20.5,
+      provider: "synthetic-import",
+      ref: "synthetic/ref/negative-distance",
+      crossCheckDistanceM: -1,
+      precision: "parcel",
+      interpolated: false,
+    });
+
+    expect(result).toMatchObject({
+      kind: "stored",
+      coordinate: {
+        crossCheckDistanceM: -1,
+        status: "needs-review",
+        rejectionCode: "cross-check-distance",
+      },
+    });
+    expect(geocoding().publishableCoordinate(venue.id)).toBeNull();
+  });
+
+  it("preserves and reports an existing verified live coordinate during import", async () => {
+    const { venue } = fixture();
+    await geocoding().geocodeVenue(venue.id, actor);
+    const before = stored(venue.id)!;
+
+    const result = geocoding().importGeocodedCoordinate(venue.id, {
+      latitude: 10.7,
+      longitude: 20.7,
+      provider: "synthetic-import",
+      ref: "synthetic/ref/replacement",
+      crossCheckDistanceM: 1,
+      precision: "parcel",
+      interpolated: false,
+    });
+
+    expect(result).toEqual({ kind: "preserved", coordinate: before });
+    expect(stored(venue.id)).toEqual(before);
   });
 
   it("interpolated candidate -> needs-review, never verified", async () => {

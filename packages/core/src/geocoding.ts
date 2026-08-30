@@ -5,12 +5,19 @@ import {
   verifyGeocodedCoordinate,
   verifyOrganizerCoordinate,
 } from "./geo-verify.js";
-import type { Coordinates, GeoPort, LocateOutcome } from "./ports/geo.js";
+import type {
+  BoundingBox,
+  Coordinates,
+  GeoPort,
+  LocateCandidate,
+  LocateOutcome,
+} from "./ports/geo.js";
 import {
   seasons,
   venueCoordinates,
   venues,
   type CoordinateRejectionCode,
+  type CoordinatePrecision,
   type CoordinateStatus,
   type Season,
   type VenueCoordinate,
@@ -54,6 +61,23 @@ export interface VenueCoordinateReview {
   readonly address: string | null;
   readonly status: Exclude<CoordinateStatus, "verified">;
   readonly rejectionCode: CoordinateRejectionCode | null;
+  readonly coordinate: VenueCoordinate;
+}
+
+export interface ImportedGeocodedCoordinateInput {
+  readonly latitude: number;
+  readonly longitude: number;
+  /** Goal-1 provider/source label retained verbatim as provenance. */
+  readonly provider: string;
+  readonly ref: string;
+  readonly crossCheckDistanceM: number | null;
+  readonly precision: CoordinatePrecision;
+  readonly interpolated: boolean;
+  readonly forcedRejectionCode?: CoordinateRejectionCode;
+}
+
+export interface ImportedGeocodedCoordinateResult {
+  readonly kind: "stored" | "preserved";
   readonly coordinate: VenueCoordinate;
 }
 
@@ -270,6 +294,91 @@ export function createGeocodingRepository(
     );
   }
 
+  /**
+   * R29's offline import seam. It stores no provider response until the same
+   * structural, precision, interpolation, and season-box gate used by live
+   * geocoding has rendered a verdict. Rejected-but-structurally-valid points
+   * remain visible as needs-review evidence instead of disappearing.
+   */
+  function importGeocodedCoordinate(
+    venueId: number,
+    input: ImportedGeocodedCoordinateInput,
+  ): ImportedGeocodedCoordinateResult {
+    const context = venueContext(db, venueId);
+    const address = normalizeVenueAddress(context.address);
+    if (address.length === 0) {
+      throw new GeocodingLifecycleError(
+        `Venue ${venueId} has no address for imported coordinate provenance.`,
+      );
+    }
+    const boundingBox = seasonBoundingBox(context);
+    if (boundingBox === null) {
+      throw new GeocodingLifecycleError(
+        `${context.seasonName} has no complete geocoding bounding box.`,
+      );
+    }
+    const provider = input.provider.trim();
+    if (provider.length === 0) {
+      throw new GeocodingLifecycleError(
+        "An imported coordinate requires a provider/source label.",
+      );
+    }
+    const valid = isValidCoordinate(input);
+    const storedLatitude = valid ? input.latitude : null;
+    const storedLongitude = valid ? input.longitude : null;
+    const storedRef = input.ref.trim() || null;
+    const existing = coordinateForVenue(db, venueId);
+    if (existing?.status === "verified") {
+      return { kind: "preserved", coordinate: existing };
+    }
+    if (
+      existing?.source === "geocoded" &&
+      existing.latitude === storedLatitude &&
+      existing.longitude === storedLongitude &&
+      existing.precision === input.precision &&
+      existing.provider === provider &&
+      existing.ref === storedRef &&
+      existing.crossCheckDistanceM === input.crossCheckDistanceM &&
+      existing.addressAtGeocode === address
+    ) {
+      return { kind: "stored", coordinate: existing };
+    }
+
+    const candidate: LocateCandidate = {
+      latitude: input.latitude,
+      longitude: input.longitude,
+      ref: input.ref,
+      precision: input.precision,
+      interpolated: input.interpolated,
+    };
+    const rejectionCode =
+      input.forcedRejectionCode ??
+      coordinateRejectionCode({
+        candidate,
+        boundingBox,
+        crossCheck: null,
+        suppliedCrossCheckDistanceM: input.crossCheckDistanceM,
+      });
+    return {
+      kind: "stored",
+      coordinate: upsertCoordinate(db, {
+        venueId,
+        latitude: storedLatitude,
+        longitude: storedLongitude,
+        source: "geocoded",
+        precision: input.precision,
+        provider,
+        ref: storedRef,
+        crossCheckDistanceM: input.crossCheckDistanceM,
+        status: rejectionCode === null ? "verified" : "needs-review",
+        rejectionCode,
+        addressAtGeocode: address,
+        updatedAt: now(),
+        updatedBy: null,
+      }),
+    };
+  }
+
   function listVenuesNeedingCoordinateReview(
     seasonId: number,
   ): VenueCoordinateReview[] {
@@ -353,6 +462,7 @@ export function createGeocodingRepository(
 
   return Object.freeze({
     geocodeVenue,
+    importGeocodedCoordinate,
     verifyVenueCoordinate,
     listVenuesNeedingCoordinateReview,
     publishableCoordinate,
@@ -455,23 +565,14 @@ function storeOutcome(
     });
   }
 
-  const verdict = verifyGeocodedCoordinate(outcome.candidate, {
-    boundingBox,
-    crossCheck: outcome.crossCheck,
-  });
   const distance = crossCheckDistance(outcome);
   const validCandidate = isValidCoordinate(outcome.candidate);
-  let rejectionCode: CoordinateRejectionCode | null =
-    verdict.status === "rejected" ? verdict.code : null;
-  if (
-    rejectionCode === null &&
-    (outcome.candidate.precision === "parcel" ||
-      outcome.candidate.precision === "house") &&
-    distance !== null &&
-    distance > MAX_CROSS_CHECK_DISTANCE_M
-  ) {
-    rejectionCode = "cross-check-distance";
-  }
+  const rejectionCode = coordinateRejectionCode({
+    candidate: outcome.candidate,
+    boundingBox,
+    crossCheck: outcome.crossCheck,
+    suppliedCrossCheckDistanceM: distance,
+  });
 
   return upsertCoordinate(db, {
     venueId,
@@ -488,6 +589,45 @@ function storeOutcome(
     updatedAt,
     updatedBy: actor,
   });
+}
+
+interface CoordinateGateInput {
+  readonly candidate: LocateCandidate;
+  readonly boundingBox: BoundingBox;
+  readonly crossCheck: Coordinates | null;
+  readonly suppliedCrossCheckDistanceM: number | null;
+}
+
+function coordinateRejectionCode(
+  input: CoordinateGateInput,
+): CoordinateRejectionCode | null {
+  if (
+    input.suppliedCrossCheckDistanceM !== null &&
+    (!Number.isFinite(input.suppliedCrossCheckDistanceM) ||
+      input.suppliedCrossCheckDistanceM < 0)
+  ) {
+    return "cross-check-distance";
+  }
+  const corroboratingPoint =
+    input.crossCheck ??
+    (input.suppliedCrossCheckDistanceM !== null
+      ? {
+          latitude: input.candidate.latitude,
+          longitude: input.candidate.longitude,
+        }
+      : null);
+  const verdict = verifyGeocodedCoordinate(input.candidate, {
+    boundingBox: input.boundingBox,
+    crossCheck: corroboratingPoint,
+  });
+  if (verdict.status === "rejected") return verdict.code;
+  if (
+    input.suppliedCrossCheckDistanceM !== null &&
+    input.suppliedCrossCheckDistanceM > MAX_CROSS_CHECK_DISTANCE_M
+  ) {
+    return "cross-check-distance";
+  }
+  return null;
 }
 
 function crossCheckDistance(

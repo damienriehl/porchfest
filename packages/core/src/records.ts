@@ -45,6 +45,7 @@ export type ActChanges = Partial<
     | "housePreference"
     | "sharedMemberNote"
     | "canLendGear"
+    | "notes"
     | "placeholder"
     | "reachViaContactId"
   >
@@ -118,6 +119,11 @@ export interface ManualPlaceholderContactInput {
   name: string;
   email: string;
   phone?: string | null;
+}
+
+export interface CreateManualContactInput {
+  seasonId: number;
+  contact: ManualPlaceholderContactInput;
 }
 
 // R26 stores both reachability choices through the contact graph. A manual
@@ -409,6 +415,13 @@ export function createRecordRepository(
       .returning()
       .get();
     return contact.id;
+  }
+
+  function createManualContact(input: CreateManualContactInput): Contact {
+    const contactId = createPlaceholderReachContact(db, input.seasonId, {
+      contact: input.contact,
+    });
+    return db.select().from(contacts).where(eq(contacts.id, contactId)).get()!;
   }
 
   /** R26 creates the organizer's canonical shell before a participant filing
@@ -1321,6 +1334,7 @@ export function createRecordRepository(
   return Object.freeze({
     createHostSignup,
     createPerformerSignup,
+    createManualContact,
     createPlaceholderAct,
     createPlaceholderVenue,
     updateAct,

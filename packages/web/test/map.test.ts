@@ -386,6 +386,60 @@ describe("public map page and data (U9)", () => {
     });
   });
 
+  it("emits both slots for an act with a marked continuation assignment", async () => {
+    const runtime = await boot();
+    const season = createSeason(runtime);
+    const signup = createVenue(
+      runtime,
+      season.id,
+      "Continuation Porch",
+      "105 Aurora Way",
+      "continuation",
+    );
+    const performer = createAct(
+      runtime,
+      season.id,
+      "Continuing Map Act",
+      "continuation",
+    );
+    const slots = runtime.core.seasons.ensureVenueSlots(signup.venue.id);
+    runtime.core.seasons.assignSlot(
+      slots[0]!.id,
+      slots[0]!.version,
+      performer.act.id,
+    );
+    runtime.core.seasons.assignSlot(
+      slots[1]!.id,
+      slots[1]!.version,
+      performer.act.id,
+      { continuesAssignmentFromSlotId: slots[0]!.id },
+    );
+    runtime.core.geocoding.verifyVenueCoordinate(
+      signup.venue.id,
+      { latitude: 10.5, longitude: 20.5 },
+      null,
+      signup.venue.version,
+    );
+    const locked = runtime.core.seasons.transitionSeason(
+      season.id,
+      runtime.core.seasons.getSeason(season.id).version,
+      "locked",
+    );
+    runtime.core.seasons.publishSeasonMap(locked.id, locked.version, {
+      eventCity: locked.eventCity,
+      eventState: locked.eventState,
+    });
+
+    const { document } = await mapDocument(runtime);
+    const acts = document.venues[0]?.acts ?? [];
+
+    expect(acts.map(({ name }) => name)).toEqual([
+      "Continuing Map Act",
+      "Continuing Map Act",
+    ]);
+    expect(acts.map(({ slot }) => slot)).toEqual(["1", "2"]);
+  });
+
   it("orders entered time-slot rows by clock while preserving stable slot ids", async () => {
     const runtime = await boot();
     assignedScheduleFixture(runtime, {

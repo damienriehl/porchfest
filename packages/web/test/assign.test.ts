@@ -277,6 +277,30 @@ describe("organizer assignment screens", () => {
     );
   });
 
+  it("shows an act's marked continuation slot in the admin listing", async () => {
+    const { runtime, cookie, maple, cats } = await boot();
+    const slots = runtime.core.seasons.ensureVenueSlots(maple.venue.id);
+    const first = runtime.core.seasons.assignSlot(
+      slots[0]!.id,
+      slots[0]!.version,
+      cats.act.id,
+    );
+    runtime.core.seasons.assignSlot(
+      slots[1]!.id,
+      slots[1]!.version,
+      cats.act.id,
+      { continuesAssignmentFromSlotId: slots[0]!.id },
+    );
+
+    const html = await (
+      await get(runtime, `/admin/acts/${cats.act.id}/assign`, cookie)
+    ).text();
+
+    expect(first.continuationOfAssignmentId).toBeNull();
+    expect(html).toContain("Continues in");
+    expect(html).toContain("7:00–8:00 PM");
+  });
+
   it("assigns and unassigns, and names duplicate-act and filled-slot conflicts", async () => {
     const { runtime, cookie, maple, oak, cats, acoustic } = await boot();
     const mapleSlot = slotFor(runtime, maple.venue.id);

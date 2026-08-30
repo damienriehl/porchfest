@@ -264,6 +264,67 @@ interface SeasonSource {
   readonly amenitiesByVenue: ReadonlyMap<number, readonly string[]>;
 }
 
+interface ActScheduleSource {
+  readonly assignments: readonly Assignment[];
+  readonly slotsById: ReadonlyMap<number, Slot>;
+  readonly venues: readonly Venue[];
+}
+
+interface ActSchedule {
+  readonly bookings: readonly {
+    readonly assignment: Assignment;
+    readonly slot: Slot;
+    readonly venue: Venue;
+  }[];
+  readonly slotLines: string;
+  readonly slotSummary: string;
+}
+
+/** @internal Kept exported so schedule coverage has a focused regression seam. */
+export function buildActSchedule(
+  source: ActScheduleSource,
+  actId: number,
+  actName: string,
+  timezone: string,
+): ActSchedule {
+  const bookings: {
+    assignment: Assignment;
+    slot: Slot;
+    venue: Venue;
+  }[] = [];
+  for (const assignment of source.assignments) {
+    if (assignment.actId !== actId) continue;
+    const slot = source.slotsById.get(assignment.slotId);
+    if (!slot) continue;
+    const venue = source.venues.find(
+      (candidate) => candidate.id === slot.venueId,
+    );
+    if (!venue) continue;
+    bookings.push({ assignment, slot, venue });
+  }
+  bookings.sort(
+    (left, right) =>
+      left.slot.startsAt.getTime() - right.slot.startsAt.getTime() ||
+      left.slot.id - right.slot.id,
+  );
+
+  const windows = bookings.map(({ slot }) => formatZonedWindow(slot, timezone));
+  return {
+    bookings,
+    slotLines:
+      bookings.length === 0
+        ? "- Not scheduled yet."
+        : bookings
+            .map(
+              ({ slot }) =>
+                `- ${formatZonedWindow(slot, timezone)} — ${actName}`,
+            )
+            .join("\n"),
+    slotSummary:
+      windows.length === 0 ? "time to be confirmed" : windows.join(", "),
+  };
+}
+
 type Target =
   | { readonly recordType: "venue"; readonly record: Venue }
   | { readonly recordType: "act"; readonly record: Act };
@@ -448,23 +509,6 @@ export function createOutboxRepository(
     );
   }
 
-  function actAssignment(
-    source: SeasonSource,
-    actId: number,
-  ): { slot: Slot; venue: Venue } | null {
-    for (const assignment of source.assignments) {
-      if (assignment.actId !== actId) continue;
-      const slot = source.slotsById.get(assignment.slotId);
-      if (!slot) continue;
-      const venue = source.venues.find(
-        (candidate) => candidate.id === slot.venueId,
-      );
-      if (!venue) continue;
-      return { slot, venue };
-    }
-    return null;
-  }
-
   function contactLine(contact: Contact): string {
     const parts = [contact.name, contact.email ?? "(no email on file)"];
     if (contact.phone) parts.push(contact.phone);
@@ -624,7 +668,13 @@ export function createOutboxRepository(
   ): { context: RenderContext; contacts: Contact[] } {
     const contact = canonicalContact(source, act.reachViaContactId);
     const recipients = contact === null ? [] : [contact];
-    const booked = actAssignment(source, act.id);
+    const schedule = buildActSchedule(
+      source,
+      act.id,
+      act.name,
+      source.season.timezone,
+    );
+    const booked = schedule.bookings[0] ?? null;
     const status: string[] = [];
     if (act.housePreference?.trim()) {
       status.push(`- You asked for: ${act.housePreference.trim()}`);
@@ -660,14 +710,8 @@ export function createOutboxRepository(
           greetingNames.length === 0 ? "there" : joinNames(greetingNames),
         participation_line: `${act.name} were one of the acts that made it happen.`,
         band_name: act.name,
-        slot_lines:
-          booked === null
-            ? "- Not scheduled yet."
-            : `- ${formatZonedWindow(booked.slot, source.season.timezone)} — ${act.name}`,
-        slot_summary:
-          booked === null
-            ? "time to be confirmed"
-            : formatZonedWindow(booked.slot, source.season.timezone),
+        slot_lines: schedule.slotLines,
+        slot_summary: schedule.slotSummary,
         contact_lines:
           recipients.length === 0
             ? "- No contact on file yet."
