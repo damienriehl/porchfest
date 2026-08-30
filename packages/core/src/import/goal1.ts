@@ -1002,10 +1002,14 @@ function importVenueSlate(state: ImportState, matches: JsonObject): void {
         continue;
       }
       if ("same_as" in configuration) {
-        const sameAs = requiredString(
-          configuration.same_as,
-          `${entryId} ${slotLabel} same_as`,
-        );
+        const sameAs = optionalString(configuration.same_as);
+        if (!sameAs) {
+          state.report.warnings.push(
+            `Malformed same_as assignment: ${entryId} ${slotLabel}`,
+          );
+          increment(state.report, "assignment", "skipped");
+          continue;
+        }
         addAnnotation(
           state,
           "venue",
@@ -1152,10 +1156,14 @@ function importVenueSlate(state: ImportState, matches: JsonObject): void {
         `${entryId} ${slotLabel} slot`,
       );
       if (!("same_as" in configuration)) continue;
-      const sameAs = requiredString(
-        configuration.same_as,
-        `${entryId} ${slotLabel} same_as`,
-      );
+      const sameAs = optionalString(configuration.same_as);
+      if (!sameAs) {
+        state.report.warnings.push(
+          `Malformed same_as assignment: ${entryId} ${slotLabel}`,
+        );
+        increment(state.report, "assignment", "skipped");
+        continue;
+      }
       const assignmentNaturalKey = `${natural}:${slotLabel}`;
       const existingAssignment = findImportKey(
         state,
@@ -1284,7 +1292,8 @@ function applySlotCancellations(state: ImportState, matches: JsonObject): void {
       for (const [partnerLabel, rawPartner] of Object.entries(
         configuredSlots,
       )) {
-        const partner = object(rawPartner, `${entryId} ${partnerLabel} slot`);
+        const partner = optionalObject(rawPartner);
+        if (!partner) continue;
         if (optionalString(partner.same_as) === slotLabel) {
           partnerLabels.add(partnerLabel);
         }
@@ -1398,10 +1407,8 @@ function slotFamilyIsCanceled(
   configuredSlots: JsonObject,
   slotLabel: string,
 ): boolean {
-  const configuration = object(
-    configuredSlots[slotLabel],
-    `${slotLabel} cancellation lookup`,
-  );
+  const configuration = optionalObject(configuredSlots[slotLabel]);
+  if (!configuration) return false;
   if (
     configuration.canceled !== undefined &&
     configuration.canceled !== false
@@ -1410,16 +1417,16 @@ function slotFamilyIsCanceled(
   }
   const sourceLabel = optionalString(configuration.same_as);
   if (sourceLabel) {
-    const source = object(
-      configuredSlots[sourceLabel],
-      `${sourceLabel} cancellation source`,
-    );
-    if (source.canceled !== undefined && source.canceled !== false) return true;
+    const source = optionalObject(configuredSlots[sourceLabel]);
+    if (source && source.canceled !== undefined && source.canceled !== false) {
+      return true;
+    }
   }
   return Object.entries(configuredSlots).some(([partnerLabel, rawPartner]) => {
     if (partnerLabel === slotLabel) return false;
-    const partner = object(rawPartner, `${partnerLabel} cancellation partner`);
+    const partner = optionalObject(rawPartner);
     return (
+      partner !== null &&
       optionalString(partner.same_as) === slotLabel &&
       partner.canceled !== undefined &&
       partner.canceled !== false
@@ -1472,7 +1479,8 @@ function resolveConfiguredSlotAct(
   if (!sameAs) return null;
   if (seenLabels.has(sameAs)) return null;
   seenLabels.add(sameAs);
-  const source = object(configuredSlots[sameAs], `${sameAs} source slot`);
+  const source = optionalObject(configuredSlots[sameAs]);
+  if (!source) return null;
   return resolveConfiguredSlotAct(state, source, configuredSlots, seenLabels);
 }
 
@@ -2427,6 +2435,12 @@ function object(value: unknown, label: string): JsonObject {
     throw new Error(`${label} must be an object.`);
   }
   return value as JsonObject;
+}
+
+function optionalObject(value: unknown): JsonObject | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as JsonObject)
+    : null;
 }
 
 function objectOrEmpty(value: unknown): JsonObject {

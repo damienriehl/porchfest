@@ -1076,6 +1076,38 @@ describe("Goal-1 season import (U10 / KTD13)", () => {
     }
   });
 
+  it("a canceled same_as with a missing target warns and skips", async () => {
+    const temporary = await copyFixture("porchfest-canceled-missing-pair-");
+    try {
+      const path = join(temporary, fixtureArtifactFiles.slate);
+      const matches = JSON.parse(await readFile(path, "utf8"));
+      const venue = matches.venues[4];
+      venue.slots["6-7"] = {
+        same_as: "invented-missing-slot",
+        canceled: {
+          on: "2026-08-21",
+          reason: "Invented missing pair.",
+        },
+      };
+      await writeFile(path, `${JSON.stringify(matches, null, 2)}\n`);
+
+      const report = importGoal1Season(core, {
+        ...importOptions,
+        artifactsDirectory: temporary,
+      });
+
+      expect(report.warnings).toContain(
+        `Continuation assignment did not resolve: ${venue.id} 6-7 -> invented-missing-slot`,
+      );
+      expect(report.warnings).toContain(
+        `Canceled slot assignment did not resolve: ${venue.id} 6-7`,
+      );
+      expect(database.db.select().from(seasons).all()).toHaveLength(1);
+    } finally {
+      await rm(temporary, { recursive: true, force: true });
+    }
+  });
+
   it("boolean canceled slots warn and annotate the missing date", async () => {
     const temporary = await copyFixture("porchfest-boolean-cancellation-");
     try {
