@@ -18,13 +18,13 @@ export interface SignupError {
   readonly message: string;
 }
 
-export const SIGNUP_AUDIENCE_LABELS = Object.freeze({
+const SIGNUP_AUDIENCE_LABELS = Object.freeze({
   public: "Public map",
   match: "Shared with a confirmed match",
   organizer: "Organizer-only",
 } as const);
 
-export type SignupAudience = keyof typeof SIGNUP_AUDIENCE_LABELS;
+type SignupAudience = keyof typeof SIGNUP_AUDIENCE_LABELS;
 
 const eventDateFormatter = new Intl.DateTimeFormat("en-US", {
   timeZone: "UTC",
@@ -570,50 +570,78 @@ export function renderHoneypot(): string {
 export function renderHostPreview(values: SignupValues): string {
   return renderPreviewCard({
     kind: "host",
-    title: firstValue(values, "venue_title"),
-    subtitle: firstValue(values, "venue_address"),
-    description: firstValue(values, "space_description"),
-    details: [
-      firstValue(values, "has_power") === "yes" ? "Power available" : "",
-      firstValue(values, "rain_backup") === "yes" ? "Rain backup" : "",
-    ],
+    title: publicPreviewField(values, HOST_SIGNUP_AUDIENCES, "venue_title"),
+    subtitle: publicPreviewField(
+      values,
+      HOST_SIGNUP_AUDIENCES,
+      "venue_address",
+    ),
   });
 }
 
 export function renderPerformerPreview(values: SignupValues): string {
   return renderPreviewCard({
     kind: "performer",
-    title: firstValue(values, "act_name"),
-    subtitle: firstValue(values, "genres"),
-    description: firstValue(values, "description"),
-    details: [
-      firstValue(values, "duration_minutes")
-        ? `${firstValue(values, "duration_minutes")} minutes`
-        : "",
-      firstValue(values, "requires_amplification") === "yes" ? "Amplified" : "",
-    ],
+    title: publicPreviewField(values, PERFORMER_SIGNUP_AUDIENCES, "act_name"),
+    subtitle: publicPreviewField(values, PERFORMER_SIGNUP_AUDIENCES, "genres"),
+    description: publicPreviewField(
+      values,
+      PERFORMER_SIGNUP_AUDIENCES,
+      "description",
+    ),
   });
+}
+
+interface PublicPreviewField {
+  readonly name: string;
+  readonly value: string;
+}
+
+function publicPreviewField(
+  values: SignupValues,
+  audiences: Readonly<Record<string, SignupAudience>>,
+  name: string,
+): PublicPreviewField | undefined {
+  return audiences[name] === "public"
+    ? { name, value: firstValue(values, name) }
+    : undefined;
 }
 
 export function renderPreviewCard(options: {
   readonly kind: "host" | "performer";
-  readonly title: string;
-  readonly subtitle: string;
-  readonly description: string;
-  readonly details?: readonly string[];
+  readonly title?: PublicPreviewField;
+  readonly subtitle?: PublicPreviewField;
+  readonly description?: PublicPreviewField;
 }): string {
   const emptyTitle = options.kind === "host" ? "Your porch" : "Your act";
-  return `<article class="porchfest-venue-card porch-card" data-signup-preview="${options.kind}">
+  const sourceAttributes = [
+    previewSourceAttribute("title", options.title),
+    previewSourceAttribute("subtitle", options.subtitle),
+    previewSourceAttribute("description", options.description),
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return `<article class="porchfest-venue-card porch-card" data-signup-preview="${options.kind}" ${sourceAttributes}>
     <div class="porchfest-venue-band porch-card-band">
       <p class="porch-card-type">${options.kind === "host" ? "Host porch" : "Performer"}</p>
-      <h2 class="porchfest-venue-title" data-preview-title>${escapeHtml(options.title || emptyTitle)}</h2>
-      <p class="porchfest-venue-address" data-preview-subtitle>${escapeHtml(options.subtitle || "Your details will appear here")}</p>
+      <h2 class="porchfest-venue-title" data-preview-title>${escapeHtml(options.title?.value || emptyTitle)}</h2>
+      <p class="porchfest-venue-address" data-preview-subtitle>${escapeHtml(options.subtitle?.value || "Your details will appear here")}</p>
     </div>
     <div class="porchfest-venue-acts porch-card-body">
-      <p data-preview-description>${escapeHtml(options.description || "Keep filling in the form to shape this card.")}</p>
-      <p class="porch-card-details" data-preview-details>${escapeHtml((options.details ?? []).filter(Boolean).join(" · "))}</p>
+      ${
+        options.description
+          ? `<p data-preview-description>${escapeHtml(options.description.value || "Keep filling in the form to shape this card.")}</p>`
+          : ""
+      }
     </div>
   </article>`;
+}
+
+function previewSourceAttribute(
+  slot: "title" | "subtitle" | "description",
+  field: PublicPreviewField | undefined,
+): string {
+  return field ? `data-preview-${slot}-field="${escapeHtml(field.name)}"` : "";
 }
 
 // ---------------------------------------------------------------------------

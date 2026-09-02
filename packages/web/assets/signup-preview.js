@@ -18,8 +18,7 @@
   var title = preview.querySelector("[data-preview-title]");
   var subtitle = preview.querySelector("[data-preview-subtitle]");
   var description = preview.querySelector("[data-preview-description]");
-  var details = preview.querySelector("[data-preview-details]");
-  if (!title || !subtitle || !description || !details) return;
+  if (!title || !subtitle) return;
 
   function value(name) {
     var control = form.elements.namedItem(name);
@@ -28,37 +27,31 @@
     return "";
   }
 
-  function checked(name) {
-    var control = form.querySelector('input[name="' + name + '"]:checked');
-    return control ? control.value : "";
+  function publicValue(slot) {
+    var name = preview.getAttribute("data-preview-" + slot + "-field");
+    return name ? value(name) : "";
   }
 
   function update() {
     if (kind === "host") {
-      title.textContent = value("venue_title") || "Your porch";
+      title.textContent = publicValue("title") || "Your porch";
       subtitle.textContent =
-        value("venue_address") || "Your details will appear here";
-      description.textContent =
-        value("space_description") ||
-        "Keep filling in the form to shape this card.";
-      details.textContent = [
-        checked("has_power") === "yes" ? "Power available" : "",
-        checked("rain_backup") === "yes" ? "Rain backup" : "",
-      ]
-        .filter(Boolean)
-        .join(" · ");
+        publicValue("subtitle") || "Your details will appear here";
+      if (description) {
+        description.textContent =
+          publicValue("description") ||
+          "Keep filling in the form to shape this card.";
+      }
       return;
     }
-    title.textContent = value("act_name") || "Your act";
-    subtitle.textContent = value("genres") || "Your details will appear here";
-    description.textContent =
-      value("description") || "Keep filling in the form to shape this card.";
-    details.textContent = [
-      value("duration_minutes") ? value("duration_minutes") + " minutes" : "",
-      checked("requires_amplification") === "yes" ? "Amplified" : "",
-    ]
-      .filter(Boolean)
-      .join(" · ");
+    title.textContent = publicValue("title") || "Your act";
+    subtitle.textContent =
+      publicValue("subtitle") || "Your details will appear here";
+    if (description) {
+      description.textContent =
+        publicValue("description") ||
+        "Keep filling in the form to shape this card.";
+    }
   }
 
   form.addEventListener("input", update);

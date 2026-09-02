@@ -250,6 +250,16 @@ function performerValues(seasonId: number, csrf: string) {
   return values;
 }
 
+function publicPreviewFrom(html: string, kind: "host" | "performer"): string {
+  const preview = html.match(
+    new RegExp(
+      `<article[^>]*data-signup-preview="${kind}"[\\s\\S]*?</article>`,
+    ),
+  )?.[0];
+  expect(preview, `expected the ${kind} public preview`).toBeTruthy();
+  return preview ?? "";
+}
+
 describe("public signup forms", () => {
   it("takes each landing-page signup link through zero, one, and multiple legal seasons", async () => {
     const empty = await makeEmptyRuntime();
@@ -670,6 +680,103 @@ describe("public signup forms", () => {
     ).not.toThrow();
   });
 
+  it("lets the live preview read only server-approved public fields", async () => {
+    const { runtime } = await makeRuntime();
+    const response = await runtime.request(
+      `${PUBLIC_BASE_URL}/signup/assets/signup-preview.js`,
+    );
+    const source = await response.text();
+
+    for (const scenario of [
+      {
+        kind: "host",
+        fields: {
+          title: "venue_title",
+          subtitle: "venue_address",
+        },
+        hasDescription: false,
+        values: {
+          venue_title: "Public porch",
+          venue_address: "Public address",
+          space_description: "PRIVATE SPACE",
+          has_power: "yes",
+          rain_backup: "yes",
+        },
+        expectedReads: ["venue_title", "venue_address"],
+      },
+      {
+        kind: "performer",
+        fields: {
+          title: "act_name",
+          subtitle: "genres",
+          description: "description",
+        },
+        hasDescription: true,
+        values: {
+          act_name: "Public act",
+          genres: "Public genre",
+          description: "Public description",
+          duration_minutes: "125",
+          requires_amplification: "yes",
+        },
+        expectedReads: ["act_name", "genres", "description"],
+      },
+    ] as const) {
+      const reads: string[] = [];
+      const nodes = {
+        title: { textContent: "" },
+        subtitle: { textContent: "" },
+        description: { textContent: "" },
+      };
+      const preview = {
+        getAttribute: (name: string) => {
+          const slot = name.match(/^data-preview-(.+)-field$/)?.[1] as
+            keyof typeof scenario.fields | undefined;
+          return slot ? scenario.fields[slot] : null;
+        },
+        querySelector: (selector: string) => {
+          if (selector === "[data-preview-title]") return nodes.title;
+          if (selector === "[data-preview-subtitle]") return nodes.subtitle;
+          if (selector === "[data-preview-description]")
+            return scenario.hasDescription ? nodes.description : null;
+          return null;
+        },
+      };
+      const form = {
+        addEventListener: () => undefined,
+        elements: {
+          namedItem: (name: string) => {
+            reads.push(name);
+            const value = scenario.values[name as keyof typeof scenario.values];
+            return value === undefined ? null : { value };
+          },
+        },
+        getAttribute: () => scenario.kind,
+      };
+
+      runInNewContext(source, {
+        document: {
+          querySelector: (selector: string) => {
+            if (selector === "[data-signup-preview]") return preview;
+            if (selector === "[data-signup-form]") return form;
+            return null;
+          },
+        },
+      });
+
+      expect(reads).toEqual(scenario.expectedReads);
+      expect(
+        Object.values(nodes).map(({ textContent }) => textContent),
+      ).not.toContain("PRIVATE SPACE");
+      expect(
+        Object.values(nodes).map(({ textContent }) => textContent),
+      ).not.toContain("125");
+      expect(
+        Object.values(nodes).map(({ textContent }) => textContent),
+      ).not.toContain("Amplified");
+    }
+  });
+
   it("ships the phone-facing focus, touch-target, and reduced-motion baseline", async () => {
     const { runtime } = await makeRuntime();
     const response = await runtime.request(
@@ -943,6 +1050,57 @@ describe("public signup forms", () => {
     expect(html).toMatch(/organizer.*review/i);
     expect(html).toMatch(/no confirmation email will follow/i);
     expect(html).toContain("The Test Porch");
+  });
+
+  it("keeps match and organizer answers out of public receipt previews", async () => {
+    const { runtime, seasonId } = await makeRuntime();
+    const hostForm = await csrfToken(runtime, "/signup/host", seasonId);
+    const hostInput = hostValues(seasonId, hostForm.token);
+    hostInput.set("space_description", "PRIVATE HOST SPACE");
+    hostInput.set("has_power", "yes");
+    hostInput.set("rain_backup", "yes");
+    const hostResponse = await submit(runtime, "/signup/host", hostInput);
+    const hostHtml = await hostResponse.text();
+    const performerForm = await csrfToken(
+      runtime,
+      "/signup/performer",
+      seasonId,
+    );
+    const performerResponse = await submit(
+      runtime,
+      "/signup/performer",
+      performerValues(seasonId, performerForm.token),
+    );
+    const performerHtml = await performerResponse.text();
+
+    expect(hostResponse.status).toBe(201);
+    expect(performerResponse.status).toBe(201);
+    const hostPreview = publicPreviewFrom(hostHtml, "host");
+    expect(hostPreview).toContain('data-preview-title-field="venue_title"');
+    expect(hostPreview).toContain(
+      'data-preview-subtitle-field="venue_address"',
+    );
+    expect(hostPreview).toContain("The Test Porch");
+    expect(hostPreview).toContain("Synthetic Venue Address");
+    expect(hostPreview).not.toContain("data-preview-description-field");
+    expect(hostPreview).not.toContain("Keep filling in the form");
+    expect(hostPreview).not.toContain("PRIVATE HOST SPACE");
+    expect(hostPreview).not.toContain("Power available");
+    expect(hostPreview).not.toContain("Rain backup");
+    expect(hostHtml).toContain("PRIVATE HOST SPACE");
+
+    const performerPreview = publicPreviewFrom(performerHtml, "performer");
+    expect(performerPreview).toContain('data-preview-title-field="act_name"');
+    expect(performerPreview).toContain('data-preview-subtitle-field="genres"');
+    expect(performerPreview).toContain(
+      'data-preview-description-field="description"',
+    );
+    expect(performerPreview).toContain("The Test Fixtures");
+    expect(performerPreview).toContain("Folk, rock");
+    expect(performerPreview).toContain("Songs with harmonies &amp; handclaps.");
+    expect(performerPreview).not.toContain("45 minutes");
+    expect(performerPreview).not.toContain("Amplified");
+    expect(performerHtml).toContain("45 minutes");
   });
 
   it("gives both receipts distinct non-secret references and links the configured public site", async () => {
