@@ -20,6 +20,7 @@ import {
   type VenueDrink,
   type VenueGear,
 } from "./storage/schema.js";
+import { serializeOriginalSubmission } from "./original-submission.js";
 import {
   invalidateCoordinateForAddressChange,
   upsertCoordinate,
@@ -266,6 +267,11 @@ export function createRecordRepository(
         name: input.contact.name,
         email: input.contact.email ?? null,
         phone: input.contact.phone ?? null,
+        originalSubmission: serializeOriginalSubmission({
+          name: input.contact.name,
+          email: input.contact.email ?? null,
+          phone: input.contact.phone ?? null,
+        }),
         ...mutableValues(),
       })
       .returning()
@@ -287,6 +293,16 @@ export function createRecordRepository(
         requestedActNames: input.venue.requestedActNames ?? null,
         genrePreferences: input.venue.genrePreferences ?? null,
         hostContactId: contact.id,
+        originalSubmission: serializeOriginalSubmission({
+          title: input.venue.title,
+          address: input.venue.address,
+          spaceDescription: input.venue.spaceDescription,
+          hasPower: input.venue.hasPower,
+          rainBackup: input.venue.rainBackup,
+          requestedActNames: input.venue.requestedActNames ?? null,
+          genrePreferences: input.venue.genrePreferences ?? null,
+          notes: input.venue.notes,
+        }),
         ...mutableValues(),
       })
       .returning()
@@ -356,6 +372,18 @@ export function createRecordRepository(
         notes: input.act.notes,
         sharedMemberNote: input.act.sharedMemberNote ?? null,
         reachViaContactId: contact.id,
+        originalSubmission: serializeOriginalSubmission({
+          name: input.act.name,
+          durationMinutes: input.act.durationMinutes,
+          requiresAmplification: input.act.requiresAmplification,
+          genre: input.act.genre,
+          description: input.act.description,
+          links: input.act.links,
+          housePreference: input.act.housePreference,
+          canLendGear: input.act.canLendGear,
+          notes: input.act.notes,
+          sharedMemberNote: input.act.sharedMemberNote ?? null,
+        }),
         ...mutableValues(),
       })
       .returning()
@@ -607,6 +635,9 @@ export function createRecordRepository(
           housePreference:
             submission.housePreference ?? placeholder.housePreference,
           canLendGear: submission.canLendGear ?? placeholder.canLendGear,
+          notes: submission.notes ?? placeholder.notes,
+          sharedMemberNote: submission.sharedMemberNote,
+          originalSubmission: submission.originalSubmission,
           placeholder: false,
           reachViaContactId:
             submission.reachViaContactId ?? placeholder.reachViaContactId,
@@ -770,6 +801,11 @@ export function createRecordRepository(
           hasPower: submission.hasPower ?? placeholder.hasPower,
           rainBackup: submission.rainBackup ?? placeholder.rainBackup,
           notes: submission.notes ?? placeholder.notes,
+          requestedActNames:
+            submission.requestedActNames ?? placeholder.requestedActNames,
+          genrePreferences:
+            submission.genrePreferences ?? placeholder.genrePreferences,
+          originalSubmission: submission.originalSubmission,
           hostContactId: submission.hostContactId ?? placeholder.hostContactId,
           placeholder: false,
           reachViaContactId:

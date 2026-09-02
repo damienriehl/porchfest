@@ -383,10 +383,19 @@ function coordinatePage(
   const rows = options.core.geocoding.listVenuesNeedingCoordinateReview(
     season.id,
   );
+  const venues = options.core.seasons
+    .listSeasonVenues(season.id)
+    .filter(
+      (venue) =>
+        venue.status !== "withdrawn" && venue.canonicalVenueId === null,
+    );
   return new Response(
     renderCoordinatesPage({
       season,
       rows,
+      venues,
+      verifiedCoordinates:
+        options.core.geocoding.publishableCoordinatesForSeason(season.id),
       geoConfigured: options.core.ports.geo.configured,
       csrf: {
         verify: options.csrfTokenFor(VERIFY_COORDINATE_PATH),

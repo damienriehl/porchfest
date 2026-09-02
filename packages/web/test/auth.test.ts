@@ -171,6 +171,96 @@ describe("first boot", () => {
   });
 });
 
+describe("organizer invites", () => {
+  it("issues a copyable invite that is single-use and dies with its issuer", async () => {
+    const { runtime, announced } = await boot();
+    const firstSignIn = await signIn(runtime, bootstrapTokenFrom(announced), {
+      displayName: "Dana Organizer",
+      email: "dana@example.invalid",
+    });
+    const firstCookie = sessionCookieFrom(firstSignIn);
+
+    const invitePage = await runtime.request(
+      `${PUBLIC_BASE_URL}/admin/organizers`,
+      { headers: { cookie: firstCookie } },
+    );
+    expect(invitePage.status).toBe(200);
+    const invitePageHtml = await invitePage.text();
+    expect(invitePageHtml).toContain("Invite another organizer");
+    const inviteCsrf =
+      invitePageHtml.match(/name="_csrf" value="([^"]+)"/)?.[1] ?? "";
+
+    const issued = await post(
+      runtime,
+      "/admin/organizers/invite",
+      new URLSearchParams({
+        _csrf: inviteCsrf,
+      }),
+      firstCookie,
+    );
+    expect(issued.status).toBe(201);
+    const issuedHtml = await issued.text();
+    expect(issuedHtml).toContain("Copy this invite link");
+    expect(issuedHtml).toContain("they will enter their email");
+    expect(issuedHtml).toContain(`${PUBLIC_BASE_URL}/admin/sign-in?token=`);
+    const inviteToken =
+      issuedHtml.match(/\/admin\/sign-in\?token=([A-Za-z0-9_-]+)/)?.[1] ?? "";
+    expect(inviteToken).not.toBe("");
+
+    const missingEmail = await signIn(runtime, inviteToken, {
+      displayName: "Marge Organizer",
+    });
+    expect(missingEmail.status).toBe(403);
+    expect(await missingEmail.text()).toContain(
+      "Enter the email address for this organizer account",
+    );
+
+    const margeSignIn = await signIn(runtime, inviteToken, {
+      displayName: "Marge Organizer",
+      email: "marge@example.invalid",
+    });
+    expect(margeSignIn.status).toBe(303);
+    expect(runtime.core.access.countActiveOrganizers()).toBe(2);
+
+    const replay = await signIn(runtime, inviteToken, {
+      displayName: "Marge Organizer",
+    });
+    expect(replay.status).toBe(403);
+    expect(await replay.text()).toContain("already been used");
+
+    const freshPage = await runtime.request(
+      `${PUBLIC_BASE_URL}/admin/organizers`,
+      { headers: { cookie: firstCookie } },
+    );
+    const freshHtml = await freshPage.text();
+    const freshCsrf =
+      freshHtml.match(/name="_csrf" value="([^"]+)"/)?.[1] ?? "";
+    const pending = await post(
+      runtime,
+      "/admin/organizers/invite",
+      new URLSearchParams({
+        _csrf: freshCsrf,
+        email: "third@example.invalid",
+      }),
+      firstCookie,
+    );
+    const pendingToken =
+      (await pending.text()).match(
+        /\/admin\/sign-in\?token=([A-Za-z0-9_-]+)/,
+      )?.[1] ?? "";
+    const issuer = runtime.core.access
+      .listOrganizers()
+      .find((organizer) => organizer.email === "dana@example.invalid");
+    runtime.core.access.deactivateOrganizer(issuer?.id ?? 0);
+
+    const withdrawn = await signIn(runtime, pendingToken, {
+      displayName: "Third Organizer",
+    });
+    expect(withdrawn.status).toBe(403);
+    expect(await withdrawn.text()).toContain("withdrawn");
+  });
+});
+
 describe("the admin tier is real", () => {
   it("redirects an unauthenticated browser GET to organizer sign-in", async () => {
     const { runtime } = await boot();

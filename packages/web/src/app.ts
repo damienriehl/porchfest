@@ -114,10 +114,16 @@ export function createApp(options: AppOptions): PorchfestApp {
     path: "/",
     tier: "public",
     handler: () =>
-      new Response(renderPublicLandingPage({ organizerPath: ADMIN_PATH }), {
-        status: 200,
-        headers: { "content-type": "text/html; charset=UTF-8" },
-      }),
+      new Response(
+        renderPublicLandingPage({
+          organizerPath: ADMIN_PATH,
+          selfServeEnabled: options.core.ports.email.configured,
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "text/html; charset=UTF-8" },
+        },
+      ),
   });
 
   registerSignupRoutes({
@@ -151,6 +157,7 @@ export function createApp(options: AppOptions): PorchfestApp {
     routes,
     csrfTokenFor,
     publicBaseUrl: options.publicBaseUrl ?? null,
+    trustedProxyHops: options.trustedProxyHops,
     resolveSocketPeerAddress:
       options.resolveSocketPeerAddress ?? defaultSocketPeerAddress,
     cookie: options.sessionCookie,

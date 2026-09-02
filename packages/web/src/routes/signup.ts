@@ -3,6 +3,7 @@ import {
   type UnconfiguredAntibotGuardOptions,
 } from "@porchfest/antibot";
 import {
+  extractParticipantLinks,
   isSeasonActionLegal,
   venueAmenityValues,
   venueDrinkValues,
@@ -22,6 +23,7 @@ import type { Context } from "hono";
 import type { RouteRegistry } from "../router/registry.js";
 import { contentSecurityPolicy } from "../security-headers.js";
 import {
+  CONTACT_EMAIL_PATTERN,
   enforceParticipantFieldLengths,
   parseSetDurationMinutes,
   SET_DURATION_ERROR_MESSAGE,
@@ -40,9 +42,6 @@ import {
   type SignupValues,
 } from "../views/signup-view.js";
 import { HOST_SIGNUP_PATH, PERFORMER_SIGNUP_PATH } from "./signup-paths.js";
-import { normalizedHttpUrl, tokenizeLinks } from "./http-links.js";
-
-export const CONTACT_EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const signupStyles = readFileSync(
   new URL("../../assets/signup.css", import.meta.url),
@@ -291,15 +290,18 @@ export function registerSignupRoutes(options: SignupRouteOptions): void {
             seasonId: season.id,
             recordId,
             publicSiteUrl: season.publicSiteUrl,
-            emailConfigured: options.core.ports.email.configured,
+            selfServeEnabled: options.core.ports.email.configured,
             preview:
-              kind === "host"
+              validation.kind === "host"
                 ? renderHostPreview(values)
-                : renderPerformerPreview(values),
+                : renderPerformerPreview(validation.receiptValues),
             submission:
-              kind === "host"
+              validation.kind === "host"
                 ? renderHostSubmission(values)
-                : renderPerformerSubmission(values, season.timezone),
+                : renderPerformerSubmission(
+                    validation.receiptValues,
+                    season.timezone,
+                  ),
           }),
           201,
           challenge,
@@ -563,6 +565,7 @@ type PerformerValidation =
       readonly ok: true;
       readonly kind: "performer";
       readonly input: PerformerSignupInput;
+      readonly receiptValues: SignupValues;
     }
   | { readonly ok: false; readonly errors: readonly SignupError[] };
 
@@ -662,8 +665,8 @@ function validatePerformer(
     "Describe your act for hosts and the public map.",
     errors,
   );
-  const links = firstValue(values, "links").trim();
-  validateLinks(links, errors);
+  const extractedLinks = extractParticipantLinks(firstValue(values, "links"));
+  validateLinks(extractedLinks, errors);
   const durationMinutes = parseDuration(values, errors);
   const requiresAmplification = requiredBoolean(
     values,
@@ -679,6 +682,19 @@ function validatePerformer(
   );
   const availabilities = parseAvailabilities(values, season, errors);
   if (errors.length > 0) return { ok: false, errors };
+  const performerNote = optional(values, "performer_notes");
+  const notes = [
+    performerNote,
+    ...extractedLinks.residue.map((value) => `Link note: ${value}`),
+  ]
+    .filter((value): value is string => value !== null)
+    .join("\n");
+  const parsedLinks = extractedLinks.links.join("\n");
+  const receiptValues: SignupValues = {
+    ...values,
+    links: parsedLinks ? [parsedLinks] : [],
+    performer_notes: notes ? [notes] : [],
+  };
   return {
     ok: true,
     kind: "performer",
@@ -691,14 +707,15 @@ function validatePerformer(
         requiresAmplification,
         genre,
         description,
-        links,
+        links: parsedLinks,
         housePreference: optional(values, "house_preference"),
         sharedMemberNote: optional(values, "shared_member_note"),
         canLendGear,
-        notes: optional(values, "performer_notes"),
+        notes: notes || null,
       },
       availabilities,
     },
+    receiptValues,
   };
 }
 
@@ -793,14 +810,11 @@ function parseDuration(values: SignupValues, errors: SignupError[]): number {
   return value;
 }
 
-function validateLinks(links: string, errors: SignupError[]): void {
-  if (!links) return;
-  // Unlike map serialization, a public signup rejects the whole field when
-  // any token is invalid so the participant can correct it immediately.
-  const invalid = tokenizeLinks(links).some(
-    (candidate) => normalizedHttpUrl(candidate) === null,
-  );
-  if (invalid) {
+function validateLinks(
+  links: ReturnType<typeof extractParticipantLinks>,
+  errors: SignupError[],
+): void {
+  if (links.invalidUrls.length > 0 || links.nonHttpSchemes.length > 0) {
     errors.push({
       field: "links",
       label: "Music and website links",

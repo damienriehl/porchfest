@@ -25,14 +25,18 @@ import {
   type SessionCookieOptions,
 } from "../auth.js";
 import type { RouteRegistry } from "../router/registry.js";
-import { contentSecurityPolicy } from "../security-headers.js";
 import {
+  participantAccessRefusal,
+  participantHeaders,
+} from "../participant-http.js";
+import { formatReadableZonedWindow } from "../timezone.js";
+import {
+  CONTACT_EMAIL_PATTERN,
   enforceParticipantFieldLengths,
   parseSetDurationMinutes,
   SET_DURATION_ERROR_MESSAGE,
 } from "../participant-validation.js";
 import {
-  renderParticipantAccessRequiredPage,
   renderRequestLinkPage,
   renderSelfServePage,
 } from "../views/self-serve.js";
@@ -48,7 +52,6 @@ import {
   SELF_SERVE_PATH,
   SELF_SERVE_REQUEST_PATH,
 } from "./self-serve-paths.js";
-import { CONTACT_EMAIL_PATTERN } from "./signup.js";
 import { normalizedHttpUrl, tokenizeLinks } from "./http-links.js";
 
 type SelfServeStatus = 200 | 202 | 400 | 403 | 409 | 422 | 429 | 503;
@@ -133,7 +136,7 @@ export function registerSelfServeRoutes(options: SelfServeRouteOptions): void {
     handler: (context: Context) => {
       const token = readParticipantToken(context);
       const participant = currentParticipant(options.core, context);
-      if (!token || !participant) return participantRefusal();
+      if (!token || !participant) return participantAccessRefusal();
       if (context.req.query("token")) {
         return new Response(null, {
           status: 303,
@@ -157,13 +160,14 @@ export function registerSelfServeRoutes(options: SelfServeRouteOptions): void {
     tier: "participant",
     handler: async (context: Context) => {
       const token = readParticipantToken(context);
-      if (!token) return participantRefusal();
+      if (!token) return participantAccessRefusal();
       const fields = await readFields(context);
       let view: ParticipantRecordView;
       try {
         view = options.core.participantTokens.read(token);
       } catch (error) {
-        if (error instanceof ParticipantTokenError) return participantRefusal();
+        if (error instanceof ParticipantTokenError)
+          return participantAccessRefusal();
         throw error;
       }
       const unknown = unknownEditFields(fields, view.recordType);
@@ -255,7 +259,8 @@ export function registerSelfServeRoutes(options: SelfServeRouteOptions): void {
             },
           ]);
         }
-        if (error instanceof ParticipantTokenError) return participantRefusal();
+        if (error instanceof ParticipantTokenError)
+          return participantAccessRefusal();
         throw error;
       }
       return redirectParticipant("saved=1", challenge);
@@ -269,7 +274,7 @@ export function registerSelfServeRoutes(options: SelfServeRouteOptions): void {
     handler: async (context: Context) => {
       const token = readParticipantToken(context);
       const grant = currentParticipant(options.core, context);
-      if (!token || !grant) return participantRefusal();
+      if (!token || !grant) return participantAccessRefusal();
       const fields = await readFields(context);
       const kind = firstValue(fields, "kind");
       const recordVersion = integer(fields, "record_version");
@@ -337,7 +342,8 @@ export function registerSelfServeRoutes(options: SelfServeRouteOptions): void {
             },
           ]);
         }
-        if (error instanceof ParticipantTokenError) return participantRefusal();
+        if (error instanceof ParticipantTokenError)
+          return participantAccessRefusal();
         throw error;
       }
       return redirectParticipant("requested=1", challenge);
@@ -717,13 +723,14 @@ function participantPage(
   try {
     participant = options.core.participantTokens.read(token);
   } catch (error) {
-    if (error instanceof ParticipantTokenError) return participantRefusal();
+    if (error instanceof ParticipantTokenError)
+      return participantAccessRefusal();
     throw error;
   }
-  const assignment = assignmentFor(options.core, participant);
   const timezone = options.core.seasons.getSeason(
     participant.record.seasonId,
   ).timezone;
+  const assignment = assignmentFor(options.core, participant, timezone);
   const coordinate =
     participant.recordType === "venue"
       ? options.core.geocoding.publishableCoordinate(participant.record.id)
@@ -766,6 +773,7 @@ function participantPage(
 function assignmentFor(
   core: CoreRuntime,
   participant: ParticipantRecordView,
+  timezone: string,
 ): string {
   const assignments = core.seasons.listAssignmentDisplayForRecord(
     participant.recordType,
@@ -776,13 +784,9 @@ function assignmentFor(
       participant.recordType === "venue"
         ? assignment.actName
         : assignment.venueTitle;
-    return `${counterpart}, ${slotWindow(assignment)}`;
+    return `${counterpart}, ${formatReadableZonedWindow(assignment, timezone)} (${timezone})`;
   });
   return names.join(" · ") || "Not assigned";
-}
-
-function slotWindow(slot: { readonly startsAt: Date; readonly endsAt: Date }) {
-  return `${slot.startsAt.toISOString()}–${slot.endsAt.toISOString()}`;
 }
 
 function redirectParticipant(
@@ -795,25 +799,4 @@ function redirectParticipant(
       location: `${SELF_SERVE_PATH}?${query}`,
     }),
   });
-}
-
-function participantRefusal(): Response {
-  return new Response(renderParticipantAccessRequiredPage(), {
-    status: 401,
-    headers: participantHeaders(null),
-  });
-}
-
-export function participantHeaders(
-  challenge: AntibotClientChallenge | null,
-  extra: Readonly<Record<string, string>> = {},
-): Record<string, string> {
-  return {
-    "cache-control": "no-store, private",
-    "content-security-policy": contentSecurityPolicy(challenge),
-    "content-type": "text/html; charset=UTF-8",
-    "referrer-policy": "no-referrer",
-    "x-content-type-options": "nosniff",
-    ...extra,
-  };
 }

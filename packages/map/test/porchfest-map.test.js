@@ -59,6 +59,30 @@ const DEFAULT_SLOT_LABELS_BY_ID = {
   "6-8": "6–8 pm",
 };
 
+test("standalone map CSS stays within a phone viewport and localizes wide controls", () => {
+  const pageRule = stylesheetSource.match(/\.porchfest-map-page\s*\{([^}]*)\}/);
+  const fullbleedRule = stylesheetSource.match(
+    /\.porchfest-map-page \.porchfest-map-fullbleed\s*\{([^}]*)\}/,
+  );
+  const toolbarRule = stylesheetSource.match(
+    /\.porchfest-map-toolbar\s*\{([^}]*)\}/,
+  );
+
+  assert.ok(pageRule);
+  assert.ok(fullbleedRule);
+  assert.ok(toolbarRule);
+  assert.match(pageRule[1], /margin:\s*0/);
+  assert.match(pageRule[1], /max-width:\s*100%/);
+  assert.match(fullbleedRule[1], /width:\s*100%/);
+  assert.match(fullbleedRule[1], /max-width:\s*100%/);
+  assert.match(toolbarRule[1], /max-width:\s*100%/);
+  assert.match(toolbarRule[1], /overflow-x:\s*auto/);
+  assert.match(
+    stylesheetSource,
+    /\.porchfest-map-page,\s*\.porchfest-map-page \*,\s*\.porchfest-map-page \*::before,\s*\.porchfest-map-page \*::after\s*\{[^}]*box-sizing:\s*border-box/s,
+  );
+});
+
 class TestStyle {
   constructor() {
     this.position = "";

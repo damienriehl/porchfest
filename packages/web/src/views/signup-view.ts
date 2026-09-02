@@ -97,6 +97,7 @@ export function renderOrganizerPage(title: string, body: string): string {
 
 export function renderPublicLandingPage(options: {
   readonly organizerPath: string;
+  readonly selfServeEnabled: boolean;
 }): string {
   return `<!doctype html>
 <html lang="en">
@@ -129,6 +130,15 @@ export function renderPublicLandingPage(options: {
         <p>Review signups, coordinate the schedule, and manage a Porchfest season.</p>
         <p><a class="secondary-action" href="${escapeHtml(options.organizerPath)}">Organizer access</a></p>
       </section>
+      ${
+        options.selfServeEnabled
+          ? `<section class="confirmation-card" aria-labelledby="participant-access-heading">
+        <h2 id="participant-access-heading">Manage your signup</h2>
+        <p>Already signed up as a host or performer? Request a private link to review your submission.</p>
+        <p><a class="secondary-action" href="/self-serve/request-link">Request my private link</a></p>
+      </section>`
+          : ""
+      }
     </nav>
   </main>
 </body>
@@ -303,7 +313,7 @@ export function renderConfirmationPage(options: {
   readonly seasonId: number;
   readonly recordId: number;
   readonly publicSiteUrl: string | null;
-  readonly emailConfigured: boolean;
+  readonly selfServeEnabled: boolean;
   readonly preview: string;
   readonly submission: string;
 }): string {
@@ -315,9 +325,12 @@ export function renderConfirmationPage(options: {
   const organizerContact = options.publicSiteUrl
     ? `<p>Use the <a href="${escapeHtml(options.publicSiteUrl)}">Porchfest public site</a> to find the organizer's public contact channel.</p>`
     : "<p>Keep this reference and use the same public organizer channel that supplied this form.</p>";
-  const emailNotice = options.emailConfigured
+  const emailNotice = options.selfServeEnabled
     ? "If the organizers send confirmation by email, it will go to the address you provided."
     : "No confirmation email will follow because email delivery is not configured for this deployment.";
+  const selfServeNotice = options.selfServeEnabled
+    ? `<p>Use <a href="/self-serve/request-link">participant self-service</a> to request a private link for reviewing or updating your signup and checking its status.</p>`
+    : `<p>This receipt cannot be reopened to edit or withdraw your signup, or to check its status. Participant self-service is not available yet.</p>`;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -338,7 +351,7 @@ export function renderConfirmationPage(options: {
       <h2 id="submission-reference-title">Submission reference</h2>
       <p><strong data-submission-reference="${escapeHtml(submissionReference)}">${escapeHtml(submissionReference)}</strong></p>
       <p>Quote this reference when contacting the organizers about your signup.</p>
-      <p>This receipt cannot be reopened to edit or withdraw your signup, or to check its status. Participant self-service is not available yet.</p>
+      ${selfServeNotice}
       ${organizerContact}
     </section>
     <section class="confirmation-card" aria-labelledby="confirmation-card-title">

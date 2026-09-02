@@ -219,6 +219,58 @@ describe("central route registry", () => {
     expect(await response.text()).toContain("/self-serve/request-link");
   });
 
+  it("recovers an unauthorized participant mutation unless JSON is explicitly requested", async () => {
+    const app = new Hono();
+    const submittedValue = "must-never-be-persisted-or-echoed";
+    const persistedValues: string[] = [];
+    let handlerCalls = 0;
+    const routes = new RouteRegistry(app, () => false, {
+      allowedOrigin: null,
+      validateCsrf: () => true,
+    });
+    routes.register({
+      method: "POST",
+      path: "/participant-mutation",
+      tier: "participant",
+      handler: async (context: Context) => {
+        handlerCalls += 1;
+        const fields = await context.req.parseBody();
+        persistedValues.push(String(fields.submitted_value));
+        return context.text("participant mutation handled");
+      },
+    });
+    const request = (accept: string) =>
+      app.request(
+        "http://localhost/participant-mutation?token=dead-participant-token",
+        {
+          method: "POST",
+          headers: {
+            accept,
+            "content-type": "application/x-www-form-urlencoded",
+          },
+          body: new URLSearchParams({ submitted_value: submittedValue }),
+        },
+      );
+
+    const htmlResponse = await request("text/html");
+    const html = await htmlResponse.text();
+    const jsonResponse = await request("application/json");
+    const json = await jsonResponse.text();
+
+    expect(htmlResponse.status).toBe(401);
+    expect(htmlResponse.headers.get("content-type")).toContain("text/html");
+    expect(html).toContain("/self-serve/request-link");
+    expect(html).not.toContain(submittedValue);
+    expect(jsonResponse.status).toBe(401);
+    expect(jsonResponse.headers.get("content-type")).toContain(
+      "application/json",
+    );
+    expect(JSON.parse(json)).toEqual({ error: "unauthorized" });
+    expect(json).not.toContain(submittedValue);
+    expect(handlerCalls).toBe(0);
+    expect(persistedValues).toEqual([]);
+  });
+
   it("snapshots a declaration so caller mutations cannot remove protection", async () => {
     const app = new Hono();
     const routes = new RouteRegistry(app);
@@ -444,5 +496,145 @@ describe("central route registry", () => {
 
     expect(response.status).toBe(200);
     expect(await response.text()).toBe("mutated");
+  });
+
+  it("uses the request origin only for an unconfigured same-origin mutation", async () => {
+    const app = new Hono();
+    const routes = new RouteRegistry(app, undefined, {
+      allowedOrigin: null,
+      validateCsrf: (token) => token === "valid-token",
+    });
+    routes.register({
+      method: "POST",
+      path: "/public-mutation",
+      tier: "public",
+      handler: (context: Context) => context.text("mutated"),
+    });
+
+    const accepted = await app.request("http://localhost/public-mutation", {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        origin: "http://localhost",
+      },
+      body: new URLSearchParams({ _csrf: "valid-token" }),
+    });
+    const crossOrigin = await app.request("http://localhost/public-mutation", {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        origin: "https://evil.example",
+      },
+      body: new URLSearchParams({ _csrf: "valid-token" }),
+    });
+
+    expect(accepted.status).toBe(200);
+    expect(crossOrigin.status).toBe(403);
+  });
+
+  it.each([null, "http://localhost"])(
+    "refuses a spoofed Host mutation when configured origin is %s",
+    async (allowedOrigin) => {
+      const app = new Hono();
+      const routes = new RouteRegistry(app, undefined, {
+        allowedOrigin,
+        validateCsrf: () => true,
+      });
+      routes.register({
+        method: "POST",
+        path: "/public-mutation",
+        tier: "public",
+        handler: (context: Context) => context.text("mutated"),
+      });
+
+      const response = await app.request("http://localhost/public-mutation", {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          host: "evil.example",
+          origin: "http://evil.example",
+          "sec-fetch-site": "cross-site",
+        },
+        body: new URLSearchParams({ _csrf: "valid-token" }),
+      });
+
+      expect(response.status).toBe(403);
+    },
+  );
+
+  it("refuses an unconfigured Host-derived origin without browser Fetch Metadata", async () => {
+    const app = new Hono();
+    const routes = new RouteRegistry(app, undefined, {
+      allowedOrigin: null,
+      validateCsrf: () => true,
+    });
+    routes.register({
+      method: "POST",
+      path: "/public-mutation",
+      tier: "public",
+      handler: (context: Context) => context.text("mutated"),
+    });
+
+    const response = await app.request("http://evil.example/public-mutation", {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        host: "evil.example",
+        origin: "http://evil.example",
+      },
+      body: new URLSearchParams({ _csrf: "valid-token" }),
+    });
+    const crossSite = await app.request("http://evil.example/public-mutation", {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        host: "evil.example",
+        origin: "http://evil.example",
+        "sec-fetch-site": "cross-site",
+      },
+      body: new URLSearchParams({ _csrf: "valid-token" }),
+    });
+
+    expect(response.status).toBe(403);
+    expect(crossSite.status).toBe(403);
+  });
+
+  it("keeps explicit JSON participant denials machine-readable", async () => {
+    const app = new Hono();
+    const routes = new RouteRegistry(app);
+    routes.register({
+      method: "GET",
+      path: "/participant-only",
+      tier: "participant",
+      handler: (context: Context) => context.text("secret"),
+    });
+
+    const response = await app.request("http://localhost/participant-only", {
+      headers: { accept: "application/json" },
+    });
+
+    expect(response.status).toBe(401);
+    expect(response.headers.get("content-type")).toContain("application/json");
+    expect(await response.json()).toEqual({ error: "unauthorized" });
+  });
+
+  it("does not treat a refused JSON media range as explicit JSON acceptance", async () => {
+    const app = new Hono();
+    const routes = new RouteRegistry(app);
+    routes.register({
+      method: "GET",
+      path: "/participant-only",
+      tier: "participant",
+      handler: (context: Context) => context.text("secret"),
+    });
+
+    const response = await app.request("http://localhost/participant-only", {
+      headers: { accept: "application/json;q=0" },
+    });
+
+    expect(response.status).toBe(401);
+    expect(response.headers.get("content-type")).toContain("text/html");
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(await response.text()).toContain("Request a new link");
   });
 });

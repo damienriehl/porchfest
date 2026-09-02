@@ -35,6 +35,7 @@ const DEFAULT_PARTICIPANT_FIELD_MAX_LENGTH = 300;
 export const MIN_SET_DURATION_MINUTES = 5;
 export const MAX_SET_DURATION_MINUTES = 240;
 export const SET_DURATION_ERROR_MESSAGE = `Enter a set duration from ${MIN_SET_DURATION_MINUTES} to ${MAX_SET_DURATION_MINUTES} minutes.`;
+export const CONTACT_EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export type FieldLengthResult =
   | { readonly ok: true; readonly values: ParticipantValues }

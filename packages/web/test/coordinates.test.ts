@@ -293,6 +293,40 @@ describe("organizer coordinate review and map publication (U9)", () => {
     expect(html).toContain("could not locate the address");
   });
 
+  it("offers manual coordinate entry with no geocoder and verifies an inside-box pin", async () => {
+    const { runtime, cookie, season } = await boot();
+    const venue = createVenue(
+      runtime,
+      season.id,
+      "Manual Coordinate Porch",
+      "15 Manual Way",
+    );
+    const before = await page(runtime, cookie, season.id);
+    const html = await before.text();
+    const action = `/seasons/${season.id}/coordinates/${venue.id}/verify`;
+
+    expect(html).toContain("Manual coordinate entry and review");
+    expect(html).toContain("Manual Coordinate Porch");
+    expect(html).toContain(`action="${action}"`);
+
+    const response = await runtime.request(`${PUBLIC_BASE_URL}${action}`, {
+      method: "POST",
+      headers: formHeaders(cookie),
+      body: new URLSearchParams({
+        _csrf: tokenFrom(html, action),
+        latitude: "10.75",
+        longitude: "20.75",
+        version: String(venue.version),
+      }),
+    });
+
+    expect(response.status).toBe(303);
+    expect(runtime.core.geocoding.publishableCoordinate(venue.id)).toEqual({
+      latitude: 10.75,
+      longitude: 20.75,
+    });
+  });
+
   it("verifies an inside-box pin so its row leaves the list", async () => {
     const geo = new FakeGeoPort({
       "21 Candidate Way": located(10.3, 20.3, "street"),
@@ -321,7 +355,11 @@ describe("organizer coordinate review and map publication (U9)", () => {
     });
     expect(response.status).toBe(303);
     const after = await page(runtime, cookie, season.id);
-    expect(await after.text()).not.toContain("Candidate Porch");
+    const afterHtml = await after.text();
+    expect(afterHtml).toContain("Candidate Porch");
+    expect(afterHtml.split("Coordinates needing review")[1]).not.toContain(
+      "Candidate Porch",
+    );
     expect(runtime.core.geocoding.publishableCoordinate(venue.id)).toEqual({
       latitude: 10.6,
       longitude: 20.6,

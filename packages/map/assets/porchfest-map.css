@@ -21,6 +21,36 @@
   --porchfest-filter-fade: 75%;
 }
 
+/* The route-owned page is standalone, while the rest of this stylesheet can
+   also be embedded in an existing site. Keep viewport normalization scoped to
+   that page so the reusable map does not reset its host layout. */
+.porchfest-map-page,
+.porchfest-map-page *,
+.porchfest-map-page *::before,
+.porchfest-map-page *::after {
+  box-sizing: border-box;
+}
+
+.porchfest-map-page {
+  min-width: 0;
+  max-width: 100%;
+  margin: 0;
+}
+
+.porchfest-map-page main,
+.porchfest-map-page .porchfest-map-mount {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.porchfest-map-page .porchfest-map-header,
+.porchfest-map-page .porchfest-map-controls,
+.porchfest-map-page .porchfest-venue-list {
+  width: min(calc(100% - 2rem), var(--max-width));
+  max-width: calc(100% - 2rem);
+  margin-inline: auto;
+}
+
 /* Full-bleed embedded map: break out of .container to span the viewport */
 .map-embed-fullbleed,
 .porchfest-map-fullbleed {
@@ -48,6 +78,14 @@
 .porchfest-map-fullbleed {
   background: #fff;
   border-block: 1px solid var(--color-border);
+}
+
+.porchfest-map-page .porchfest-map-fullbleed {
+  left: 0;
+  right: 0;
+  width: 100%;
+  max-width: 100%;
+  margin-inline: 0;
 }
 
 .porchfest-map-status {
@@ -93,6 +131,7 @@
   flex-wrap: nowrap;
   align-items: center;
   gap: 0.5rem;
+  max-width: 100%;
   overflow-x: auto;
 }
 

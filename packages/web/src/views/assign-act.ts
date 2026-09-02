@@ -11,6 +11,7 @@ import {
   type Venue,
 } from "@porchfest/core";
 import { escapeHtml, renderOrganizerPage } from "./signup-view.js";
+import { renderParticipantSharedMemberPrompt } from "./shared-member-prompt.js";
 
 export interface ActAssignmentPageOptions {
   readonly season: Season;
@@ -62,6 +63,7 @@ export function renderAssignActPage(options: ActAssignmentPageOptions): string {
       <p class="lede"><a href="/admin/records/act/${options.act.id}?season=${options.season.id}">View act record</a> · <a href="/admin?season=${options.season.id}">Back to activity queue</a></p>
     </header>
     ${notice}
+    ${renderParticipantSharedMemberPrompt({ note: options.act.sharedMemberNote, linkHref: "#act-links" })}
     <section aria-labelledby="act-details-title"><h2 id="act-details-title">Matching details</h2>
       <dl class="submission-list">
         <div class="submission-row"><dt>Availability</dt><dd>${escapeHtml(options.matchingAct ? availability(options.matchingAct, options.season.timezone) : "Unavailable for matching")}</dd></div>
@@ -172,7 +174,7 @@ function renderLinks(options: ActAssignmentPageOptions): string {
   const otherActs = options.acts.filter(
     (act) => act.id !== options.act.id && !linkedIds.has(act.id),
   );
-  return `<section aria-labelledby="act-links-title"><h2 id="act-links-title">Acts sharing a member</h2>
+  return `<section id="act-links" aria-labelledby="act-links-title"><h2 id="act-links-title">Acts sharing a member</h2>
     ${
       options.links.length === 0
         ? '<p class="help">No linked acts.</p>'

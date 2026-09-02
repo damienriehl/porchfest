@@ -17,7 +17,8 @@ There is no database service, queue, SPA runtime, or cloud-only dependency.
 Requirements:
 
 - Docker Engine with the Compose plugin
-- A host whose ports 80 and 443 are reachable (for a public deployment)
+- A host whose ports 80 and 443 are reachable (for a public deployment), or available host-port
+  mappings for local/rootless use as described below
 - A DNS name pointing at that host (for publicly trusted TLS)
 
 ### From clone to first season
@@ -41,11 +42,25 @@ accepts that development certificate. A successful response is:
 { "ok": true, "service": "porchfest" }
 ```
 
+If Docker cannot bind host ports 80/443 — a common rootless-Docker constraint — add host-only
+remappings to `.env` before starting:
+
+```dotenv
+PORCHFEST_HTTP_PORT_MAPPING=8080:80
+PORCHFEST_HTTPS_PORT_MAPPING=8443:443
+```
+
+Keep `PUBLIC_BASE_URL` unset for this zero-configuration localhost case, then use
+`curl --insecure https://localhost:8443/health`. Occupied host ports do not require Caddy to listen
+on those same ports inside its container.
+
 On the first boot, the app log prints a one-hour, single-use bootstrap sign-in URL. Open it, enter
 the first organizer's name and email, and submit. The app sends a deployment with no season to
 `/admin/setup`; that form creates the event, timezone, slots, signup window, locality, public URLs,
-and sender identity. If the log has rotated, `docker compose exec app npm run organizer:link`
-issues a replacement without direct database access.
+and sender identity as a draft season. Open the new season and choose **Move to signups_open**;
+the public host and performer URLs then accept signups. If the log has rotated,
+`docker compose exec app npm run organizer:link` issues a replacement without direct database
+access.
 
 For a public host with its own proxy, follow [the deployment runbook](docs/deploy.md). For the
 reference Caddy topology:
@@ -56,8 +71,18 @@ reference Caddy topology:
    volume) or set it to a unique high-entropy value.
 4. Keep `COMPOSE_FILE` commented for Caddy and run `docker compose up --build -d`.
 
-The application refuses to start when the configured session secret is still the public example
-placeholder. With the variable absent or empty, first boot creates a unique key at
+In this topology, `PUBLIC_BASE_URL` is both the application's canonical origin and Caddy's
+site/listen address. With the usual `https://event.example.org` origin, Caddy listens on container
+port 443 and the default `443:443` mapping is correct. If the canonical origin itself includes a
+nonstandard port, such as `https://localhost:8443`, Caddy listens on that port inside the container;
+set `PORCHFEST_HTTPS_PORT_MAPPING=8443:8443` (not `8443:443`). The HTTP redirect listener remains
+container port 80, so a rootless companion mapping can remain
+`PORCHFEST_HTTP_PORT_MAPPING=8080:80`. A real public deployment should normally expose 80/443 or
+put the documented external-proxy topology in front.
+
+The application refuses to start when the configured session secret equals a known public
+placeholder, including `replace-with-a-unique-random-secret`. `.env.example` intentionally supplies
+no placeholder value. With the variable absent or empty, first boot creates a unique key at
 `/data/session-secret` with mode `0600`; later boots reuse it.
 
 If the only organizer's session expires, an operator with shell access can print a fresh
@@ -70,14 +95,16 @@ and no direct database access involved. The full procedure is in
 The app boots without SMTP credentials, an anti-bot account, a geocoding provider, or a public base
 URL. The built-in fallback behavior and provider-dependent features are explicit:
 
-| Capability               | Works unconfigured                    | Provider configuration                                                     |
-| ------------------------ | ------------------------------------- | -------------------------------------------------------------------------- |
-| Organizer outbox         | Review, copy-paste, and `.eml` export | SMTP enables server-side send and participant magic links                  |
-| Public signup protection | Honeypot and per-IP rate limit        | Turnstile site and secret keys add the external challenge                  |
-| Venue coordinates        | Manual organizer entry and review     | `GEO_PROVIDER=osm` plus a deployment-specific user agent enables geocoding |
+| Capability               | Works unconfigured                                              | Provider configuration                                                                |
+| ------------------------ | --------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| Organizer outbox         | Review, copy-paste, and `.eml` export                           | SMTP enables server-side send and participant magic links                             |
+| Public signup protection | Honeypot and per-IP rate limit                                  | Turnstile site and secret keys add the external challenge                             |
+| Venue coordinates        | Manual latitude/longitude entry, bounds check, and verification | `GEO_PROVIDER=osm` plus a deployment-specific user agent proposes geocodes for review |
 
 `PUBLIC_BASE_URL` is required when SMTP or magic links are enabled. The no-provider mode is a real
-operating mode, not a demo mode: signup, review, matching, export, and map publication remain usable.
+operating mode, not a demo mode: signup, review, matching, export, and map publication remain
+usable. Publishing the map still requires an organizer to verify coordinates for assigned venues;
+without a geocoder, enter those coordinates manually.
 
 Provider credentials must come from an environment variable or mounted file, never source control
 or an image. SMTP, Turnstile, and OpenStreetMap geocoding implementations are selected by the

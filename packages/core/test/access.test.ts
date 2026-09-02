@@ -178,6 +178,28 @@ function tryRedeem(action: () => unknown): boolean {
 }
 
 describe("invites", () => {
+  it("lets an unbound invite collect its email at redemption", () => {
+    const access = repository();
+    const first = access.redeemLink({
+      token: access.issueBootstrapLink().token,
+      displayName: "First",
+      email: "first@example.invalid",
+    });
+    const invite = access.issueInvite(null, first.organizer.id);
+
+    expect(access.linkRequiresEmail(invite.token)).toBe(true);
+    expect(() =>
+      access.redeemLink({ token: invite.token, displayName: "Second" }),
+    ).toThrowError("an email address is required");
+    const second = access.redeemLink({
+      token: invite.token,
+      displayName: "Second",
+      email: "second@example.invalid",
+    });
+
+    expect(second.organizer.email).toBe("second@example.invalid");
+  });
+
   it("lets an organizer invite a second one who can then sign in", () => {
     const access = repository();
     const bootstrap = access.issueBootstrapLink();

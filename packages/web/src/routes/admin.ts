@@ -21,7 +21,10 @@ import {
   serializeSessionCookie,
   type SessionCookieOptions,
 } from "../auth.js";
-import type { RouteRegistry } from "../router/registry.js";
+import {
+  effectiveRequestOrigin,
+  type RouteRegistry,
+} from "../router/registry.js";
 import {
   findSeason,
   notFound,
@@ -29,11 +32,13 @@ import {
   redirect,
 } from "./admin-http.js";
 import { seasonSignupUrls } from "./signup-paths.js";
+import { CONTACT_EMAIL_PATTERN } from "../participant-validation.js";
 import { formatZonedDateInput } from "../timezone.js";
 import { renderQueuePage } from "../views/admin-records.js";
 import {
   renderAdminShell,
   renderFirstRunConflictPage,
+  renderOrganizersPage,
   renderSeasonsPage,
   renderSetupPage,
   renderSignInPage,
@@ -45,6 +50,8 @@ export const ADMIN_PATH = "/admin";
 export const ADMIN_SIGN_IN_PATH = "/admin/sign-in";
 export const ADMIN_SIGN_OUT_PATH = "/admin/sign-out";
 export const ADMIN_SETUP_PATH = "/admin/setup";
+export const ADMIN_ORGANIZERS_PATH = "/admin/organizers";
+export const ADMIN_ORGANIZER_INVITE_PATH = "/admin/organizers/invite";
 const ADMIN_SEASONS_PATH = "/admin/seasons";
 const ADMIN_NEW_SEASON_PATH = "/admin/seasons/new";
 const ADMIN_EDIT_SEASON_PATH = "/admin/seasons/:id/edit";
@@ -54,6 +61,7 @@ export interface AdminRouteOptions {
   readonly routes: RouteRegistry;
   readonly csrfTokenFor: (path: string) => string;
   readonly publicBaseUrl: string | null;
+  readonly trustedProxyHops?: number;
   readonly resolveSocketPeerAddress: (context: Context) => string | null;
   readonly cookie?: SessionCookieOptions;
 }
@@ -119,6 +127,7 @@ export function registerAdminRoutes(options: AdminRouteOptions): void {
           seasonName: season.displayName,
           seasonId: season.id,
           seasonState: season.state,
+          timezone: season.timezone,
           signupUrls: seasonSignupUrls(options.publicBaseUrl, season.id),
           publicMapUrl: season.publicMapUrl,
           correctionsClosed: !isSeasonActionLegal(season.state, "correction"),
@@ -142,18 +151,85 @@ export function registerAdminRoutes(options: AdminRouteOptions): void {
 
   options.routes.register({
     method: "GET",
+    path: ADMIN_ORGANIZERS_PATH,
+    tier: "organizer",
+    handler: () =>
+      new Response(
+        renderOrganizersPage({
+          csrfToken: options.csrfTokenFor(ADMIN_ORGANIZER_INVITE_PATH),
+        }),
+        { status: 200, headers: adminHeaders() },
+      ),
+  });
+
+  options.routes.register({
+    method: "POST",
+    path: ADMIN_ORGANIZER_INVITE_PATH,
+    tier: "organizer",
+    handler: async (context: Context) => {
+      const organizer = currentOrganizer(options.core, context);
+      if (!organizer) return options.routes.organizerGetRefusal(context);
+
+      let fields: Readonly<Record<string, string>>;
+      try {
+        fields = await readFields(context);
+      } catch {
+        return new Response(
+          renderOrganizersPage({
+            csrfToken: options.csrfTokenFor(ADMIN_ORGANIZER_INVITE_PATH),
+            error: "That form could not be read.",
+          }),
+          { status: 400, headers: adminHeaders() },
+        );
+      }
+
+      const email = fields.email ?? "";
+      if (email && !CONTACT_EMAIL_PATTERN.test(email)) {
+        return new Response(
+          renderOrganizersPage({
+            csrfToken: options.csrfTokenFor(ADMIN_ORGANIZER_INVITE_PATH),
+            email,
+            error: "Enter the email address this organizer will use.",
+          }),
+          { status: 422, headers: adminHeaders() },
+        );
+      }
+
+      const issued = options.core.access.issueInvite(
+        email || null,
+        organizer.id,
+      );
+      const invitePath = `${ADMIN_SIGN_IN_PATH}?token=${encodeURIComponent(issued.token)}`;
+      const inviteUrl = new URL(
+        invitePath,
+        options.publicBaseUrl ??
+          effectiveRequestOrigin(context, options.trustedProxyHops),
+      ).href;
+      return new Response(
+        renderOrganizersPage({
+          csrfToken: options.csrfTokenFor(ADMIN_ORGANIZER_INVITE_PATH),
+          invitedEmail: email || undefined,
+          inviteUrl,
+          expiresAt: issued.invite.expiresAt,
+        }),
+        { status: 201, headers: adminHeaders() },
+      );
+    },
+  });
+
+  options.routes.register({
+    method: "GET",
     path: ADMIN_SIGN_IN_PATH,
     tier: "public",
     handler: (context: Context) => {
       const token = context.req.query("token") ?? "";
-      const invited = options.core.access.hasAnyOrganizer();
       return new Response(
         renderSignInPage({
           token,
           csrfToken: options.csrfTokenFor(ADMIN_SIGN_IN_PATH),
-          // Before the first organizer exists the person holding the link has to
-          // name themselves; an invite already knows the address.
-          needsEmail: !invited,
+          // Bootstrap and unbound invite links collect the address at redemption;
+          // a bound invite already knows it.
+          needsEmail: signInRequiresEmail(options, token),
           errors: [],
         }),
         { status: 200, headers: adminHeaders() },
@@ -178,6 +254,17 @@ export function registerAdminRoutes(options: AdminRouteOptions): void {
 
       if (!token) {
         return signInRefusal(options, "", "That sign-in link is incomplete.");
+      }
+
+      if (
+        signInRequiresEmail(options, token) &&
+        !CONTACT_EMAIL_PATTERN.test(email)
+      ) {
+        return signInRefusal(
+          options,
+          token,
+          "Enter the email address for this organizer account.",
+        );
       }
 
       try {
@@ -733,10 +820,20 @@ function signInRefusal(
     renderSignInPage({
       token,
       csrfToken: options.csrfTokenFor(ADMIN_SIGN_IN_PATH),
-      needsEmail: !options.core.access.hasAnyOrganizer(),
+      needsEmail: signInRequiresEmail(options, token),
       errors: [message],
     }),
     { status: 403, headers: adminHeaders() },
+  );
+}
+
+function signInRequiresEmail(
+  options: AdminRouteOptions,
+  token: string,
+): boolean {
+  return (
+    !options.core.access.hasAnyOrganizer() ||
+    options.core.access.linkRequiresEmail(token)
   );
 }
 

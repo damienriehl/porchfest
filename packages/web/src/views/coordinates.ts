@@ -1,7 +1,9 @@
 import {
   seasonBoundingBox,
   type CoordinateRejectionCode,
+  type Coordinates,
   type Season,
+  type Venue,
   type VenueCoordinateReview,
 } from "@porchfest/core";
 import { currentYearIn } from "../timezone.js";
@@ -37,6 +39,8 @@ export interface GeocodeSeasonCounts {
 export function renderCoordinatesPage(options: {
   readonly season: Season;
   readonly rows: readonly VenueCoordinateReview[];
+  readonly venues: readonly Venue[];
+  readonly verifiedCoordinates: ReadonlyMap<number, Coordinates>;
   readonly geoConfigured: boolean;
   readonly csrf: {
     readonly verify: string;
@@ -68,12 +72,61 @@ export function renderCoordinatesPage(options: {
       <p>${escapeHtml(boundsText)}</p>
     </section>
     ${renderGeocodeSection(options)}
+    ${renderManualCoordinateSection(options)}
     ${renderPublicationSection(options)}
     <section aria-labelledby="coordinate-review-list">
       <h2 id="coordinate-review-list">Coordinates needing review</h2>
       ${renderRows(options)}
     </section>`,
   );
+}
+
+function renderManualCoordinateSection(options: {
+  readonly season: Season;
+  readonly rows: readonly VenueCoordinateReview[];
+  readonly venues: readonly Venue[];
+  readonly verifiedCoordinates: ReadonlyMap<number, Coordinates>;
+  readonly csrf: { readonly verify: string };
+}): string {
+  const reviewVenueIds = new Set(options.rows.map((row) => row.venueId));
+  const rows = options.venues
+    .filter((venue) => !reviewVenueIds.has(venue.id))
+    .map((venue) => {
+      const coordinate = coordinateForVenue(
+        options.verifiedCoordinates,
+        venue.id,
+      );
+      const form = venue.address?.trim()
+        ? renderCoordinateVerificationForm({
+            seasonId: options.season.id,
+            venueId: venue.id,
+            venueVersion: venue.version,
+            csrfToken: options.csrf.verify,
+            latitude: coordinate?.latitude.toString() ?? "",
+            longitude: coordinate?.longitude.toString() ?? "",
+            idPrefix: "manual-",
+            formClass: "signup-form compact-form",
+            buttonLabel: "Mark verified",
+          })
+        : '<p class="help">Add a venue address before verifying a pin.</p>';
+      return `<li class="queue-item"><div class="queue-item-body"><h3>${escapeHtml(venue.title)}</h3><p>${escapeHtml(venue.address ?? "No address")}</p>${coordinate ? '<p class="help">Currently verified. Saving replaces the organizer-verified point.</p>' : '<p class="help">No verified point yet.</p>'}</div>${form}</li>`;
+    })
+    .join("");
+  return `<section aria-labelledby="manual-coordinate-entry">
+      <h2 id="manual-coordinate-entry">Manual coordinate entry and review</h2>
+      <p class="help">Enter latitude and longitude from a trusted map, then mark the point verified. The same season bounding-box check applies whether or not a geocoder is configured.</p>
+      ${rows ? `<ul class="queue-list">${rows}</ul>` : '<p class="help">No active venues are available.</p>'}
+    </section>`;
+}
+
+function coordinateForVenue(
+  coordinates: ReadonlyMap<number, Coordinates>,
+  venueId: number,
+): Coordinates | undefined {
+  for (const [candidateVenueId, coordinate] of coordinates) {
+    if (candidateVenueId === venueId) return coordinate;
+  }
+  return undefined;
 }
 
 function renderNotice(options: {
@@ -183,13 +236,16 @@ function renderRow(
   const candidate =
     latitude && longitude ? `${latitude}, ${longitude}` : "No candidate point";
   const verification = row.address?.trim()
-    ? `<form method="post" action="/seasons/${options.season.id}/coordinates/${row.venueId}/verify">
-            <input type="hidden" name="_csrf" value="${escapeHtml(options.csrf.verify)}">
-            <input type="hidden" name="version" value="${row.venueVersion}">
-            <label>Latitude <input name="latitude" inputmode="decimal" required value="${escapeHtml(latitude)}"></label>
-            <label>Longitude <input name="longitude" inputmode="decimal" required value="${escapeHtml(longitude)}"></label>
-            <button class="secondary-action" type="submit">Verify pin</button>
-          </form>`
+    ? renderCoordinateVerificationForm({
+        seasonId: options.season.id,
+        venueId: row.venueId,
+        venueVersion: row.venueVersion,
+        csrfToken: options.csrf.verify,
+        latitude,
+        longitude,
+        idPrefix: "review-",
+        buttonLabel: "Verify pin",
+      })
     : '<p class="help">Add an address before verifying this pin.</p>';
   return `<tr>
           <td>${escapeHtml(row.title)}</td>
@@ -199,4 +255,31 @@ function renderRow(
           <td>${escapeHtml(candidate)}</td>
           <td>${verification}</td>
         </tr>`;
+}
+
+function renderCoordinateVerificationForm(options: {
+  readonly seasonId: number;
+  readonly venueId: number;
+  readonly venueVersion: number;
+  readonly csrfToken: string;
+  readonly latitude: string;
+  readonly longitude: string;
+  readonly idPrefix: string;
+  readonly formClass?: string;
+  readonly buttonLabel: string;
+}): string {
+  const latitudeId = `${options.idPrefix}latitude-${options.venueId}`;
+  const longitudeId = `${options.idPrefix}longitude-${options.venueId}`;
+  const className = options.formClass
+    ? ` class="${escapeHtml(options.formClass)}"`
+    : "";
+  return `<form${className} method="post" action="/seasons/${options.seasonId}/coordinates/${options.venueId}/verify">
+            <input type="hidden" name="_csrf" value="${escapeHtml(options.csrfToken)}">
+            <input type="hidden" name="version" value="${options.venueVersion}">
+            <label for="${latitudeId}">Latitude</label>
+            <input id="${latitudeId}" name="latitude" inputmode="decimal" required value="${escapeHtml(options.latitude)}">
+            <label for="${longitudeId}">Longitude</label>
+            <input id="${longitudeId}" name="longitude" inputmode="decimal" required value="${escapeHtml(options.longitude)}">
+            <button class="secondary-action" type="submit">${escapeHtml(options.buttonLabel)}</button>
+          </form>`;
 }

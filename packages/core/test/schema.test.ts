@@ -225,6 +225,61 @@ describe("core schema migration", () => {
     }
   });
 
+  it("adds nullable original-submission snapshots without changing existing rows", () => {
+    const upgrade = new Database(":memory:");
+    upgrade.pragma("foreign_keys = ON");
+    const migrations = readMigrationFiles({
+      migrationsFolder: fileURLToPath(new URL("../drizzle", import.meta.url)),
+    });
+    const migration0019 = migrations.at(19);
+    if (migration0019 === undefined) {
+      throw new Error("migration 0019 was not loaded");
+    }
+
+    try {
+      for (const migration of migrations.slice(0, 19)) {
+        for (const statement of migration.sql) {
+          if (statement.trim() !== "") upgrade.exec(statement);
+        }
+      }
+      const season = upgrade
+        .prepare(
+          "insert into seasons (year, display_name) values (?, ?) returning id",
+        )
+        .get(2119, "Snapshot Upgrade") as { id: number };
+      upgrade
+        .prepare("insert into contacts (season_id, name) values (?, ?)")
+        .run(season.id, "Existing Contact");
+      upgrade
+        .prepare("insert into acts (season_id, name) values (?, ?)")
+        .run(season.id, "Existing Act");
+      upgrade
+        .prepare("insert into venues (season_id, title) values (?, ?)")
+        .run(season.id, "Existing Venue");
+
+      for (const statement of migration0019.sql) {
+        if (statement.trim() !== "") upgrade.exec(statement);
+      }
+
+      for (const [table, labelColumn] of [
+        ["contacts", "name"],
+        ["acts", "name"],
+        ["venues", "title"],
+      ] as const) {
+        expect(
+          upgrade
+            .prepare(
+              `select ${labelColumn} as label, original_submission from ${table}`,
+            )
+            .get(),
+        ).toMatchObject({ original_submission: null });
+      }
+      expect(upgrade.pragma("foreign_key_check")).toEqual([]);
+    } finally {
+      upgrade.close();
+    }
+  });
+
   it("rejects a slot state outside the supported state machine", () => {
     const season = sqlite
       .prepare(

@@ -28,7 +28,7 @@ describe("session secret boot policy", () => {
     ).toBe(0o600);
   });
 
-  it("refuses the public example placeholder", async () => {
+  it("refuses the known public placeholder with actionable guidance", async () => {
     const dataDirectory = await mkdtemp(
       join(tmpdir(), "porchfest-secret-placeholder-"),
     );
@@ -37,6 +37,8 @@ describe("session secret boot policy", () => {
         dataDirectory,
         configuredSecret: SESSION_SECRET_PLACEHOLDER,
       }),
-    ).rejects.toThrow(/placeholder/i);
+    ).rejects.toThrow(
+      "PORCHFEST_SESSION_SECRET equals a known public placeholder; leave it unset to generate a unique secret or configure a unique high-entropy value.",
+    );
   });
 });

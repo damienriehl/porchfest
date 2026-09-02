@@ -1,6 +1,10 @@
 import type { Organizer, Season } from "@porchfest/core";
 import { escapeHtml } from "./signup-view.js";
-import { ADMIN_SIGN_IN_PATH, ADMIN_SIGN_OUT_PATH } from "../routes/admin.js";
+import {
+  ADMIN_ORGANIZER_INVITE_PATH,
+  ADMIN_SIGN_IN_PATH,
+  ADMIN_SIGN_OUT_PATH,
+} from "../routes/admin.js";
 import { seasonStateLabel } from "./season-labels.js";
 
 function page(title: string, body: string): string {
@@ -87,7 +91,7 @@ export function renderSignInPage(options: {
           <label for="email">Email</label>
           <div class="field-error-slot"></div>
           <input id="email" name="email" type="email" autocomplete="email" required>
-          <p class="help" id="email-help">This becomes the first organizer account for this deployment.</p>
+          <p class="help" id="email-help">This address will be used for your organizer account.</p>
         </div>`
             : `<p class="help">This link already knows which address it was sent to.</p>`
         }
@@ -112,6 +116,53 @@ export function renderAdminShell(options: {
     <form class="signup-form" method="post" action="${ADMIN_SIGN_OUT_PATH}">
       <input type="hidden" name="_csrf" value="${escapeHtml(options.csrfToken)}">
       <button class="primary-action" type="submit">Sign out</button>
+    </form>`,
+  );
+}
+
+export function renderOrganizersPage(options: {
+  readonly csrfToken: string;
+  readonly email?: string;
+  readonly error?: string;
+  readonly invitedEmail?: string;
+  readonly inviteUrl?: string;
+  readonly expiresAt?: Date;
+}): string {
+  const error = options.error
+    ? `<section class="error-summary" role="alert" tabindex="-1"><h2>Invite not created</h2><p>${escapeHtml(options.error)}</p></section>`
+    : "";
+  const issued =
+    options.inviteUrl && options.expiresAt
+      ? `<section class="confirmation-card" aria-labelledby="invite-link-title">
+      <h2 id="invite-link-title">Copy this invite link</h2>
+      <p>${options.invitedEmail ? `Send it to ${escapeHtml(options.invitedEmail)} using a channel you trust.` : "Send it to the new organizer using a channel you trust; they will enter their email when they redeem it."} Email delivery from Porchfest is optional.</p>
+      <p><a href="${escapeHtml(options.inviteUrl)}">${escapeHtml(options.inviteUrl)}</a></p>
+      <p class="help">The link works once and expires ${escapeHtml(options.expiresAt.toISOString())}. If your account is deactivated before it is used, the invite is withdrawn too.</p>
+    </section>`
+      : "";
+
+  return page(
+    "Organizers",
+    `    <header class="signup-header">
+      <p class="eyebrow">Organizer access</p>
+      <h1>Invite another organizer</h1>
+      <p class="lede">Create a single-use link, then copy it to the person you trust with organizer access.</p>
+      <p><a href="/admin">Back to the activity queue</a></p>
+    </header>
+    ${error}
+    ${issued}
+    <form class="signup-form" method="post" action="${ADMIN_ORGANIZER_INVITE_PATH}">
+      <input type="hidden" name="_csrf" value="${escapeHtml(options.csrfToken)}">
+      <fieldset>
+        <legend>New organizer</legend>
+        <div class="field${options.error ? " has-error" : ""}">
+          <label for="email">Organizer email</label>
+          <div class="field-error-slot">${options.error ? `<p class="field-error" id="email-error">${escapeHtml(options.error)}</p>` : ""}</div>
+          <input id="email" name="email" type="email" autocomplete="email" value="${escapeHtml(options.email ?? "")}"${options.error ? ' aria-invalid="true" aria-describedby="email-error email-help"' : ' aria-describedby="email-help"'}>
+          <p class="help" id="email-help">Optional. If left blank, the new organizer enters their address when redeeming the link.</p>
+        </div>
+      </fieldset>
+      <button class="primary-action" type="submit">Create invite link</button>
     </form>`,
   );
 }

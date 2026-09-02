@@ -1470,6 +1470,16 @@ describe("the record editor", () => {
     expect(
       venue?.recordType === "venue" && venue.record.requestedActNames,
     ).toBe("The Requested Fixtures");
+
+    const editedPage = await get(
+      runtime,
+      `/admin/records/venue/${signup.venue.id}?season=${season.id}`,
+      alice,
+    );
+    const editedHtml = await editedPage.text();
+    expect(editedHtml).toContain("Original submission");
+    expect(editedHtml).toContain("The Test Porch");
+    expect(editedHtml).toContain('value="Renamed"');
   });
 
   it("refuses a record from a season the organizer did not ask for", async () => {
@@ -2054,7 +2064,7 @@ describe("participant change requests", () => {
     expect(body).toContain(`/admin/change-requests/${request.id}/reject`);
   });
 
-  it("renders the ending date for availability that crosses UTC midnight", async () => {
+  it("renders availability in a readable season-timezone format across midnight", async () => {
     const { runtime, season, alice } = await boot();
     const performer = createPerformer(
       runtime,
@@ -2079,7 +2089,10 @@ describe("participant change requests", () => {
     const body = await (
       await get(runtime, `/admin?season=${season.id}`, alice)
     ).text();
-    expect(body).toContain("2031-09-13 23:00–2031-09-14 01:00 UTC");
+    expect(body).toContain(
+      "Sep 13, 2031, 11:00 PM–Sep 14, 2031, 1:00 AM (UTC)",
+    );
+    expect(body).not.toContain("2031-09-13T23:00:00.000Z");
   });
 
   it("rejects a request without touching its target", async () => {

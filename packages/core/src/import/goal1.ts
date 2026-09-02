@@ -8,6 +8,7 @@ import type {
   ImportKeyRepository,
 } from "../import-keys.js";
 import type { BoundingBox } from "../ports/geo.js";
+import { extractParticipantLinks } from "../participant-links.js";
 import type {
   HostSignupInput,
   PerformerSignupInput,
@@ -538,7 +539,7 @@ function applyPerformerOverrides(
     if (Object.keys(fields).some(isPerformerNoteSourceField)) {
       actChanges.notes = performerNotes(
         effectiveRow,
-        extractLinksAndResidue(effectiveRow.listen, effectiveRow.websites)
+        extractParticipantLinks(effectiveRow.listen, effectiveRow.websites)
           .residue,
       );
     }
@@ -2086,7 +2087,7 @@ function mapPerformer(
   row: JsonObject,
   timeSlots: readonly SeasonTimeSlot[],
 ): Omit<PerformerSignupInput, "seasonId"> {
-  const extracted = extractLinksAndResidue(row.listen, row.websites);
+  const extracted = extractParticipantLinks(row.listen, row.websites);
   return {
     contact: {
       name: requiredString(row.contact_name, "performer contact_name"),
@@ -2138,7 +2139,7 @@ function mapOverrideField(
   } else if (field === "lend_gear") {
     actChanges.canLendGear = positiveContent(row.lend_gear);
   } else if (field === "listen" || field === "websites") {
-    const extracted = extractLinksAndResidue(row.listen, row.websites);
+    const extracted = extractParticipantLinks(row.listen, row.websites);
     actChanges.links = extracted.links.join("\n");
   }
 }
@@ -2204,36 +2205,6 @@ function availabilityWindows(
     const slot = timeSlots[index];
     return slot ? [{ startsAt: slot.startsAt, endsAt: slot.endsAt }] : [];
   });
-}
-
-function extractLinksAndResidue(...values: unknown[]): {
-  links: string[];
-  residue: string[];
-} {
-  const links = new Set<string>();
-  const residue: string[] = [];
-  for (const raw of values) {
-    const value = optionalString(raw);
-    if (!value || placeholder(value)) continue;
-    const matches = [...value.matchAll(/https?:\/\/[^\s<>"']+/gi)];
-    let remainder = value;
-    for (const match of matches) {
-      const candidate = match[0].replace(/[,.;)]+$/g, "");
-      try {
-        const normalized = new URL(candidate).toString();
-        links.add(normalized);
-      } catch {
-        // Useful invalid text remains in the residue below.
-      }
-      remainder = remainder.replace(match[0], " ");
-    }
-    const useful = remainder
-      .replace(/\s+/g, " ")
-      .trim()
-      .replace(/^[-,;:]+|[-,;:]+$/g, "");
-    if (useful && !placeholder(useful)) residue.push(useful);
-  }
-  return { links: [...links], residue };
 }
 
 function mapSelections<Value extends string>(

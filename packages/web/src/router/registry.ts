@@ -2,8 +2,8 @@ import type { Context, Handler } from "hono";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { adminHeaders } from "../auth.js";
+import { participantAccessRefusal } from "../participant-http.js";
 import { renderOrganizerSignInRequiredPage } from "../views/admin-shell.js";
-import { renderParticipantAccessRequiredPage } from "../views/self-serve.js";
 
 export const TRUST_TIERS = ["public", "participant", "organizer"] as const;
 export type TrustTier = (typeof TRUST_TIERS)[number];
@@ -203,11 +203,12 @@ export class RouteRegistry {
             { status: 401, headers: adminHeaders() },
           );
         }
-        if (route.tier === "participant" && acceptsHtml(context)) {
-          return new Response(renderParticipantAccessRequiredPage(), {
-            status: 401,
-            headers: adminHeaders(),
-          });
+        // Participant links can expire or be revoked between rendering a form
+        // and submitting it. Keep dead, revoked, and forged links
+        // indistinguishable while giving non-JSON clients a useful recovery
+        // path instead of raw JSON.
+        if (route.tier === "participant" && !explicitlyAcceptsJson(context)) {
+          return participantAccessRefusal();
         }
         return context.json(
           { error: "unauthorized" },
@@ -287,7 +288,7 @@ export class RouteRegistry {
   }
 }
 
-function effectiveRequestOrigin(
+export function effectiveRequestOrigin(
   context: Context,
   trustedProxyHops: number | undefined,
 ): string {
@@ -324,16 +325,24 @@ function effectiveRequestOrigin(
 }
 
 function acceptsHtml(context: Context): boolean {
+  return (
+    acceptsMediaType(context, "text/html") ||
+    acceptsMediaType(context, "application/xhtml+xml")
+  );
+}
+
+function explicitlyAcceptsJson(context: Context): boolean {
+  return acceptsMediaType(context, "application/json") && !acceptsHtml(context);
+}
+
+function acceptsMediaType(context: Context, expected: string): boolean {
   return (context.req.header("accept") ?? "").split(",").some((range) => {
     const [rawMediaType, ...parameters] = range.split(";");
-    const mediaType = rawMediaType?.trim().toLowerCase();
+    if (rawMediaType?.trim().toLowerCase() !== expected) return false;
     const quality = parameters
       .map((parameter) => parameter.trim().toLowerCase())
       .find((parameter) => parameter.startsWith("q="));
-    return (
-      (mediaType === "text/html" || mediaType === "application/xhtml+xml") &&
-      (quality === undefined || Number(quality.slice(2)) > 0)
-    );
+    return quality === undefined || Number(quality.slice(2)) > 0;
   });
 }
 
@@ -341,14 +350,36 @@ function rejectMutationOrigin(
   context: Context,
   protection: MutationProtection | undefined,
 ): Response | null {
-  if (!protection || protection.allowedOrigin === null) {
+  if (!protection) {
     return context.text(
       "Mutation protection is not configured.",
       503,
       plainTextAdminHeaders(),
     );
   }
-  if (context.req.header("origin") !== protection.allowedOrigin) {
+  const fetchSite = context.req.header("sec-fetch-site")?.toLowerCase();
+  if (fetchSite && fetchSite !== "same-origin" && fetchSite !== "none") {
+    return context.text(
+      "Request origin was refused.",
+      403,
+      plainTextAdminHeaders(),
+    );
+  }
+  if (
+    protection.allowedOrigin === null &&
+    context.req.header("host") !== undefined &&
+    fetchSite === undefined
+  ) {
+    return context.text(
+      "Request origin was refused.",
+      403,
+      plainTextAdminHeaders(),
+    );
+  }
+  const expectedOrigin =
+    protection.allowedOrigin ??
+    effectiveRequestOrigin(context, protection.trustedProxyHops);
+  if (context.req.header("origin") !== expectedOrigin) {
     return context.text(
       "Request origin was refused.",
       403,
