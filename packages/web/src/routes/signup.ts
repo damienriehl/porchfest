@@ -21,6 +21,11 @@ import { readFileSync } from "node:fs";
 import type { Context } from "hono";
 import type { RouteRegistry } from "../router/registry.js";
 import { contentSecurityPolicy } from "../security-headers.js";
+import {
+  enforceParticipantFieldLengths,
+  parseSetDurationMinutes,
+  SET_DURATION_ERROR_MESSAGE,
+} from "../participant-validation.js";
 import { renderHostForm } from "../views/host-form.js";
 import { renderPerformerForm } from "../views/performer-form.js";
 import {
@@ -59,31 +64,6 @@ export interface SignupRouteOptions {
 
 type SignupKind = "host" | "performer";
 type SignupStatus = 200 | 201 | 400 | 403 | 409 | 415 | 422 | 429 | 503;
-
-/** Longest a participant answer may be, by field. Without a ceiling one 51 KiB
- *  body of "&" persists in full and re-renders as ~256 KiB of "&amp;". */
-const MAX_FIELD_LENGTH: Readonly<Record<string, number>> = {
-  contact_name: 200,
-  contact_email: 320,
-  contact_phone: 60,
-  venue_title: 200,
-  venue_address: 300,
-  space_description: 4000,
-  requested_act_names: 2000,
-  genre_preferences: 2000,
-  notes: 4000,
-  act_name: 200,
-  genres: 300,
-  description: 4000,
-  links: 2000,
-  house_preference: 2000,
-  shared_member_note: 2000,
-  performer_notes: 4000,
-  duration_minutes: 10,
-  season_id: 20,
-  antibot_token: 4096,
-};
-const DEFAULT_MAX_FIELD_LENGTH = 300;
 
 /** A performer plays one festival day. Twelve windows is generous; without a cap
  *  a sub-64 KiB body can echo ~869 KiB of markup or insert ~880 rows. */
@@ -468,21 +448,12 @@ async function readSignupValues(context: Context): Promise<ReadResult> {
     }
   }
 
-  for (const [field, submitted] of Object.entries(values)) {
-    const limit = MAX_FIELD_LENGTH[field] ?? DEFAULT_MAX_FIELD_LENGTH;
-    if (submitted.some((entry) => entry.length > limit)) {
-      return {
-        ok: false,
-        // The over-limit value is deliberately not echoed back into the page.
-        values: without(values, field),
-        status: 422,
-        error: {
-          field,
-          label: "Submission",
-          message: `Shorten this answer to ${limit} characters or fewer.`,
-        },
-      };
-    }
+  const fieldLengths = enforceParticipantFieldLengths(values);
+  if (!fieldLengths.ok) {
+    return {
+      ...fieldLengths,
+      status: 422,
+    };
   }
 
   const pairs = Math.max(
@@ -810,13 +781,12 @@ function enumSet<const Values extends readonly string[]>(
 }
 
 function parseDuration(values: SignupValues, errors: SignupError[]): number {
-  const raw = firstValue(values, "duration_minutes").trim();
-  const value = raw === "" ? Number.NaN : Number(raw);
-  if (!Number.isSafeInteger(value) || value < 5 || value > 240) {
+  const value = parseSetDurationMinutes(firstValue(values, "duration_minutes"));
+  if (value === null) {
     errors.push({
       field: "duration_minutes",
       label: "Set duration",
-      message: "Enter a set duration from 5 to 240 minutes.",
+      message: SET_DURATION_ERROR_MESSAGE,
     });
     return 0;
   }

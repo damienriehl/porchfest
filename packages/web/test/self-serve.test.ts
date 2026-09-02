@@ -872,6 +872,103 @@ describe("U8 participant self-serve scenarios", () => {
     );
   });
 
+  it.each(["1", "1000000"])(
+    "R14: refuses an out-of-range act duration of %s and preserves the submitted value",
+    async (duration) => {
+      const { runtime, performer } = await boot();
+      const page = await participantPage(runtime, "act", performer.act.id);
+      const response = await post(
+        runtime,
+        "/self-serve",
+        page.cookie,
+        actEdit(page.html, {
+          contact_phone: "555-0199",
+          duration_minutes: duration,
+        }),
+      );
+      const body = await response.text();
+
+      expect(response.status).toBe(422);
+      expect(body).toContain("Enter a set duration from 5 to 240 minutes");
+      expect(body).toContain(
+        `name="duration_minutes" type="number" value="${duration}"`,
+      );
+      expect(
+        runtime.core.seasons.getAct(performer.act.id).durationMinutes,
+      ).toBe(45);
+      expect(runtime.core.seasons.getContact(performer.contact.id).phone).toBe(
+        "555-0102",
+      );
+    },
+  );
+
+  it.each([5, 240])(
+    "R14: accepts the boundary act duration of %i minutes",
+    async (duration) => {
+      const { runtime, performer } = await boot();
+      const page = await participantPage(runtime, "act", performer.act.id);
+      expect(page.html).toContain('name="duration_minutes" type="number"');
+      expect(page.html).toContain('min="5" max="240"');
+
+      const response = await post(
+        runtime,
+        "/self-serve",
+        page.cookie,
+        actEdit(page.html, { duration_minutes: String(duration) }),
+      );
+
+      expect(response.status).toBe(303);
+      expect(
+        runtime.core.seasons.getAct(performer.act.id).durationMinutes,
+      ).toBe(duration);
+    },
+  );
+
+  it("R14: refuses an over-limit editable field without echoing or persisting it", async () => {
+    const { runtime, performer } = await boot();
+    const page = await participantPage(runtime, "act", performer.act.id);
+    const overLimitNotes = "n".repeat(4001);
+    const response = await post(
+      runtime,
+      "/self-serve",
+      page.cookie,
+      actEdit(page.html, {
+        contact_phone: "555-0199",
+        participant_notes: overLimitNotes,
+      }),
+    );
+    const body = await response.text();
+
+    expect(response.status).toBe(422);
+    expect(body).toContain('id="participant_notes-error"');
+    expect(body).toContain("Shorten this answer to 4000 characters or fewer");
+    expect(body).not.toContain(overLimitNotes);
+    expect(runtime.core.seasons.getAct(performer.act.id).notes).toBe(
+      "Act participant note",
+    );
+    expect(runtime.core.seasons.getContact(performer.contact.id).phone).toBe(
+      "555-0102",
+    );
+  });
+
+  it("R14: accepts an editable field at its shared length ceiling", async () => {
+    const { runtime, performer } = await boot();
+    const page = await participantPage(runtime, "act", performer.act.id);
+    const boundaryDescription = "d".repeat(4000);
+
+    const response = await post(
+      runtime,
+      "/self-serve",
+      page.cookie,
+      actEdit(page.html, { description: boundaryDescription }),
+    );
+
+    expect(response.status).toBe(303);
+    expect(runtime.core.seasons.getAct(performer.act.id).description).toBe(
+      boundaryDescription,
+    );
+  });
+
   it.each([
     ["malformed", ["not-a-listed-option"]],
     ["duplicate", ["pa", "pa"]],

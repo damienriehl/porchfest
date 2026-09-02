@@ -13,6 +13,7 @@ import {
   inArray,
   isNotNull,
   isNull,
+  lt,
   ne,
   or,
   sql,
@@ -447,7 +448,7 @@ export function createParticipantTokenRepository(
           candidate.recordType,
           candidate.recordId,
           stamp,
-          candidate.id,
+          candidate,
         );
         const result = tx
           .update(participantMagicLinks)
@@ -643,7 +644,7 @@ export function createParticipantTokenRepository(
     recordType: ParticipantRecordType,
     recordId: number,
     stamp: Date,
-    exceptId?: number,
+    supersedingReissue?: ParticipantMagicLink,
   ): void {
     executor
       .update(participantMagicLinks)
@@ -657,9 +658,22 @@ export function createParticipantTokenRepository(
           eq(participantMagicLinks.recordType, recordType),
           eq(participantMagicLinks.recordId, recordId),
           isNull(participantMagicLinks.revokedAt),
-          exceptId === undefined
+          supersedingReissue === undefined
             ? undefined
-            : sql`${participantMagicLinks.id} <> ${exceptId}`,
+            : or(
+                isNotNull(participantMagicLinks.activatedAt),
+                lt(
+                  participantMagicLinks.createdAt,
+                  supersedingReissue.createdAt,
+                ),
+                and(
+                  eq(
+                    participantMagicLinks.createdAt,
+                    supersedingReissue.createdAt,
+                  ),
+                  lt(participantMagicLinks.id, supersedingReissue.id),
+                ),
+              ),
         ),
       )
       .run();

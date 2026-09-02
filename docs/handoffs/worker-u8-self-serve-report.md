@@ -71,3 +71,9 @@ The structured code-review pass completed under run ID `20260902-114628-a919b51a
 - Push: not performed, as requested.
 - Commit/clean-tree status: blocked by the managed environment. This linked worktree points at `/home/damienriehl/Coding Projects/porchfest/.git/worktrees/porchfest-u8`, which is outside the writable roots; `git add` fails while creating `index.lock`. The implementation and this report therefore remain as tracked modifications and untracked files and cannot be committed or reduced to a clean tree from this session.
 - Suggested commit split once Git metadata is writable: `feat(core): add participant magic-link lifecycle (U8-a)`, `feat(web): add participant self-serve routes (U8-b)`, and `docs: record U8 self-serve handoff`.
+
+## PR #48 review fixes
+
+- Reissue activation now revokes prior active links and older pending candidates while preserving newer pending candidates, ordered deterministically by creation time and row ID. `packages/core/test/tokens.test.ts` proves both overlapping-delivery completion orders, including tied timestamps.
+- Signup and self-serve edits now share the same 5–240-minute duration validator and rendered input bounds. `packages/web/test/self-serve.test.ts` proves 1 and 1000000 are refused without persistence and with submitted values retained, while 5 and 240 are accepted.
+- Signup and self-serve edits now share one field-length policy; every submitted edit field is checked before the token repository update, with oversized values omitted from the refusal page. `packages/web/test/self-serve.test.ts` proves an over-limit participant note is named, refused, and not persisted, while a boundary-length description is accepted.

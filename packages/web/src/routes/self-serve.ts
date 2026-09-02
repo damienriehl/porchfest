@@ -27,6 +27,11 @@ import {
 import type { RouteRegistry } from "../router/registry.js";
 import { contentSecurityPolicy } from "../security-headers.js";
 import {
+  enforceParticipantFieldLengths,
+  parseSetDurationMinutes,
+  SET_DURATION_ERROR_MESSAGE,
+} from "../participant-validation.js";
+import {
   renderParticipantAccessRequiredPage,
   renderRequestLinkPage,
   renderSelfServePage,
@@ -171,9 +176,27 @@ export function registerSelfServeRoutes(options: SelfServeRouteOptions): void {
           },
         ]);
       }
-      const errors = validateEdit(fields, view.recordType);
+      const fieldLengths = enforceParticipantFieldLengths(fields);
+      if (!fieldLengths.ok) {
+        return participantPage(
+          options,
+          token,
+          context,
+          422,
+          [fieldLengths.error],
+          fieldLengths.values,
+        );
+      }
+      const errors = validateEdit(fieldLengths.values, view.recordType);
       if (errors.length > 0) {
-        return participantPage(options, token, context, 422, errors);
+        return participantPage(
+          options,
+          token,
+          context,
+          422,
+          errors,
+          fieldLengths.values,
+        );
       }
 
       try {
@@ -472,11 +495,13 @@ function validateEdit(
     validateLinks(firstValue(fields, "links").trim(), errors);
     requiredChoice(fields, "requires_amplification", "Amplification", errors);
     requiredChoice(fields, "can_lend_gear", "Can lend gear", errors);
-    if (integer(fields, "duration_minutes") === 0) {
+    if (
+      parseSetDurationMinutes(firstValue(fields, "duration_minutes")) === null
+    ) {
       errors.push({
         field: "duration_minutes",
         label: "Set length",
-        message: "Enter a positive set length.",
+        message: SET_DURATION_ERROR_MESSAGE,
       });
     }
   }
@@ -686,6 +711,7 @@ function participantPage(
   context: Context,
   status: SelfServeStatus,
   errors: readonly SignupError[] = [],
+  editValues?: SignupValues,
 ): Response {
   let participant: ParticipantRecordView;
   try {
@@ -731,6 +757,7 @@ function participantPage(
       timezone,
       notice,
       errors,
+      editValues,
     }),
     { status, headers: participantHeaders(null) },
   );

@@ -6,7 +6,13 @@ import {
   type ParticipantRecordView,
 } from "@porchfest/core";
 import {
+  MAX_SET_DURATION_MINUTES,
+  MIN_SET_DURATION_MINUTES,
+} from "../participant-validation.js";
+import {
+  allValues,
   escapeHtml,
+  firstValue,
   renderBooleanChoices,
   renderChallenge,
   renderChallengeScript,
@@ -17,6 +23,7 @@ import {
   renderTextarea,
   VENUE_CHOICE_LABELS,
   type SignupError,
+  type SignupValues,
 } from "./signup-view.js";
 import {
   SELF_SERVE_CHANGE_REQUEST_PATH,
@@ -34,6 +41,7 @@ export interface SelfServePageOptions {
   readonly timezone: string;
   readonly notice?: string;
   readonly errors?: readonly SignupError[];
+  readonly editValues?: SignupValues;
 }
 
 export function renderParticipantAccessRequiredPage(): string {
@@ -127,16 +135,17 @@ function renderEditForm(
   errors: readonly SignupError[],
 ): string {
   const { participant } = options;
+  const values = options.editValues;
   const common = `<fieldset>
     <legend>Your contact details</legend>
-    ${renderField({ id: "contact_name", label: "Your name", value: participant.contact.name, errors, autocomplete: "name", required: true })}
-    ${renderField({ id: "contact_email", label: "Email", value: participant.contact.email ?? "", errors, type: "email", autocomplete: "email", required: true })}
-    ${renderField({ id: "contact_phone", label: "Phone", value: participant.contact.phone ?? "", errors, type: "tel", autocomplete: "tel" })}
+    ${renderField({ id: "contact_name", label: "Your name", value: editValue(values, "contact_name", participant.contact.name), errors, autocomplete: "name", required: true })}
+    ${renderField({ id: "contact_email", label: "Email", value: editValue(values, "contact_email", participant.contact.email ?? ""), errors, type: "email", autocomplete: "email", required: true })}
+    ${renderField({ id: "contact_phone", label: "Phone", value: editValue(values, "contact_phone", participant.contact.phone ?? ""), errors, type: "tel", autocomplete: "tel" })}
   </fieldset>`;
   const recordFields =
     participant.recordType === "venue"
-      ? renderVenueFields(participant, errors)
-      : renderActFields(participant, errors);
+      ? renderVenueFields(participant, errors, values)
+      : renderActFields(participant, errors, values);
   return `<form class="signup-form" id="edit-form" method="post" action="${SELF_SERVE_PATH}">
     <input type="hidden" name="_csrf" value="${escapeHtml(options.editCsrf)}">
     <input type="hidden" name="record_version" value="${participant.record.version}">
@@ -150,59 +159,89 @@ function renderEditForm(
 function renderVenueFields(
   participant: Extract<ParticipantRecordView, { recordType: "venue" }>,
   errors: readonly SignupError[],
+  values?: SignupValues,
 ): string {
   const venue = participant.record;
   return `<fieldset>
     <legend>Your porch details</legend>
-    ${renderField({ id: "venue_title", label: "Porch name", value: venue.title, errors, required: true })}
-    ${renderTextarea({ id: "space_description", label: "Performance space", value: venue.spaceDescription ?? "", errors })}
-    ${renderBooleanChoices({ id: "has_power", label: "Electrical power", value: venue.hasPower ? "yes" : "no", errors })}
-    ${renderBooleanChoices({ id: "rain_backup", label: "Rain backup", value: venue.rainBackup ? "yes" : "no", errors })}
-    ${renderTextarea({ id: "requested_act_names", label: "Acts you requested", value: venue.requestedActNames ?? "", errors })}
-    ${renderTextarea({ id: "genre_preferences", label: "Genre preferences", value: venue.genrePreferences ?? "", errors })}
+    ${renderField({ id: "venue_title", label: "Porch name", value: editValue(values, "venue_title", venue.title), errors, required: true })}
+    ${renderTextarea({ id: "space_description", label: "Performance space", value: editValue(values, "space_description", venue.spaceDescription ?? ""), errors })}
+    ${renderBooleanChoices({ id: "has_power", label: "Electrical power", value: editValue(values, "has_power", venue.hasPower ? "yes" : "no"), errors })}
+    ${renderBooleanChoices({ id: "rain_backup", label: "Rain backup", value: editValue(values, "rain_backup", venue.rainBackup ? "yes" : "no"), errors })}
+    ${renderTextarea({ id: "requested_act_names", label: "Acts you requested", value: editValue(values, "requested_act_names", venue.requestedActNames ?? ""), errors })}
+    ${renderTextarea({ id: "genre_preferences", label: "Genre preferences", value: editValue(values, "genre_preferences", venue.genrePreferences ?? ""), errors })}
     ${choiceGroup(
       "gear",
       "Gear you can provide",
-      participant.gear.map(({ value }) => value),
+      editChoices(
+        values,
+        "gear",
+        participant.gear.map(({ value }) => value),
+      ),
       venueGearValues,
       errors,
     )}
     ${choiceGroup(
       "drinks",
       "Drinks you can provide",
-      participant.drinks.map(({ value }) => value),
+      editChoices(
+        values,
+        "drinks",
+        participant.drinks.map(({ value }) => value),
+      ),
       venueDrinkValues,
       errors,
     )}
     ${choiceGroup(
       "amenities",
       "Amenities",
-      participant.amenities.map(({ value }) => value),
+      editChoices(
+        values,
+        "amenities",
+        participant.amenities.map(({ value }) => value),
+      ),
       venueAmenityValues,
       errors,
     )}
-    ${renderTextarea({ id: "participant_notes", label: "Notes for the organizers", value: venue.notes ?? "", errors, help: "These are your notes. Organizer annotations stay separate and read-only." })}
+    ${renderTextarea({ id: "participant_notes", label: "Notes for the organizers", value: editValue(values, "participant_notes", venue.notes ?? ""), errors, help: "These are your notes. Organizer annotations stay separate and read-only." })}
   </fieldset>`;
 }
 
 function renderActFields(
   participant: Extract<ParticipantRecordView, { recordType: "act" }>,
   errors: readonly SignupError[],
+  values?: SignupValues,
 ): string {
   const act = participant.record;
   return `<fieldset>
     <legend>Your act details</legend>
-    ${renderField({ id: "act_name", label: "Act name", value: act.name, errors, required: true })}
-    ${renderField({ id: "genres", label: "Genres", value: act.genre ?? "", errors, required: true })}
-    ${renderTextarea({ id: "description", label: "Act description", value: act.description ?? "", errors, required: true })}
-    ${renderTextarea({ id: "links", label: "Public links", value: act.links ?? "", errors })}
-    ${renderField({ id: "duration_minutes", label: "Set length in minutes", value: String(act.durationMinutes ?? ""), errors, type: "number", min: "1", max: "240", required: true })}
-    ${renderBooleanChoices({ id: "requires_amplification", label: "Amplification", value: act.requiresAmplification ? "yes" : "no", errors })}
-    ${renderTextarea({ id: "house_preference", label: "Porch preference", value: act.housePreference ?? "", errors })}
-    ${renderTextarea({ id: "shared_member_note", label: "Shared members", value: act.sharedMemberNote ?? "", errors })}
-    ${renderBooleanChoices({ id: "can_lend_gear", label: "Can lend gear", value: act.canLendGear ? "yes" : "no", errors })}
-    ${renderTextarea({ id: "participant_notes", label: "Notes for the organizers", value: act.notes ?? "", errors, help: "These are your notes. Organizer annotations stay separate and read-only." })}
+    ${renderField({ id: "act_name", label: "Act name", value: editValue(values, "act_name", act.name), errors, required: true })}
+    ${renderField({ id: "genres", label: "Genres", value: editValue(values, "genres", act.genre ?? ""), errors, required: true })}
+    ${renderTextarea({ id: "description", label: "Act description", value: editValue(values, "description", act.description ?? ""), errors, required: true })}
+    ${renderTextarea({ id: "links", label: "Public links", value: editValue(values, "links", act.links ?? ""), errors })}
+    ${renderField({ id: "duration_minutes", label: "Set length in minutes", value: editValue(values, "duration_minutes", String(act.durationMinutes ?? "")), errors, type: "number", min: String(MIN_SET_DURATION_MINUTES), max: String(MAX_SET_DURATION_MINUTES), required: true })}
+    ${renderBooleanChoices({ id: "requires_amplification", label: "Amplification", value: editValue(values, "requires_amplification", act.requiresAmplification ? "yes" : "no"), errors })}
+    ${renderTextarea({ id: "house_preference", label: "Porch preference", value: editValue(values, "house_preference", act.housePreference ?? ""), errors })}
+    ${renderTextarea({ id: "shared_member_note", label: "Shared members", value: editValue(values, "shared_member_note", act.sharedMemberNote ?? ""), errors })}
+    ${renderBooleanChoices({ id: "can_lend_gear", label: "Can lend gear", value: editValue(values, "can_lend_gear", act.canLendGear ? "yes" : "no"), errors })}
+    ${renderTextarea({ id: "participant_notes", label: "Notes for the organizers", value: editValue(values, "participant_notes", act.notes ?? ""), errors, help: "These are your notes. Organizer annotations stay separate and read-only." })}
   </fieldset>`;
+}
+
+function editValue(
+  values: SignupValues | undefined,
+  field: string,
+  persisted: string,
+): string {
+  return values === undefined ? persisted : firstValue(values, field);
+}
+
+function editChoices(
+  values: SignupValues | undefined,
+  field: string,
+  persisted: readonly string[],
+): readonly string[] {
+  return values === undefined ? persisted : allValues(values, field);
 }
 
 function renderChangeRequestForm(

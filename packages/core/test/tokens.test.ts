@@ -158,6 +158,72 @@ describe("participant magic-link lifecycle", () => {
     expect(tokens.resolve(candidate.token).recordId).toBe(firstHost.venue.id);
   });
 
+  it("keeps a newer pending reissue alive when the older delivery activates first", () => {
+    const { tokens, firstHost } = fixtures();
+    const existing = tokens.issue("venue", firstHost.venue.id);
+    const older = tokens
+      .reissueForEmail("shared@example.invalid")
+      .find(
+        ({ link }) =>
+          link.recordType === "venue" && link.recordId === firstHost.venue.id,
+      )!;
+    const newer = tokens
+      .reissueForEmail("shared@example.invalid")
+      .find(
+        ({ link }) =>
+          link.recordType === "venue" && link.recordId === firstHost.venue.id,
+      )!;
+
+    expect(older.link.createdAt).toEqual(newer.link.createdAt);
+    expect(older.link.id).toBeLessThan(newer.link.id);
+
+    tokens.activateReissue(older.token);
+    expect(tokens.resolve(older.token).recordId).toBe(firstHost.venue.id);
+    expect(() => tokens.resolve(newer.token)).toThrowError(
+      expect.objectContaining({ reason: "invalid-token" }),
+    );
+
+    tokens.activateReissue(newer.token);
+    expect(() => tokens.resolve(existing.token)).toThrowError(
+      expect.objectContaining({ reason: "revoked" }),
+    );
+    expect(() => tokens.resolve(older.token)).toThrowError(
+      expect.objectContaining({ reason: "revoked" }),
+    );
+    expect(tokens.resolve(newer.token).recordId).toBe(firstHost.venue.id);
+  });
+
+  it("keeps the newest reissue active when the older delivery completes last", () => {
+    const { tokens, firstHost } = fixtures();
+    const existing = tokens.issue("venue", firstHost.venue.id);
+    const older = tokens
+      .reissueForEmail("shared@example.invalid")
+      .find(
+        ({ link }) =>
+          link.recordType === "venue" && link.recordId === firstHost.venue.id,
+      )!;
+    const newer = tokens
+      .reissueForEmail("shared@example.invalid")
+      .find(
+        ({ link }) =>
+          link.recordType === "venue" && link.recordId === firstHost.venue.id,
+      )!;
+
+    tokens.activateReissue(newer.token);
+    expect(() => tokens.resolve(existing.token)).toThrowError(
+      expect.objectContaining({ reason: "revoked" }),
+    );
+    expect(() => tokens.resolve(older.token)).toThrowError(
+      expect.objectContaining({ reason: "revoked" }),
+    );
+    expect(tokens.resolve(newer.token).recordId).toBe(firstHost.venue.id);
+
+    expect(() => tokens.activateReissue(older.token)).toThrowError(
+      expect.objectContaining({ reason: "invalid-token" }),
+    );
+    expect(tokens.resolve(newer.token).recordId).toBe(firstHost.venue.id);
+  });
+
   it("abandons a failed delivery without revoking the live link or using success capacity", () => {
     const { tokens, firstHost } = fixtures({ reissueLimit: 1 });
     const existing = tokens.issue("venue", firstHost.venue.id);
