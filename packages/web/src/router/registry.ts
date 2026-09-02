@@ -203,15 +203,11 @@ export class RouteRegistry {
             { status: 401, headers: adminHeaders() },
           );
         }
-        // A participant GET is always a browser navigation: magic-link
-        // scanners and privacy tools do not reliably send Accept: text/html.
-        // Keep dead, revoked, and forged links indistinguishable while still
-        // giving the person a useful recovery path instead of raw JSON.
-        if (
-          route.method === "GET" &&
-          route.tier === "participant" &&
-          !explicitlyAcceptsJson(context)
-        ) {
+        // Participant links can expire or be revoked between rendering a form
+        // and submitting it. Keep dead, revoked, and forged links
+        // indistinguishable while giving non-JSON clients a useful recovery
+        // path instead of raw JSON.
+        if (route.tier === "participant" && !explicitlyAcceptsJson(context)) {
           return participantAccessRefusal();
         }
         return context.json(

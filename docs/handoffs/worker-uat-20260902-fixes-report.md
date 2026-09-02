@@ -57,6 +57,10 @@ Review artifact: `/tmp/ce-code-review-uat-20260902-e5ruRp/review.json` (transien
 
 The final simplification pass also consolidated the coordinate verification form, kept the repository's coordinate `Map` representation intact through the view boundary, centralized the organizer sign-in email rule, preserved unanswered original boolean fields as empty, narrowed the invite API input type, and fixed the dead-link response's `Referrer-Policy`. The focused post-simplification run passed 183 tests across seven files.
 
+## PR #49 review fix
+
+Participant mutation authorization failures now render the generic request-link recovery page for browser clients while preserving explicit JSON 401 responses and rejecting submitted data before handling.
+
 ## Git state and intended commits
 
 No commit, push, or merge occurred because Git metadata is read-only. Once the Git mount is writable, split or coherently group the existing diff using the requested conventional subjects, for example `fix(web): add organizer invite flow (UAT F1)` through `fix(web): render season-local timestamps (UAT F12)`, followed by a documentation-only commit for this report. Re-run the gates after staging the final commit structure.

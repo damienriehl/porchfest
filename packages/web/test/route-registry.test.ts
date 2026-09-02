@@ -219,6 +219,58 @@ describe("central route registry", () => {
     expect(await response.text()).toContain("/self-serve/request-link");
   });
 
+  it("recovers an unauthorized participant mutation unless JSON is explicitly requested", async () => {
+    const app = new Hono();
+    const submittedValue = "must-never-be-persisted-or-echoed";
+    const persistedValues: string[] = [];
+    let handlerCalls = 0;
+    const routes = new RouteRegistry(app, () => false, {
+      allowedOrigin: null,
+      validateCsrf: () => true,
+    });
+    routes.register({
+      method: "POST",
+      path: "/participant-mutation",
+      tier: "participant",
+      handler: async (context: Context) => {
+        handlerCalls += 1;
+        const fields = await context.req.parseBody();
+        persistedValues.push(String(fields.submitted_value));
+        return context.text("participant mutation handled");
+      },
+    });
+    const request = (accept: string) =>
+      app.request(
+        "http://localhost/participant-mutation?token=dead-participant-token",
+        {
+          method: "POST",
+          headers: {
+            accept,
+            "content-type": "application/x-www-form-urlencoded",
+          },
+          body: new URLSearchParams({ submitted_value: submittedValue }),
+        },
+      );
+
+    const htmlResponse = await request("text/html");
+    const html = await htmlResponse.text();
+    const jsonResponse = await request("application/json");
+    const json = await jsonResponse.text();
+
+    expect(htmlResponse.status).toBe(401);
+    expect(htmlResponse.headers.get("content-type")).toContain("text/html");
+    expect(html).toContain("/self-serve/request-link");
+    expect(html).not.toContain(submittedValue);
+    expect(jsonResponse.status).toBe(401);
+    expect(jsonResponse.headers.get("content-type")).toContain(
+      "application/json",
+    );
+    expect(JSON.parse(json)).toEqual({ error: "unauthorized" });
+    expect(json).not.toContain(submittedValue);
+    expect(handlerCalls).toBe(0);
+    expect(persistedValues).toEqual([]);
+  });
+
   it("snapshots a declaration so caller mutations cannot remove protection", async () => {
     const app = new Hono();
     const routes = new RouteRegistry(app);
