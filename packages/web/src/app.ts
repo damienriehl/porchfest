@@ -77,6 +77,7 @@ export function createApp(options: AppOptions): PorchfestApp {
     authorize,
     {
       allowedOrigin,
+      trustedProxyHops: options.trustedProxyHops,
       validateCsrf: (token, route) => {
         if (!token || !csrfSecret) return false;
         const expected = Buffer.from(csrfTokenFor(route.path));
@@ -97,6 +98,7 @@ export function createApp(options: AppOptions): PorchfestApp {
     method: "GET",
     path: "/health",
     tier: "public",
+    requestOriginCheck: "exempt",
     handler: (context: Context) =>
       context.json({ ok: true, service: "porchfest" } as const),
   });
