@@ -20,6 +20,7 @@ import {
 import { readFileSync } from "node:fs";
 import type { Context } from "hono";
 import type { RouteRegistry } from "../router/registry.js";
+import { contentSecurityPolicy } from "../security-headers.js";
 import { renderHostForm } from "../views/host-form.js";
 import { renderPerformerForm } from "../views/performer-form.js";
 import {
@@ -1083,26 +1084,4 @@ function htmlResponse(
       "x-content-type-options": "nosniff",
     },
   });
-}
-
-/**
- * Self-only, widened by exactly what the configured challenge asks for and
- * nothing else. An unconfigured deployment keeps the strict policy; the adapter
- * names its own origins, so `web` never has to know a provider's domain.
- */
-function contentSecurityPolicy(
-  challenge: AntibotClientChallenge | null,
-): string {
-  const join = (extra: readonly string[]): string =>
-    ["'self'", ...extra].join(" ");
-  const csp = challenge?.contentSecurityPolicy;
-  return [
-    `default-src 'self'`,
-    `script-src ${join(csp?.scriptSrc ?? [])}`,
-    `frame-src ${join(csp?.frameSrc ?? [])}`,
-    `connect-src ${join(csp?.connectSrc ?? [])}`,
-    `base-uri 'none'`,
-    `form-action 'self'`,
-    `frame-ancestors 'none'`,
-  ].join("; ");
 }

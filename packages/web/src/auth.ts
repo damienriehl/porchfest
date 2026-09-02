@@ -2,11 +2,22 @@
 // still good; this file owns only the cookie that carries it and the trust
 // decision the route registry asks for.
 
-import type { CoreRuntime, Organizer } from "@porchfest/core";
+import {
+  ParticipantTokenError,
+  type CoreRuntime,
+  type Organizer,
+  type ParticipantGrant,
+} from "@porchfest/core";
 import type { Context } from "hono";
 import type { TrustTier } from "./router/registry.js";
 
 export const SESSION_COOKIE = "porchfest_session";
+export const PARTICIPANT_COOKIE = "porchfest_participant";
+
+const participantGrant = Symbol("participantGrant");
+type ParticipantContext = Context & {
+  [participantGrant]?: ParticipantGrant | null;
+};
 
 export interface SessionCookieOptions {
   /**
@@ -28,15 +39,7 @@ export function serializeSessionCookie(
   expiresAt: Date,
   options: SessionCookieOptions = {},
 ): string {
-  const parts = [
-    `${SESSION_COOKIE}=${token}`,
-    "Path=/",
-    "HttpOnly",
-    "SameSite=Lax",
-    `Expires=${expiresAt.toUTCString()}`,
-  ];
-  if (options.secure ?? true) parts.splice(2, 0, "Secure");
-  return parts.join("; ");
+  return serializeCookie(SESSION_COOKIE, token, "/", expiresAt, options);
 }
 
 export function serializeExpiredSessionCookie(
@@ -54,16 +57,83 @@ export function serializeExpiredSessionCookie(
 }
 
 export function readSessionCookie(context: Context): string | null {
+  return readCookie(context, SESSION_COOKIE);
+}
+
+function readCookie(context: Context, name: string): string | null {
   const header = context.req.header("cookie");
   if (!header) return null;
   for (const pair of header.split(";")) {
     const index = pair.indexOf("=");
     if (index < 0) continue;
-    if (pair.slice(0, index).trim() !== SESSION_COOKIE) continue;
+    if (pair.slice(0, index).trim() !== name) continue;
     const value = pair.slice(index + 1).trim();
     return value.length > 0 ? value : null;
   }
   return null;
+}
+
+export function serializeParticipantCookie(
+  token: string,
+  expiresAt: Date,
+  options: SessionCookieOptions = {},
+): string {
+  return serializeCookie(
+    PARTICIPANT_COOKIE,
+    token,
+    "/self-serve",
+    expiresAt,
+    options,
+  );
+}
+
+function serializeCookie(
+  name: string,
+  token: string,
+  path: string,
+  expiresAt: Date,
+  options: SessionCookieOptions,
+): string {
+  const parts = [
+    `${name}=${token}`,
+    `Path=${path}`,
+    "HttpOnly",
+    "SameSite=Lax",
+    `Expires=${expiresAt.toUTCString()}`,
+  ];
+  if (options.secure ?? true) parts.splice(2, 0, "Secure");
+  return parts.join("; ");
+}
+
+export function readParticipantToken(context: Context): string | null {
+  const queryToken = context.req.query("token")?.trim();
+  return queryToken || readCookie(context, PARTICIPANT_COOKIE);
+}
+
+export function currentParticipant(
+  core: CoreRuntime,
+  context: Context,
+): ParticipantGrant | null {
+  const requestContext = context as ParticipantContext;
+  if (Object.hasOwn(requestContext, participantGrant)) {
+    return requestContext[participantGrant] ?? null;
+  }
+  const token = readParticipantToken(context);
+  if (!token) {
+    requestContext[participantGrant] = null;
+    return null;
+  }
+  try {
+    const grant = core.participantTokens.resolve(token);
+    requestContext[participantGrant] = grant;
+    return grant;
+  } catch (error) {
+    if (error instanceof ParticipantTokenError) {
+      requestContext[participantGrant] = null;
+      return null;
+    }
+    throw error;
+  }
 }
 
 export function currentOrganizer(
@@ -73,14 +143,12 @@ export function currentOrganizer(
   return core.access.resolveSession(readSessionCookie(context));
 }
 
-/**
- * The registry fails closed on any tier it cannot satisfy, so this only has to
- * answer for the tiers it understands. `participant` belongs to U8 and is
- * deliberately still refused here rather than quietly granted.
- */
+/** The registry fails closed on any tier this authorizer cannot satisfy. */
 export function createTrustAuthorizer(core: CoreRuntime) {
   return (tier: TrustTier, context: Context): boolean => {
     if (tier === "organizer") return currentOrganizer(core, context) !== null;
+    if (tier === "participant")
+      return currentParticipant(core, context) !== null;
     return false;
   };
 }
