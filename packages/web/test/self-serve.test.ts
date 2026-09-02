@@ -105,6 +105,15 @@ async function boot(
     email?: EmailPort | null;
     antibot?: AntibotPort;
     rateLimit?: number;
+    timezone?: string;
+    timeSlots?: readonly {
+      readonly startsAt: string;
+      readonly endsAt: string;
+    }[];
+    performerAvailability?: readonly {
+      readonly startsAt: Date;
+      readonly endsAt: Date;
+    }[];
   } = {},
 ) {
   const dataDirectory = await mkdtemp(join(tmpdir(), "porchfest-self-serve-"));
@@ -137,11 +146,11 @@ async function boot(
   const { season } = runtime.core.setup.createSeason({
     year: 2031,
     displayName: "Synthetic Porchfest",
-    timezone: "UTC",
+    timezone: options.timezone ?? "UTC",
     eventDate: "2031-09-13",
     eventCity: "Exampleton",
     eventState: "WI",
-    timeSlots: [
+    timeSlots: options.timeSlots ?? [
       { startsAt: "14:00", endsAt: "15:00" },
       { startsAt: "16:00", endsAt: "17:00" },
     ],
@@ -187,7 +196,7 @@ async function boot(
       canLendGear: true,
       notes: "Act participant note",
     },
-    availabilities: [
+    availabilities: options.performerAvailability ?? [
       {
         startsAt: new Date("2031-09-13T14:00:00.000Z"),
         endsAt: new Date("2031-09-13T17:00:00.000Z"),
@@ -419,11 +428,13 @@ describe("U8 participant self-serve scenarios", () => {
 
     const response = await runtime.request(
       `${PUBLIC_BASE_URL}/self-serve?token=${issued.token}`,
-      { headers: { accept: "text/html" } },
     );
     const html = await response.text();
 
     expect(response.status).toBe(401);
+    expect(response.headers.get("content-type")).toContain("text/html");
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(html).not.toContain('{"error":"unauthorized"}');
     expect(html).toContain("expired or is no longer available");
     expect(html).toContain('href="/self-serve/request-link"');
   });
@@ -648,6 +659,26 @@ describe("U8 participant self-serve scenarios", () => {
     expect(runtime.core.seasons.getAct(performer.act.id).status).toBe(
       "confirmed",
     );
+  });
+
+  it("renders the confirmed assignment as a readable season-local time", async () => {
+    const { runtime, performer, slot } = await boot({
+      timezone: "America/Chicago",
+      timeSlots: [{ startsAt: "23:00", endsAt: "23:45" }],
+      performerAvailability: [
+        {
+          startsAt: new Date("2031-09-14T04:00:00.000Z"),
+          endsAt: new Date("2031-09-14T04:45:00.000Z"),
+        },
+      ],
+    });
+    const page = await participantPage(runtime, "act", performer.act.id);
+
+    expect(slot.startsAt.toISOString()).toBe("2031-09-14T04:00:00.000Z");
+    expect(page.html).toContain(
+      "Sep 13, 2031, 11:00–11:45 PM (America/Chicago)",
+    );
+    expect(page.html).not.toContain("2031-09-13T14:00:00.000Z");
   });
 
   it("R33: renders and applies a two-window availability proposal", async () => {

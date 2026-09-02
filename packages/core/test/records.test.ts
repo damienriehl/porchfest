@@ -266,7 +266,7 @@ describe("record lifecycle", () => {
     });
     const submission = sqlite
       .prepare(
-        "insert into acts (season_id, name, genre, description, links, duration_minutes, requires_amplification, house_preference, can_lend_gear) values (?, ?, ?, ?, ?, ?, ?, ?, ?) returning id, version",
+        "insert into acts (season_id, name, genre, description, links, duration_minutes, requires_amplification, house_preference, can_lend_gear, notes, shared_member_note, original_submission) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) returning id, version",
       )
       .get(
         seasonId,
@@ -278,6 +278,9 @@ describe("record lifecycle", () => {
         1,
         "Submitted house preference",
         1,
+        "Submitted participant note",
+        "A drummer also plays elsewhere",
+        '{"version":1,"values":{"name":"Submitted Act"}}',
       ) as { id: number; version: number };
     const availability = sqlite
       .prepare(
@@ -460,6 +463,9 @@ describe("record lifecycle", () => {
       requiresAmplification: true,
       housePreference: "Submitted house preference",
       canLendGear: true,
+      notes: "Submitted participant note",
+      sharedMemberNote: "A drummer also plays elsewhere",
+      originalSubmission: '{"version":1,"values":{"name":"Submitted Act"}}',
       placeholder: false,
       reachViaContactId: contact.id,
       version: placeholder.version + 1,
@@ -797,7 +803,7 @@ describe("record lifecycle", () => {
       );
     const submission = sqlite
       .prepare(
-        "insert into venues (season_id, title, address, space_description, has_power, rain_backup, notes, host_contact_id) values (?, ?, ?, ?, ?, ?, ?, ?) returning id, version",
+        "insert into venues (season_id, title, address, space_description, has_power, rain_backup, notes, host_contact_id, requested_act_names, genre_preferences, original_submission) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) returning id, version",
       )
       .get(
         seasonId,
@@ -808,6 +814,9 @@ describe("record lifecycle", () => {
         1,
         "Submitted notes",
         contact.id,
+        "Requested Act",
+        "Jazz",
+        '{"version":1,"values":{"title":"Submitted Venue"}}',
       ) as { id: number; version: number };
     sqlite
       .prepare(
@@ -1039,6 +1048,9 @@ describe("record lifecycle", () => {
       hasPower: true,
       rainBackup: true,
       notes: "Submitted notes",
+      requestedActNames: "Requested Act",
+      genrePreferences: "Jazz",
+      originalSubmission: '{"version":1,"values":{"title":"Submitted Venue"}}',
       hostContactId: contact.id,
       placeholder: false,
       reachViaContactId: contact.id,

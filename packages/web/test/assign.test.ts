@@ -481,17 +481,45 @@ describe("organizer assignment screens", () => {
   it("requires and records a shared-member override", async () => {
     const { runtime, cookie, maple, oak, cats, acoustic, season } =
       await boot();
-    runtime.core.seasons.linkActs({
-      seasonId: season.id,
-      actId: cats.act.id,
-      linkedActId: acoustic.act.id,
-    });
+    const venueResponse = await get(
+      runtime,
+      `/admin/venues/${maple.venue.id}/assign`,
+      cookie,
+    );
+    const actResponse = await get(
+      runtime,
+      `/admin/acts/${cats.act.id}/assign`,
+      cookie,
+    );
+    const venueHtml = await venueResponse.text();
+    const actHtml = await actResponse.text();
+    expect(venueHtml).toContain("A drummer also plays elsewhere");
+    expect(venueHtml).toContain(`/admin/acts/${cats.act.id}/assign#act-links`);
+    expect(actHtml).toContain("Participant reported a shared member");
+    expect(actHtml).toContain('href="#act-links"');
+    await post(
+      runtime,
+      `/admin/acts/${cats.act.id}/links`,
+      cookie,
+      new URLSearchParams({
+        _csrf: csrf(actHtml, `/admin/acts/${cats.act.id}/links`),
+        linked_act: String(acoustic.act.id),
+      }),
+    );
     const mapleSlot = slotFor(runtime, maple.venue.id);
     const oakSlot = slotFor(runtime, oak.venue.id);
     runtime.core.seasons.assignSlot(
       mapleSlot.id,
       mapleSlot.version,
       cats.act.id,
+    );
+    const assignedVenue = await get(
+      runtime,
+      `/admin/venues/${maple.venue.id}/assign`,
+      cookie,
+    );
+    expect(await assignedVenue.text()).toContain(
+      "A drummer also plays elsewhere",
     );
     const token = await assignmentCsrf(
       runtime,

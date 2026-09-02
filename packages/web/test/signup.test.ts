@@ -1,4 +1,4 @@
-import type { AntibotPort } from "@porchfest/core";
+import type { AntibotPort, EmailMessage, EmailPort } from "@porchfest/core";
 import type { VenuesMapDocument } from "@porchfest/map";
 import { TurnstileAntibotAdapter } from "@porchfest/antibot";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -16,6 +16,15 @@ const PUBLIC_BASE_URL = "https://porchfest.example";
 const CURRENT_YEAR = new Date().getUTCFullYear();
 const temporaryRoots: string[] = [];
 const runtimes: PorchfestRuntime[] = [];
+
+class ConfiguredEmail implements EmailPort {
+  readonly name = "configured-test-email";
+  readonly configured = true;
+
+  async deliver(_message: EmailMessage) {
+    return { status: "sent" as const, providerMessageId: "synthetic" };
+  }
+}
 
 const EXPECTED_HOST_AUDIENCES = {
   contact_name: "Shared with a confirmed match",
@@ -68,6 +77,7 @@ async function makeRuntime(
     timeSlots?: readonly { startsAt: string; endsAt: string }[];
     publicSiteUrl?: string;
     year?: number;
+    email?: EmailPort;
     bounds?: {
       north: number;
       south: number;
@@ -85,9 +95,13 @@ async function makeRuntime(
       PUBLIC_BASE_URL,
       PORCHFEST_SESSION_SECRET: "signup-test-session-secret",
     },
-    adapterOverrides: options.antibot
-      ? { antibot: options.antibot }
-      : undefined,
+    adapterOverrides:
+      options.antibot || options.email
+        ? {
+            ...(options.antibot ? { antibot: options.antibot } : {}),
+            ...(options.email ? { email: options.email } : {}),
+          }
+        : undefined,
     resolveSocketPeerAddress: () => "192.0.2.44",
     signupGuardOptions:
       options.rateLimit === undefined
@@ -905,6 +919,55 @@ describe("public signup forms", () => {
     ]);
   });
 
+  it("extracts mixed performer link prose into structured links and an organizer note", async () => {
+    const { runtime, seasonId } = await makeRuntime();
+    const { token } = await csrfToken(runtime, "/signup/performer", seasonId);
+    const values = performerValues(seasonId, token);
+    values.set(
+      "links",
+      "Listen at https://music.example.invalid/demo, then see https://band.example.invalid/about. Acoustic demo from last summer",
+    );
+    values.set("performer_notes", "Needs ten minutes to set up.");
+
+    const response = await submit(runtime, "/signup/performer", values);
+    const html = await response.text();
+    const act = runtime.core.seasons
+      .listActivityQueue(seasonId)
+      .find(({ recordType }) => recordType === "act")?.record;
+
+    expect(response.status).toBe(201);
+    expect(act).toMatchObject({
+      links:
+        "https://music.example.invalid/demo\nhttps://band.example.invalid/about",
+      notes:
+        "Needs ten minutes to set up.\nLink note: Listen at then see Acoustic demo from last summer",
+    });
+    expect(html).toContain("https://music.example.invalid/demo");
+    expect(html).toContain("https://band.example.invalid/about");
+    expect(html).toContain(
+      "Link note: Listen at then see Acoustic demo from last summer",
+    );
+    expect(html).not.toContain("Listen at https://music.example.invalid/demo");
+  });
+
+  it("drops a pure performer-link placeholder instead of persisting it", async () => {
+    const { runtime, seasonId } = await makeRuntime();
+    const { token } = await csrfToken(runtime, "/signup/performer", seasonId);
+    const values = performerValues(seasonId, token);
+    values.set("links", "n/a");
+
+    const response = await submit(runtime, "/signup/performer", values);
+    const html = await response.text();
+    const act = runtime.core.seasons
+      .listActivityQueue(seasonId)
+      .find(({ recordType }) => recordType === "act")?.record;
+
+    expect(response.status).toBe(201);
+    expect(act).toMatchObject({ links: "", notes: null });
+    expect(html).not.toContain('data-submission-field="links"');
+    expect(html).not.toContain("Link note:");
+  });
+
   it("refuses a configured challenge timeout and persists nothing", async () => {
     const neverResponds: typeof fetch = async () =>
       await new Promise<Response>(() => undefined);
@@ -1050,6 +1113,43 @@ describe("public signup forms", () => {
     expect(html).toMatch(/organizer.*review/i);
     expect(html).toMatch(/no confirmation email will follow/i);
     expect(html).toContain("The Test Porch");
+  });
+
+  it("advertises participant self-service on the landing page and receipt only when enabled", async () => {
+    const disabled = await makeRuntime();
+    const enabled = await makeRuntime({ email: new ConfiguredEmail() });
+
+    const disabledLanding = await (
+      await disabled.runtime.request(`${PUBLIC_BASE_URL}/`)
+    ).text();
+    const enabledLanding = await (
+      await enabled.runtime.request(`${PUBLIC_BASE_URL}/`)
+    ).text();
+    expect(disabledLanding).not.toContain("/self-serve/request-link");
+    expect(enabledLanding).toContain('href="/self-serve/request-link"');
+    expect(enabledLanding).toContain("Manage your signup");
+
+    for (const [fixture, isEnabled] of [
+      [disabled, false],
+      [enabled, true],
+    ] as const) {
+      const { token } = await csrfToken(
+        fixture.runtime,
+        "/signup/host",
+        fixture.seasonId,
+      );
+      const receipt = await submit(
+        fixture.runtime,
+        "/signup/host",
+        hostValues(fixture.seasonId, token),
+      );
+      const html = await receipt.text();
+      expect(receipt.status).toBe(201);
+      expect(html.includes('href="/self-serve/request-link"')).toBe(isEnabled);
+      expect(
+        html.includes("Participant self-service is not available yet"),
+      ).toBe(!isEnabled);
+    }
   });
 
   it("keeps match and organizer answers out of public receipt previews", async () => {

@@ -160,6 +160,12 @@ export type {
 } from "./records.js";
 export { RecordLifecycleError } from "./records.js";
 export {
+  parseOriginalSubmission,
+  serializeOriginalSubmission,
+  type OriginalSubmissionValues,
+} from "./original-submission.js";
+export { extractParticipantLinks } from "./participant-links.js";
+export {
   createGeocodingRepository,
   GeocodingConflictError,
   GeocodingLifecycleError,

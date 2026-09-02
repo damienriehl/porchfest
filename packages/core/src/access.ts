@@ -141,15 +141,35 @@ export function createAccessRepository(
   }
 
   function issueInvite(
-    email: string,
+    email: string | null,
     invitedByOrganizerId: number,
   ): IssuedLink {
+    const normalizedEmail = email?.trim().toLowerCase() || null;
     return issueLink({
       kind: "invite",
-      email: email.trim().toLowerCase(),
+      email: normalizedEmail,
       invitedBy: invitedByOrganizerId,
       ttlMs: inviteTtlMs,
     });
+  }
+
+  function linkRequiresEmail(token: string): boolean {
+    const invite = db
+      .select({
+        email: organizerInvites.email,
+        expiresAt: organizerInvites.expiresAt,
+        redeemedAt: organizerInvites.redeemedAt,
+        revokedAt: organizerInvites.revokedAt,
+      })
+      .from(organizerInvites)
+      .where(eq(organizerInvites.tokenHash, hashToken(token)))
+      .get();
+    return (
+      invite?.email === null &&
+      invite.redeemedAt === null &&
+      invite.revokedAt === null &&
+      invite.expiresAt > now()
+    );
   }
 
   function issueLink(input: {
@@ -190,6 +210,12 @@ export function createAccessRepository(
   }): IssuedSession {
     const stamp = now();
     const tokenHash = hashToken(input.token);
+    if (linkRequiresEmail(input.token) && !(input.email ?? "").trim()) {
+      throw new AccessError(
+        "invalid-token",
+        "an email address is required to redeem this link",
+      );
+    }
 
     const claimed = db
       .update(organizerInvites)
@@ -423,6 +449,7 @@ export function createAccessRepository(
     hasAnyOrganizer,
     issueBootstrapLink,
     issueInvite,
+    linkRequiresEmail,
     redeemLink,
     resolveSession,
     endSession,

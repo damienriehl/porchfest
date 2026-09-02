@@ -7,6 +7,10 @@ import type {
 import type { SeasonSignupUrls } from "../routes/signup-paths.js";
 import { renderPublicSeasonLinks } from "./public-season-links.js";
 import { escapeHtml } from "./signup-view.js";
+import {
+  formatReadableZonedDateTime,
+  formatReadableZonedWindow,
+} from "../timezone.js";
 
 export interface RecordFieldSpec {
   readonly name: string;
@@ -93,6 +97,7 @@ export function renderQueuePage(options: {
   readonly seasonName: string;
   readonly seasonId: number;
   readonly seasonState: SeasonState;
+  readonly timezone: string;
   readonly signupUrls: SeasonSignupUrls | null;
   readonly publicMapUrl: string | null;
   readonly items: readonly QueueItem[];
@@ -112,7 +117,7 @@ export function renderQueuePage(options: {
         <p class="queue-item-kind">${escapeHtml(item.recordType)}</p>
         <h3><a href="/admin/records/${escapeHtml(item.recordType)}/${item.record.id}?season=${options.seasonId}">${escapeHtml(recordTitle(item) || "Untitled")}</a></h3>
         ${item.recordType === "venue" ? `<p><a href="/admin/venues/${item.record.id}/assign">Assign acts</a></p>` : item.recordType === "act" ? `<p><a href="/admin/acts/${item.record.id}/assign">Find a porch</a></p>` : ""}
-        <p class="help">Updated ${escapeHtml(item.updatedAt.toISOString().slice(0, 16).replace("T", " "))} UTC · version ${item.version}</p>
+        <p class="help">Updated ${escapeHtml(formatReadableZonedDateTime(item.updatedAt, options.timezone))} (${escapeHtml(options.timezone)}) · version ${item.version}</p>
       </div>
       ${
         item.isNew
@@ -141,7 +146,10 @@ export function renderQueuePage(options: {
         : request.kind === "address"
           ? (request.proposedAddress ?? "")
           : (request.proposedAvailability ?? [])
-              .map(formatAvailabilityWindow)
+              .map(
+                (window) =>
+                  `${formatReadableZonedWindow(window, options.timezone)} (${options.timezone})`,
+              )
               .join(", ") || "No availability";
     return `<li class="queue-item change-request-item">
       <div class="queue-item-body">
@@ -179,7 +187,7 @@ export function renderQueuePage(options: {
       <h1>Welcome, ${escapeHtml(options.organizerName)}</h1>
       <p class="lede">${needsReview === 0 ? "Nothing new for you right now." : `${needsReview} ${needsReview === 1 ? "item needs" : "items need"} your review.`}</p>
       ${options.correctionsClosed ? "" : `<p class="lede"><a href="/admin/placeholders/act/new?season=${options.seasonId}">Add an act without a submission</a> · <a href="/admin/placeholders/venue/new?season=${options.seasonId}">Add a venue without a submission</a></p>`}
-      <p class="lede"><a href="/admin/retention">Review participant retention</a></p>
+      <p class="lede"><a href="/admin/organizers">Invite another organizer</a> · <a href="/admin/retention">Review participant retention</a></p>
       <p class="lede"><a href="/admin/seasons/${options.seasonId}">Season settings &amp; state</a> · <a href="/admin/seasons/${options.seasonId}/outbox">Email outbox</a></p>
     </header>
     ${renderPublicSeasonLinks(options.signupUrls, options.publicMapUrl, options.seasonState)}
@@ -214,22 +222,6 @@ export function renderQueuePage(options: {
       <button class="secondary-action" type="submit">Sign out</button>
     </form>`,
   );
-}
-
-function formatAvailabilityWindow({
-  startsAt,
-  endsAt,
-}: {
-  readonly startsAt: Date;
-  readonly endsAt: Date;
-}): string {
-  const start = startsAt.toISOString();
-  const end = endsAt.toISOString();
-  const endDisplay =
-    start.slice(0, 10) === end.slice(0, 10)
-      ? end.slice(11, 16)
-      : end.slice(0, 16).replace("T", " ");
-  return `${start.slice(0, 16).replace("T", " ")}–${endDisplay} UTC`;
 }
 
 export interface LifecycleRecordOption {
@@ -335,6 +327,7 @@ export function renderRecordPage(options: {
   readonly version: number;
   readonly values: Readonly<Record<string, string>>;
   readonly staticValues: Readonly<Record<string, string>>;
+  readonly originalValues?: Readonly<Record<string, string>>;
   readonly csrfToken: string;
   readonly correctionsClosed: boolean;
   readonly seasonState: SeasonState;
@@ -364,6 +357,18 @@ export function renderRecordPage(options: {
     : "";
   const correctionsClosedBlock = options.correctionsClosed
     ? `<section class="confirmation" role="status" tabindex="-1" aria-labelledby="corrections-closed-title"><h2 id="corrections-closed-title">${escapeHtml(correctionsClosedMessage(options.seasonState))}</h2></section>`
+    : "";
+  const originalSubmissionBlock = options.originalValues
+    ? `<section class="submission" aria-labelledby="original-submission-title">
+      <h2 id="original-submission-title">Original submission</h2>
+      <p class="help">Read-only answers captured when this form first arrived. Organizer corrections above do not change them.</p>
+      <dl class="submission-list">${fields
+        .map(
+          (spec) =>
+            `<div class="submission-row"><dt>${escapeHtml(spec.label)}</dt><dd>${escapeHtml(readableStaticValue(options.originalValues?.[spec.name] ?? "", spec))}</dd></div>`,
+        )
+        .join("")}</dl>
+    </section>`
     : "";
 
   const control = (spec: RecordFieldSpec) => {
@@ -512,7 +517,8 @@ export function renderRecordPage(options: {
       </fieldset>
       <button class="primary-action" type="submit">Save changes</button>
     </form>`
-    }`,
+    }
+    ${originalSubmissionBlock}`,
   );
 }
 

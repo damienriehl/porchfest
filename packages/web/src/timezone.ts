@@ -20,3 +20,47 @@ export function formatZonedDateInput(date: Date, timezone: string): string {
     parts.find((part) => part.type === type)?.value ?? "";
   return `${value("year")}-${value("month")}-${value("day")}`;
 }
+
+export function formatReadableZonedDateTime(
+  date: Date,
+  timezone: string,
+): string {
+  let formatter = readableDateTimeFormatters[timezone];
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      dateStyle: "medium",
+      timeStyle: "short",
+    });
+    readableDateTimeFormatters[timezone] = formatter;
+  }
+  return formatter.format(date);
+}
+
+export function formatReadableZonedWindow(
+  window: { readonly startsAt: Date; readonly endsAt: Date },
+  timezone: string,
+): string {
+  let dateFormatter = readableDateFormatters[timezone];
+  if (!dateFormatter) {
+    dateFormatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      dateStyle: "medium",
+    });
+    readableDateFormatters[timezone] = dateFormatter;
+  }
+  const startDate = dateFormatter.format(window.startsAt);
+  const endDate = dateFormatter.format(window.endsAt);
+  if (startDate === endDate) {
+    return `${startDate}, ${formatZonedWindow(window, timezone)}`;
+  }
+  return `${formatReadableZonedDateTime(window.startsAt, timezone)}–${formatReadableZonedDateTime(window.endsAt, timezone)}`;
+}
+import { formatZonedWindow } from "@porchfest/core";
+
+const readableDateFormatters: Record<string, Intl.DateTimeFormat | undefined> =
+  Object.create(null) as Record<string, Intl.DateTimeFormat | undefined>;
+const readableDateTimeFormatters: Record<
+  string,
+  Intl.DateTimeFormat | undefined
+> = Object.create(null) as Record<string, Intl.DateTimeFormat | undefined>;

@@ -26,6 +26,7 @@ export const MAP_PAGE_PATH = "/map";
 export const MAP_DATA_PATH = "/map/data.json";
 export const MAP_SCRIPT_PATH = "/map/assets/porchfest-map.js";
 export const MAP_STYLESHEET_PATH = "/map/assets/porchfest-map.css";
+export const FAVICON_PATH = "/favicon.ico";
 
 const MAP_CACHE_CONTROL = "public, max-age=300";
 const MAP_ASSET_CACHE_CONTROL = "public, max-age=86400";
@@ -44,6 +45,10 @@ const EMPTY_MAP_DOCUMENT: VenuesMapDocument = {
 
 const mapScript = readFileSync(porchfestMapScriptPath, "utf8");
 const mapStylesheet = readFileSync(porchfestMapStylesheetPath, "utf8");
+const favicon = readFileSync(
+  new URL("../../assets/favicon.svg", import.meta.url),
+  "utf8",
+);
 
 export function registerMapRoutes(options: {
   readonly core: CoreRuntime;
@@ -84,6 +89,20 @@ export function registerMapRoutes(options: {
         "cache-control": MAP_ASSET_CACHE_CONTROL,
         "content-type": "text/css; charset=utf-8",
         "x-content-type-options": "nosniff",
+      }),
+  });
+
+  options.routes.register({
+    method: "GET",
+    path: FAVICON_PATH,
+    tier: "public",
+    handler: () =>
+      new Response(favicon, {
+        headers: {
+          "cache-control": MAP_ASSET_CACHE_CONTROL,
+          "content-type": "image/svg+xml",
+          "x-content-type-options": "nosniff",
+        },
       }),
   });
 }
@@ -394,12 +413,13 @@ function mapPage(): Response {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Porchfest map</title>
+  <link rel="icon" href="${FAVICON_PATH}" type="image/svg+xml">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIINfQ3MZ8LB6qABFkCjoLJkD4JpD2GkPz9I=" crossorigin="anonymous">
   <link rel="stylesheet" href="${MAP_STYLESHEET_PATH}">
   <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="anonymous"></script>
   <script defer src="${MAP_SCRIPT_PATH}" data-map-url="${MAP_DATA_PATH}"></script>
 </head>
-<body>
+<body class="porchfest-map-page">
   <main>
     <header class="porchfest-map-header">
       <p class="eyebrow">Porchfest</p>

@@ -161,6 +161,10 @@ describe("participant anonymization", () => {
         name: "Synthetic Duplicate Host",
         email: "synthetic-duplicate-host@example.invalid",
         phone: "synthetic-duplicate-host-phone",
+        originalSubmission: JSON.stringify({
+          version: 1,
+          values: { name: "Synthetic Duplicate Host" },
+        }),
         canonicalContactId: signup.contact.id,
         createdAt: clock,
         updatedAt: clock,
@@ -169,7 +173,13 @@ describe("participant anonymization", () => {
       .get();
     database.db
       .update(acts)
-      .set({ reachViaContactId: supersededContact.id })
+      .set({
+        reachViaContactId: supersededContact.id,
+        originalSubmission: JSON.stringify({
+          version: 1,
+          values: { name: "Synthetic Band" },
+        }),
+      })
       .where(eq(acts.id, act.id))
       .run();
     const retention = createRetentionRepository(database.db, {
@@ -191,6 +201,7 @@ describe("participant anonymization", () => {
       name: ANONYMIZED_CONTACT_NAME,
       email: null,
       phone: null,
+      originalSubmission: null,
     });
     expect(
       database.db
@@ -202,6 +213,7 @@ describe("participant anonymization", () => {
       name: ANONYMIZED_CONTACT_NAME,
       email: null,
       phone: null,
+      originalSubmission: null,
       canonicalContactId: signup.contact.id,
     });
     expect(
@@ -215,6 +227,7 @@ describe("participant anonymization", () => {
       address: null,
       spaceDescription: null,
       notes: null,
+      originalSubmission: null,
     });
     expect(
       database.db
@@ -231,6 +244,7 @@ describe("participant anonymization", () => {
       description: "A band description that survives",
       links: "https://example.invalid/synthetic-band",
       notes: null,
+      originalSubmission: null,
     });
     expect(
       database.db

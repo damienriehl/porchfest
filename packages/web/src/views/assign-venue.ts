@@ -9,6 +9,7 @@ import {
   type Venue,
 } from "@porchfest/core";
 import { escapeHtml, renderOrganizerPage } from "./signup-view.js";
+import { renderParticipantSharedMemberPrompt } from "./shared-member-prompt.js";
 import { formatZonedDateInput } from "../timezone.js";
 
 export interface VenueAssignmentPageOptions {
@@ -39,6 +40,7 @@ export function renderAssignVenuePage(
     "assignment",
   );
   const notice = renderNotice(options, assignmentLegal);
+  const actsById = Object.fromEntries(options.acts.map((act) => [act.id, act]));
   const released = options.releasedTargetVenue
     ? `<section class="confirmation" role="status"><p>Hold released. <a href="/admin/venues/${options.releasedTargetVenue.id}/assign">Assign at ${escapeHtml(options.releasedTargetVenue.title)}</a>.</p></section>`
     : "";
@@ -67,6 +69,7 @@ export function renderAssignVenuePage(
                     (assignment) => assignment.slotId === slot.id,
                   ),
                   assignmentLegal,
+                  actsById,
                 ),
               )
               .join("")
@@ -99,6 +102,7 @@ function slotSection(
   slot: Slot,
   assignment: Assignment | undefined,
   assignmentLegal: boolean,
+  actsById: Readonly<Record<number, Act>>,
 ): string {
   const title = formatZonedWindow(slot, options.season.timezone);
   if (slot.state === "held") {
@@ -117,12 +121,11 @@ function slotSection(
     </section>`;
   }
   if (slot.state === "assigned") {
-    const act = assignment
-      ? options.acts.find((item) => item.id === assignment.actId)
-      : undefined;
+    const act = assignment ? actsById[assignment.actId] : undefined;
     return `<section class="matching-slot" aria-labelledby="slot-${slot.id}">
       <h3 id="slot-${slot.id}">${escapeHtml(title)} · Assigned</h3>
       <p>${act ? `<a href="/admin/acts/${act.id}/assign">${escapeHtml(act.name)}</a>` : "Assigned act unavailable"}</p>
+      ${act ? renderParticipantSharedMemberPrompt({ note: act.sharedMemberNote, linkHref: `/admin/acts/${act.id}/assign#act-links` }) : ""}
       ${
         assignment && assignmentLegal
           ? `<form class="signup-form compact-form" method="post" action="/admin/assignments/${assignment.id}/unassign">
@@ -143,7 +146,7 @@ function slotSection(
       assignmentLegal
         ? candidates.length === 0
           ? '<p class="help">No eligible acts are available for this slot.</p>'
-          : `${tieStatement(candidates)}<ol class="matching-candidates">${candidates.map((pairing) => venueCandidate(options, slot, pairing)).join("")}</ol>`
+          : `${tieStatement(candidates)}<ol class="matching-candidates">${candidates.map((pairing) => venueCandidate(options, slot, pairing, actsById)).join("")}</ol>`
         : '<p class="help">Candidate assignments are unavailable in this season state.</p>'
     }
     ${isSeasonActionLegal(options.season.state, "hold") ? holdForm(options, slot) : ""}
@@ -154,12 +157,16 @@ function venueCandidate(
   options: VenueAssignmentPageOptions,
   slot: Slot,
   pairing: RankedSuggestion,
+  actsById: Readonly<Record<number, Act>>,
 ): string {
   const sharedMember = pairing.warnings.some(
     (warning) => warning.code === "shared_member",
   );
+  const participantSharedMemberNote =
+    actsById[pairing.act.id]?.sharedMemberNote?.trim();
   return `<li class="matching-candidate">
     <h4><a href="/admin/acts/${pairing.act.id}/assign">${escapeHtml(pairing.act.name)}</a></h4>
+    ${renderParticipantSharedMemberPrompt({ note: participantSharedMemberNote ?? null, linkHref: `/admin/acts/${pairing.act.id}/assign#act-links` })}
     ${explanation(pairing)}
     <form class="signup-form compact-form" method="post" action="/admin/slots/${slot.id}/assign">
       <input type="hidden" name="_csrf" value="${escapeHtml(options.csrf.assign)}">

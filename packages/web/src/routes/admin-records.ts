@@ -6,6 +6,7 @@ import {
   ChangeRequestConflictError,
   ChangeRequestLifecycleError,
   isSeasonActionLegal,
+  parseOriginalSubmission,
   RecordLifecycleError,
   recordStatuses,
   RepositoryConflictError,
@@ -18,6 +19,7 @@ import {
 } from "@porchfest/core";
 import type { Context } from "hono";
 import { adminHeaders, currentOrganizer } from "../auth.js";
+import { CONTACT_EMAIL_PATTERN } from "../participant-validation.js";
 import type { RouteRegistry } from "../router/registry.js";
 import { readFields, redirect, unauthorized } from "./admin-http.js";
 import {
@@ -28,7 +30,6 @@ import {
   type ConflictDetail,
 } from "../views/admin-records.js";
 import { escapeHtml } from "../views/signup-view.js";
-import { CONTACT_EMAIL_PATTERN } from "./signup.js";
 
 const RECORD_TYPES: readonly QueueRecordType[] = ["act", "venue", "contact"];
 
@@ -885,6 +886,7 @@ function renderLifecycleRecordPage(
     version: item.version,
     values: overrides.values ?? valuesOf(item.recordType, item.record),
     staticValues: staticValuesOf(item.recordType, item.record),
+    originalValues: originalValuesOf(item.recordType, item.record),
     correctionsClosed,
     seasonState: season.state,
     csrfToken: options.csrfTokenFor(`/admin/records/${item.recordType}/:id`),
@@ -1131,7 +1133,7 @@ function applyChanges(
 
 function valuesOf(
   recordType: QueueRecordType,
-  record: Record<string, unknown>,
+  record: Readonly<Record<string, unknown>>,
 ): Record<string, string> {
   const values: Record<string, string> = {};
   for (const spec of RECORD_FIELDS[recordType]) {
@@ -1147,7 +1149,7 @@ function valuesOf(
  *  because the editable form's existing null-radio fallback is intentional. */
 function staticValuesOf(
   recordType: QueueRecordType,
-  record: Record<string, unknown>,
+  record: Readonly<Record<string, unknown>>,
 ): Record<string, string> {
   const values = valuesOf(recordType, record);
   for (const spec of RECORD_FIELDS[recordType]) {
@@ -1156,6 +1158,18 @@ function staticValuesOf(
     }
   }
   return values;
+}
+
+function originalValuesOf(
+  recordType: QueueRecordType,
+  record: Readonly<Record<string, unknown>>,
+): Record<string, string> | undefined {
+  const parsed = parseOriginalSubmission(
+    typeof record.originalSubmission === "string"
+      ? record.originalSubmission
+      : null,
+  );
+  return parsed ? staticValuesOf(recordType, parsed) : undefined;
 }
 
 function changesFrom(

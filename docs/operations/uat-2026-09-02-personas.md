@@ -27,6 +27,7 @@ evidence. Failures route to ce-debug (small) or a ce-plan doc (extensive).
 ## User stories
 
 ### P1 Dana (founding organizer-deployer)
+
 - S1.1 First-run setup: from empty DB through `/admin/setup` to a season that
   accepts a public signup (R34).
 - S1.2 Bootstrap auth: sign in from the log-printed bootstrap URL; second
@@ -45,6 +46,7 @@ evidence. Failures route to ce-debug (small) or a ce-plan doc (extensive).
   seasons serve nothing (R16).
 
 ### P2 Marge (Tuesday-night co-organizer)
+
 - S2.1 Accept invite, sign in, reach the queue (R9).
 - S2.2 Queue triage: new signups and participant edits appear; her dismiss
   clears items for her only — Dana still sees them (R5).
@@ -71,6 +73,7 @@ evidence. Failures route to ce-debug (small) or a ce-plan doc (extensive).
   decide-by it surfaces as releasable; release offers the fallback (R25/AE6).
 
 ### P3 Hal (host)
+
 - S3.1 Phone signup with every 2026 field; values round-trip (R1) at 375px.
 - S3.2 Validation failure re-renders with everything he typed intact and the
   failing field named (U4 contract).
@@ -88,6 +91,7 @@ evidence. Failures route to ce-debug (small) or a ce-plan doc (extensive).
   known vs unknown address indistinguishable (R31).
 
 ### P4 Priya (performer)
+
 - S4.1 Performer signup with messy links text → structured links plus note
   residue; genres, gear, slots, shared-member flag captured (R1).
 - S4.2 Shared member surfaced in both acts' views; same-slot assignment
@@ -99,6 +103,7 @@ evidence. Failures route to ce-debug (small) or a ce-plan doc (extensive).
   renders inert everywhere it appears (U4 XSS contract).
 
 ### P5 Wes (attendee)
+
 - S5.1 Public map page loads fast on a phone, one pin per performing venue,
   popups show acts/slots/genres/links (R16); no console errors at 375px.
 - S5.2 Venue with two acts shows both with slots in one popup.
@@ -108,6 +113,7 @@ evidence. Failures route to ce-debug (small) or a ce-plan doc (extensive).
 - S5.5 Unpublished/draft/archived season → map serves no venue data (R16).
 
 ### P6 Sam (stranger deployer)
+
 - S6.1 `docker compose up` on a clean machine → health endpoint, no env (R19).
 - S6.2 README path: bootstrap login → first-run setup → open season, without
   asking anyone (R20).
@@ -117,6 +123,7 @@ evidence. Failures route to ce-debug (small) or a ce-plan doc (extensive).
 - S6.5 Docs say which features need a provider (R20).
 
 ### P7 Mallory (adversary)
+
 - S7.1 Configured challenge timeout → submission refused, nothing stored
   (R3/AE5); replayed challenge token refused.
 - S7.2 Unconfigured: burst from one IP rate-limited; honeypot dropped (R3).
@@ -133,6 +140,7 @@ evidence. Failures route to ce-debug (small) or a ce-plan doc (extensive).
   item 6).
 
 ## Execution notes
+
 - Local instance: fresh container, synthetic fixture season for structure plus
   scripted signups; SMTP catcher (mailpit or the repo's harness) for
   provider-configured stories; no real addresses, no real sends.

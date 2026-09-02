@@ -255,6 +255,10 @@ describe("public map page and data (U9)", () => {
     expect(response.headers.get("content-type")).toContain("text/html");
     expect(html).toContain('class="porchfest-map-mount"');
     expect(html).toContain('class="porchfest-map-canvas"');
+    expect(html).toContain('class="porchfest-map-page"');
+    expect(html).toContain(
+      '<link rel="icon" href="/favicon.ico" type="image/svg+xml">',
+    );
     expect(html).toMatch(/no map is published yet/i);
     expect(html).toContain('data-map-url="/map/data.json"');
     expect(html).toContain("leaflet@1.9.4");
@@ -668,7 +672,9 @@ describe("public map page and data (U9)", () => {
     const stylesheet = await runtime.request(
       `${PUBLIC_BASE_URL}/map/assets/porchfest-map.css`,
     );
+    const favicon = await runtime.request(`${PUBLIC_BASE_URL}/favicon.ico`);
     const source = await script.text();
+    const faviconSource = await favicon.text();
 
     expect(script.status).toBe(200);
     expect(script.headers.get("content-type")).toContain("javascript");
@@ -676,5 +682,9 @@ describe("public map page and data (U9)", () => {
     expect(source).toContain("/data/venues-2026.json");
     expect(stylesheet.status).toBe(200);
     expect(stylesheet.headers.get("content-type")).toContain("text/css");
+    expect(favicon.status).toBe(200);
+    expect(favicon.headers.get("content-type")).toBe("image/svg+xml");
+    expect(favicon.headers.get("cache-control")).toBe("public, max-age=86400");
+    expect(faviconSource).toContain("<svg");
   });
 });

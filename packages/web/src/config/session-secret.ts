@@ -13,7 +13,7 @@ export interface SessionSecretOptions {
 function validateSecret(secret: string, source: string): string {
   if (secret === SESSION_SECRET_PLACEHOLDER) {
     throw new Error(
-      `Refusing to start: ${source} equals the public .env.example placeholder.`,
+      `Refusing to start: ${source} equals a known public placeholder; leave it unset to generate a unique secret or configure a unique high-entropy value.`,
     );
   }
   if (secret.length === 0) {

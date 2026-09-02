@@ -403,6 +403,9 @@ export const contacts = sqliteTable(
     name: text("name").notNull(),
     email: text("email"),
     phone: text("phone"),
+    // Immutable JSON captured at the public-form boundary. Organizer edits
+    // change the typed columns but never this R6 source record.
+    originalSubmission: text("original_submission"),
     canonicalContactId: integer("canonical_contact_id").references(
       (): AnySQLiteColumn => contacts.id,
     ),
@@ -466,6 +469,7 @@ export const venues = sqliteTable(
     genrePreferences: text("genre_preferences"),
     rainBackup: integer("rain_backup", { mode: "boolean" }),
     notes: text("notes"),
+    originalSubmission: text("original_submission"),
     status: text("status", { enum: recordStatuses })
       .notNull()
       .default("tentative"),
@@ -563,6 +567,7 @@ export const acts = sqliteTable(
     // The performer-side counterpart to venues.notes: free text the organizers
     // read and the public map never shows.
     notes: text("notes"),
+    originalSubmission: text("original_submission"),
     status: text("status", { enum: recordStatuses })
       .notNull()
       .default("tentative"),

@@ -190,6 +190,7 @@ export function createRetentionRepository(
         name: ANONYMIZED_CONTACT_NAME,
         email: null,
         phone: null,
+        originalSubmission: null,
         version: sql`${contacts.version} + 1`,
         updatedAt: stamp,
       })
@@ -274,6 +275,7 @@ export function createRetentionRepository(
           name: ANONYMIZED_CONTACT_NAME,
           email: null,
           phone: null,
+          originalSubmission: null,
           version: sql`${contacts.version} + 1`,
           updatedAt: stamp,
         })
@@ -310,6 +312,7 @@ export function createRetentionRepository(
           address: null,
           spaceDescription: null,
           notes: null,
+          originalSubmission: null,
           version: sql`${venues.version} + 1`,
           updatedAt: stamp,
         })
@@ -357,6 +360,7 @@ export function createRetentionRepository(
         .update(acts)
         .set({
           notes: null,
+          originalSubmission: null,
           version: sql`${acts.version} + 1`,
           updatedAt: stamp,
         })
