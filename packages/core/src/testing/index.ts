@@ -3,10 +3,12 @@
 // exposes only today's cross-package assertions, not a general SQL escape hatch.
 
 import { eq, sql } from "drizzle-orm";
+import { hashToken } from "../access.js";
 import {
   actAvailabilities,
   acts,
   changeRequests,
+  participantMagicLinks,
   slots,
   venueAmenities,
   venueDrinks,
@@ -116,6 +118,13 @@ export function createCoreTestingRepository(db: CoreExecutor) {
       .get();
   }
 
+  function expireParticipantMagicLink(token: string): void {
+    db.update(participantMagicLinks)
+      .set({ expiresAt: new Date(0) })
+      .where(eq(participantMagicLinks.tokenHash, hashToken(token)))
+      .run();
+  }
+
   return Object.freeze({
     listVenueGear,
     listVenueDrinks,
@@ -126,6 +135,7 @@ export function createCoreTestingRepository(db: CoreExecutor) {
     corruptChangeRequestProposal,
     readChangeRequestStatus,
     readAct,
+    expireParticipantMagicLink,
   });
 }
 

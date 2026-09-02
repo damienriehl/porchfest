@@ -55,6 +55,7 @@ export {
   type Contact,
   type CoordinateRejectionCode,
   type ImportKey,
+  type ParticipantMagicLink,
   type Season,
   type Slot,
   type Venue,
@@ -69,6 +70,7 @@ export {
   SeasonLifecycleError,
   type AssignmentConflictKind,
   type AssignmentCorrection,
+  type ParticipantAssignmentDisplay,
   type PriorSeasonContact,
   type ReleasedSlotHold,
   type SeasonAction,
@@ -267,6 +269,22 @@ export {
 } from "./time.js";
 export { escapeRegex } from "./strings.js";
 export {
+  createParticipantTokenRepository,
+  DEFAULT_PARTICIPANT_REISSUE_LIMIT,
+  DEFAULT_PARTICIPANT_REISSUE_WINDOW_MS,
+  DEFAULT_PARTICIPANT_TOKEN_TTL_MS,
+  ParticipantTokenError,
+  type IssuedParticipantLink,
+  type ParticipantEditInput,
+  type ParticipantEditResult,
+  type ParticipantGrant,
+  type ParticipantRecordType,
+  type ParticipantRecordView,
+  type ParticipantTokenFailure,
+  type ParticipantTokenRepository,
+  type ParticipantTokenRepositoryOptions,
+} from "./tokens.js";
+export {
   goal1ArtifactFiles,
   importGoal1Season,
   type Goal1ImportCore,
@@ -313,6 +331,11 @@ import {
 import { createSeasonSetup, type SeasonSetupRepository } from "./setup.js";
 import { createSeasonRepository } from "./season.js";
 import type { CoreDatabase } from "./storage/repository-errors.js";
+import {
+  createParticipantTokenRepository,
+  type ParticipantTokenRepository,
+  type ParticipantTokenRepositoryOptions,
+} from "./tokens.js";
 
 export type SeasonRepository = ReturnType<typeof createSeasonRepository>;
 
@@ -321,6 +344,7 @@ export interface CoreRuntime {
   readonly ports: AdapterPorts;
   readonly seasons: SeasonRepository;
   readonly access: AccessRepository;
+  readonly participantTokens: ParticipantTokenRepository;
   readonly setup: SeasonSetupRepository;
   readonly queue: QueueRepository;
   readonly changeRequests: ChangeRequestRepository;
@@ -334,6 +358,10 @@ export interface CoreRuntime {
 export interface CoreOptions {
   readonly retention?: RetentionRepositoryOptions;
   readonly outbox?: OutboxRepositoryOptions;
+  readonly participantTokens?: Omit<
+    ParticipantTokenRepositoryOptions,
+    "enabled"
+  >;
 }
 
 export function createCore(
@@ -346,6 +374,10 @@ export function createCore(
     ports: Object.freeze({ ...ports }),
     seasons: createSeasonRepository(database),
     access: createAccessRepository(database),
+    participantTokens: createParticipantTokenRepository(database, {
+      ...options.participantTokens,
+      enabled: ports.email.configured,
+    }),
     setup: createSeasonSetup(database),
     queue: createQueueRepository(database),
     changeRequests: createChangeRequestRepository(database),

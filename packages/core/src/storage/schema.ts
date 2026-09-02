@@ -350,6 +350,47 @@ export const organizerInvites = sqliteTable(
   ],
 );
 
+// --- Participant self-serve access (U8, R14/R31, KTD8) -------------------
+
+export const participantMagicLinks = sqliteTable(
+  "participant_magic_links",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    recordType: text("record_type", {
+      enum: changeRequestRecordTypes,
+    }).notNull(),
+    // The target is deliberately polymorphic instead of a loose season-wide
+    // grant. Core resolves this id against record_type on every request.
+    recordId: integer("record_id").notNull(),
+    contactId: integer("contact_id")
+      .notNull()
+      .references(() => contacts.id),
+    tokenHash: text("token_hash").notNull(),
+    expiresAt: integer("expires_at", { mode: "timestamp" }).notNull(),
+    // Reissue candidates stay inert until the email adapter confirms delivery.
+    // Directly issued links are inserted already activated.
+    activatedAt: integer("activated_at", { mode: "timestamp" }),
+    isReissue: integer("is_reissue", { mode: "boolean" })
+      .notNull()
+      .default(false),
+    revokedAt: integer("revoked_at", { mode: "timestamp" }),
+    ...mutableColumns(),
+  },
+  (table) => [
+    uniqueIndex("participant_magic_links_token_hash_uidx").on(table.tokenHash),
+    index("participant_magic_links_target_idx").on(
+      table.recordType,
+      table.recordId,
+      table.createdAt,
+    ),
+    index("participant_magic_links_contact_id_idx").on(table.contactId),
+    check(
+      "participant_magic_links_record_type_check",
+      sql`${table.recordType} in ('act', 'venue')`,
+    ),
+  ],
+);
+
 export const contacts = sqliteTable(
   "contacts",
   {
@@ -1017,6 +1058,7 @@ const schemaTables = [
   organizers,
   organizerSessions,
   organizerInvites,
+  participantMagicLinks,
   seasonTimeSlots,
   queueDismissals,
 ] as const;
@@ -1055,6 +1097,7 @@ export type NewOrganizer = typeof organizers.$inferInsert;
 export type OrganizerSession = typeof organizerSessions.$inferSelect;
 export type OrganizerInvite = typeof organizerInvites.$inferSelect;
 export type OrganizerInviteKind = (typeof organizerInviteKinds)[number];
+export type ParticipantMagicLink = typeof participantMagicLinks.$inferSelect;
 
 export type Season = typeof seasons.$inferSelect;
 export type NewSeason = typeof seasons.$inferInsert;
