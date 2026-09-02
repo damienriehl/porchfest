@@ -1,7 +1,9 @@
+import type { CoreRuntime } from "@porchfest/core";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { createApp } from "../src/app.js";
 import { createRuntime } from "../src/composition.js";
 import { SESSION_SECRET_PLACEHOLDER } from "../src/config/session-secret.js";
 
@@ -223,6 +225,44 @@ describe("application scaffold", () => {
 
     expect(runtime.sessionSecret.length).toBeGreaterThan(0);
     expect((await runtime.request("/health")).status).toBe(200);
+  });
+
+  it("returns a minimal 503 page for an unexpected route error", async () => {
+    const dataDirectory = await mkdtemp(
+      join(tmpdir(), "porchfest-route-error-"),
+    );
+    const runtime = await createRuntime({
+      env: {},
+      dataDirectory,
+      announce: () => undefined,
+    });
+    const failure = new Error("private route failure marker");
+    const throwingCore = {
+      ...runtime.core,
+      setup: {
+        ...runtime.core.setup,
+        listSeasons() {
+          throw failure;
+        },
+      },
+    } as CoreRuntime;
+    const reported: unknown[] = [];
+    const app = createApp({
+      core: throwingCore,
+      onUnexpectedError: (error) => reported.push(error),
+    });
+
+    const response = await app.request("/signup/host");
+    const html = await response.text();
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get("content-type")).toContain("text/html");
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(html).toContain("Service temporarily unavailable");
+    expect(html).not.toContain(failure.message);
+    expect(html).not.toContain("Error:");
+    expect(reported).toEqual([failure]);
+    runtime.close();
   });
 
   it("refuses to boot with the public placeholder configured", async () => {

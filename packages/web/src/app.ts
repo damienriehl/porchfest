@@ -32,6 +32,7 @@ export interface AppOptions {
   readonly signupGuardOptions?: SignupRouteOptions["guardOptions"];
   readonly trustedProxyHops?: number;
   readonly onOrganizerActivity?: () => void;
+  readonly onUnexpectedError?: (error: unknown) => void;
 }
 
 export interface PorchfestApp {
@@ -42,6 +43,24 @@ export interface PorchfestApp {
 
 export function createApp(options: AppOptions): PorchfestApp {
   const app = new Hono();
+  app.onError((error) => {
+    (options.onUnexpectedError ?? console.error)(error);
+    return new Response(
+      `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Service unavailable</title></head>
+<body><main><h1>Service temporarily unavailable</h1><p>Please try again.</p></main></body>
+</html>`,
+      {
+        status: 503,
+        headers: {
+          "cache-control": "no-store",
+          "content-type": "text/html; charset=UTF-8",
+          "x-content-type-options": "nosniff",
+        },
+      },
+    );
+  });
   const allowedOrigin = options.publicBaseUrl
     ? new URL(options.publicBaseUrl).origin
     : null;
