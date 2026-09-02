@@ -131,7 +131,10 @@ function renderSuggestions(options: ActAssignmentPageOptions): string {
   return groups
     .map(({ venueId, pairings }) => {
       const venue = pairings[0]?.venue;
-      return `<section class="matching-venue"><h3><a href="/admin/venues/${venueId}/assign">${escapeHtml(venue?.title ?? "Venue")}</a></h3><ol class="matching-candidates">${pairings
+      const tieStatement = pairings.some(({ isBestScoreTie }) => isBestScoreTie)
+        ? '<p class="help">Equally suitable based on recorded information</p>'
+        : "";
+      return `<section class="matching-venue"><h3><a href="/admin/venues/${venueId}/assign">${escapeHtml(venue?.title ?? "Venue")}</a></h3>${tieStatement}<ol class="matching-candidates">${pairings
         .map((pairing) =>
           actCandidate(
             options,
@@ -154,7 +157,6 @@ function actCandidate(
     (warning) => warning.code === "shared_member",
   );
   return `<li class="matching-candidate"><h4>${escapeHtml(formatZonedWindow(slot, options.season.timezone))}</h4>
-    ${pairing.isBestScoreTie ? '<p class="help">Equally suitable based on recorded information</p>' : ""}
     <div class="matching-explanation"><p class="help">Why this match:</p><ul>${pairing.reasons.map((reason) => `<li>${escapeHtml(reason.text)}</li>`).join("")}</ul>${pairing.warnings.length ? `<p class="help">Warnings:</p><ul class="matching-warnings">${pairing.warnings.map((warning) => `<li>${escapeHtml(warning.text)}</li>`).join("")}</ul>` : ""}</div>
     <form class="signup-form compact-form" method="post" action="/admin/slots/${slot.id}/assign"><input type="hidden" name="_csrf" value="${escapeHtml(options.csrf.assign)}"><input type="hidden" name="slot" value="${slot.id}"><input type="hidden" name="act" value="${options.act.id}"><input type="hidden" name="version" value="${slot.version}"><input type="hidden" name="return_to" value="act">${sharedMember ? `<div class="field"><label for="override-${slot.id}-${options.act.id}">Shared-member override reason</label><input id="override-${slot.id}-${options.act.id}" name="override_reason" type="text" required></div>` : ""}<button class="primary-action" type="submit">Assign to ${escapeHtml(pairing.venue.title)}</button></form>
   </li>`;

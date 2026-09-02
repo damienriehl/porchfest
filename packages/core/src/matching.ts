@@ -342,7 +342,7 @@ export function suggestionsForAct(
 ): RankedSuggestion[] {
   return markBestScoreTies(
     rankPairings(input).filter(({ act }) => act.id === actId),
-    () => actId,
+    ({ venue }) => venue.id,
   );
 }
 

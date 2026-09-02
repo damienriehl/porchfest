@@ -143,7 +143,7 @@ function slotSection(
       assignmentLegal
         ? candidates.length === 0
           ? '<p class="help">No eligible acts are available for this slot.</p>'
-          : `<ol class="matching-candidates">${candidates.map((pairing) => venueCandidate(options, slot, pairing)).join("")}</ol>`
+          : `${tieStatement(candidates)}<ol class="matching-candidates">${candidates.map((pairing) => venueCandidate(options, slot, pairing)).join("")}</ol>`
         : '<p class="help">Candidate assignments are unavailable in this season state.</p>'
     }
     ${isSeasonActionLegal(options.season.state, "hold") ? holdForm(options, slot) : ""}
@@ -160,7 +160,6 @@ function venueCandidate(
   );
   return `<li class="matching-candidate">
     <h4><a href="/admin/acts/${pairing.act.id}/assign">${escapeHtml(pairing.act.name)}</a></h4>
-    ${pairing.isBestScoreTie ? '<p class="help">Equally suitable based on recorded information</p>' : ""}
     ${explanation(pairing)}
     <form class="signup-form compact-form" method="post" action="/admin/slots/${slot.id}/assign">
       <input type="hidden" name="_csrf" value="${escapeHtml(options.csrf.assign)}">
@@ -172,6 +171,12 @@ function venueCandidate(
       <button class="primary-action" type="submit">Assign ${escapeHtml(pairing.act.name)}</button>
     </form>
   </li>`;
+}
+
+function tieStatement(pairings: readonly RankedSuggestion[]): string {
+  return pairings.some(({ isBestScoreTie }) => isBestScoreTie)
+    ? '<p class="help">Equally suitable based on recorded information</p>'
+    : "";
 }
 
 function holdForm(options: VenueAssignmentPageOptions, slot: Slot): string {

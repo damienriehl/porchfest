@@ -197,6 +197,20 @@ function slotFor(
   return runtime.core.seasons.ensureVenueSlots(venueId)[position]!;
 }
 
+function venueSuggestionGroups(html: string): string[] {
+  return (
+    html.match(/<section class="matching-venue"[\s\S]*?<\/section>/g) ?? []
+  );
+}
+
+function openSlotSuggestionGroups(html: string): string[] {
+  return (
+    html
+      .match(/<section class="matching-slot"[\s\S]*?<\/section>/g)
+      ?.filter((section) => section.includes("· Open")) ?? []
+  );
+}
+
 async function assignmentCsrf(
   runtime: PorchfestRuntime,
   cookie: string,
@@ -208,7 +222,7 @@ async function assignmentCsrf(
 }
 
 describe("organizer assignment screens", () => {
-  it("labels equally suitable best choices in both organizer views", async () => {
+  it("states an equal-best tie once before each tied ranked list", async () => {
     const { runtime, cookie, oak, cats } = await boot();
 
     const venueHtml = await (
@@ -218,15 +232,24 @@ describe("organizer assignment screens", () => {
       await get(runtime, `/admin/acts/${cats.act.id}/assign`, cookie)
     ).text();
 
-    expect(
-      venueHtml.match(/Equally suitable based on recorded information/g),
-    ).toHaveLength(4);
-    expect(
-      actHtml.match(/Equally suitable based on recorded information/g),
-    ).toHaveLength(2);
+    const venueGroups = openSlotSuggestionGroups(venueHtml);
+    const actGroups = venueSuggestionGroups(actHtml);
+    expect(venueGroups).toHaveLength(2);
+    expect(actGroups).toHaveLength(2);
+    for (const group of [...venueGroups, ...actGroups]) {
+      expect(
+        group.match(/Equally suitable based on recorded information/g),
+      ).toHaveLength(1);
+      expect(
+        group.indexOf("Equally suitable based on recorded information"),
+      ).toBeLessThan(group.indexOf('<ol class="matching-candidates">'));
+      expect(group.indexOf('<ol class="matching-candidates">')).toBeLessThan(
+        group.indexOf('<li class="matching-candidate">'),
+      );
+    }
   });
 
-  it("keeps a unique best choice first without labeling lower-score ties", async () => {
+  it("keeps a unique best choice first and labels ties only in their venue group", async () => {
     const { runtime, cookie, maple, oak, cats, acoustic, amplified } =
       await boot();
     const [filledSlot] = runtime.core.seasons.ensureVenueSlots(maple.venue.id);
@@ -260,9 +283,15 @@ describe("organizer assignment screens", () => {
     expect(venueHtml).not.toContain(
       "Equally suitable based on recorded information",
     );
-    expect(actHtml).not.toContain(
+    const [mapleGroup, oakGroup] = venueSuggestionGroups(actHtml);
+    expect(mapleGroup).toContain(mapleChoice);
+    expect(mapleGroup).not.toContain(
       "Equally suitable based on recorded information",
     );
+    expect(oakGroup).toContain(oakChoice);
+    expect(
+      oakGroup?.match(/Equally suitable based on recorded information/g),
+    ).toHaveLength(1);
   });
 
   it("refuses unauthenticated and CSRF-less GET/POST requests", async () => {

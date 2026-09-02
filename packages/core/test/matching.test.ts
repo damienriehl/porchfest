@@ -63,6 +63,23 @@ describe("deterministic matching", () => {
             },
           ],
         },
+        {
+          id: 2,
+          title: "Single-slot Porch",
+          hostName: "Second Host",
+          hasPower: true,
+          requestedActNames: null,
+          genrePreferences: "Jazz",
+          slots: [
+            {
+              id: 21,
+              venueId: 2,
+              startsAt: new Date("2031-09-13T20:00:00.000Z"),
+              endsAt: new Date("2031-09-13T21:00:00.000Z"),
+              state: "open",
+            },
+          ],
+        },
       ],
       acts: [
         {
@@ -103,10 +120,17 @@ describe("deterministic matching", () => {
     ).toBe(true);
 
     const actSuggestions = suggestionsForAct(input, 101);
-    expect(actSuggestions.map(({ slot }) => slot.id)).toEqual([11, 12]);
-    expect(actSuggestions.every(({ isBestScoreTie }) => isBestScoreTie)).toBe(
-      true,
-    );
+    expect(
+      actSuggestions.map(({ slot, venue, isBestScoreTie }) => ({
+        slot: slot.id,
+        venue: venue.id,
+        isBestScoreTie,
+      })),
+    ).toEqual([
+      { slot: 11, venue: 1, isBestScoreTie: true },
+      { slot: 12, venue: 1, isBestScoreTie: true },
+      { slot: 21, venue: 2, isBestScoreTie: false },
+    ]);
 
     input.acts[1] = { ...input.acts[1]!, genre: "Jazz" };
     const tiedVenueSuggestions = suggestionsForVenue(input, 1).filter(
