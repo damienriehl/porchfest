@@ -5,7 +5,7 @@
 // caller get the same refusals — a season that this function accepts is a season
 // that can take a public signup.
 
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, lt, ne, or, sql } from "drizzle-orm";
 import {
   acts,
   assignments,
@@ -247,6 +247,7 @@ export function createSeasonSetup(
     seasonId: number,
     expectedVersion: number,
     input: SeasonSetupInput,
+    confirmDuplicateYear = false,
   ): SeasonSetupResult {
     return db.transaction(
       (tx) => {
@@ -264,6 +265,21 @@ export function createSeasonSetup(
         const validated = validate(input);
         if (!isSeasonActionLegal(current.state, "correction")) {
           throw new SeasonActionError(current.state, "correction");
+        }
+        if (current.year !== validated.year) {
+          const sameYear = tx
+            .select({ id: seasons.id })
+            .from(seasons)
+            .where(
+              and(eq(seasons.year, validated.year), ne(seasons.id, seasonId)),
+            )
+            .get();
+          if (sameYear && !confirmDuplicateYear) {
+            throw new SeasonSetupError(
+              "confirmDuplicateYear",
+              `Confirm that you want this season to share ${validated.year} with another season. This edits the current season; it does not create a new one.`,
+            );
+          }
         }
 
         const currentSlots = tx
@@ -284,12 +300,13 @@ export function createSeasonSetup(
           assertScheduleDependenciesClear(tx, seasonId);
         }
 
-        const localityChanged =
-          current.localityName !== validated.localityName ||
+        const boundsChanged =
           current.boundsNorth !== (validated.bounds?.north ?? null) ||
           current.boundsSouth !== (validated.bounds?.south ?? null) ||
           current.boundsEast !== (validated.bounds?.east ?? null) ||
           current.boundsWest !== (validated.bounds?.west ?? null);
+        const localityChanged =
+          current.localityName !== validated.localityName || boundsChanged;
         if (localityChanged && current.mapPublishedAt !== null) {
           throw new SeasonLifecycleError(
             "Unpublish the public map before changing the locality or bounding box, so the published pins cannot become stale.",
@@ -349,7 +366,7 @@ export function createSeasonSetup(
           }
         }
 
-        if (localityChanged) {
+        if (boundsChanged && validated.bounds) {
           const venueIds = tx
             .select({ id: venues.id })
             .from(venues)
@@ -357,11 +374,22 @@ export function createSeasonSetup(
           tx.update(venueCoordinates)
             .set({
               status: "needs-review",
-              rejectionCode: "address-changed",
+              rejectionCode: "out-of-bounds",
               version: sql`${venueCoordinates.version} + 1`,
               updatedAt: stamp,
             })
-            .where(inArray(venueCoordinates.venueId, venueIds))
+            .where(
+              and(
+                inArray(venueCoordinates.venueId, venueIds),
+                eq(venueCoordinates.status, "verified"),
+                or(
+                  lt(venueCoordinates.latitude, validated.bounds.south),
+                  gt(venueCoordinates.latitude, validated.bounds.north),
+                  lt(venueCoordinates.longitude, validated.bounds.west),
+                  gt(venueCoordinates.longitude, validated.bounds.east),
+                ),
+              ),
+            )
             .run();
         }
 
@@ -438,33 +466,28 @@ function assertScheduleDependenciesClear(
   const participantCount =
     countRows(executor, acts, seasonId) + countRows(executor, venues, seasonId);
   const outboxCount = countRows(executor, outboxWaves, seasonId);
-  const blockers: string[] = [];
+  const clearable: string[] = [];
   if (assignmentCount > 0) {
-    blockers.push(
+    clearable.push(
       `unassign ${assignmentCount} assignment${assignmentCount === 1 ? "" : "s"}`,
     );
   }
   if (heldCount > 0) {
-    blockers.push(`release ${heldCount} hold${heldCount === 1 ? "" : "s"}`);
+    clearable.push(`release ${heldCount} hold${heldCount === 1 ? "" : "s"}`);
   }
-  if (slotCount > 0) {
-    blockers.push(
-      `remove ${slotCount} venue slot${slotCount === 1 ? "" : "s"}`,
-    );
-  }
-  if (participantCount > 0) {
-    blockers.push(
-      `remove ${participantCount} participant record${participantCount === 1 ? "" : "s"}`,
-    );
-  }
-  if (outboxCount > 0) {
-    blockers.push(
-      `clear ${outboxCount} outbox record${outboxCount === 1 ? "" : "s"}`,
-    );
-  }
-  if (blockers.length > 0) {
+  if (
+    assignmentCount > 0 ||
+    heldCount > 0 ||
+    slotCount > 0 ||
+    participantCount > 0 ||
+    outboxCount > 0
+  ) {
+    const actions =
+      clearable.length === 0
+        ? ""
+        : ` Organizer-clearable actions: ${clearable.join("; ")}.`;
     throw new SeasonLifecycleError(
-      `Clear dependent schedule data before changing the event date, timezone, or time slots: ${blockers.join("; ")}.`,
+      `Schedule changes are unavailable because this season has dependent data that cannot be cleared in the event-details editor.${actions}`,
     );
   }
 }

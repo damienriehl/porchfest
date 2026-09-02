@@ -181,6 +181,34 @@ describe("season domain", () => {
     expect(setup.seasonCount()).toBe(2);
   });
 
+  it("requires confirmation before moving a season into another season's year", () => {
+    const setup = createSeasonSetup(database.db, () => pinnedNow);
+    const first = setup.createFirstSeason(seasonSetupInput());
+    setup.createAdditionalSeason(seasonSetupInput(2106), false);
+
+    expect(() =>
+      setup.updateSeasonDetails(first.season.id, first.season.version, {
+        ...seasonSetupInput(2106),
+        displayName: "Moved season",
+      }),
+    ).toThrow("Confirm that you want this season to share 2106");
+    expect(
+      setup.listSeasons().find((season) => season.id === first.season.id),
+    ).toMatchObject({ year: 2105, version: first.season.version });
+
+    const moved = setup.updateSeasonDetails(
+      first.season.id,
+      first.season.version,
+      { ...seasonSetupInput(2106), displayName: "Moved season" },
+      true,
+    );
+    expect(moved.season).toMatchObject({
+      year: 2106,
+      displayName: "Moved season",
+      version: first.season.version + 1,
+    });
+  });
+
   it("edits every season setup field and replaces templates with one versioned write", () => {
     const setup = createSeasonSetup(database.db, () => pinnedNow);
     const created = setup.createSeason(seasonSetupInput());
@@ -319,7 +347,7 @@ describe("season domain", () => {
         sqlite
           .prepare("insert into acts (season_id, name) values (?, ?)")
           .run(seasonId, "Dependent act"),
-      /participant record/,
+      /dependent data/,
     ],
     [
       "venue slots",
@@ -327,7 +355,7 @@ describe("season domain", () => {
         const venueId = insertVenue(seasonId, "Dependent venue");
         insertSlot(seasonId, venueId);
       },
-      /venue slot/,
+      /dependent data/,
     ],
     [
       "holds",
@@ -350,7 +378,7 @@ describe("season domain", () => {
           )
           .run(seasonId);
       },
-      /outbox record/,
+      /dependent data/,
     ],
   ])("refuses schedule edits while %s exist", (_label, seed, message) => {
     const setup = createSeasonSetup(database.db, () => pinnedNow);
@@ -395,6 +423,51 @@ describe("season domain", () => {
     ]);
   });
 
+  it("names only organizer-clearable actions in a dependency refusal", () => {
+    const setup = createSeasonSetup(database.db, () => pinnedNow);
+    const created = setup.createSeason({
+      ...seasonSetupInput(),
+      openSignups: true,
+    });
+    const assignedVenueId = insertVenue(created.season.id, "Assigned venue");
+    const assignedSlot = insertSlot(created.season.id, assignedVenueId);
+    seasonRepository.assignSlot(
+      assignedSlot.id,
+      assignedSlot.version,
+      insertAct(created.season.id, "Assigned act"),
+    );
+    const heldVenueId = insertVenue(created.season.id, "Held venue");
+    const heldSlot = insertSlot(created.season.id, heldVenueId);
+    seasonRepository.holdSlot(heldSlot.id, heldSlot.version, {
+      heldForName: "Held act",
+      decideBy: new Date("2105-07-01T00:00:00.000Z"),
+    });
+    sqlite
+      .prepare(
+        "insert into outbox_waves (season_id, kind, label, subject_template, body_template, recipient_rule) values (?, 'ad_hoc', 'Dependent wave', 'Subject', 'Body', 'manual')",
+      )
+      .run(created.season.id);
+
+    let message = "";
+    try {
+      setup.updateSeasonDetails(created.season.id, created.season.version, {
+        ...seasonSetupInput(),
+        openSignups: true,
+        eventDate: "2105-09-12",
+      });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toContain("Organizer-clearable actions");
+    expect(message).toContain("unassign 1 assignment");
+    expect(message).toContain("release 1 hold");
+    expect(message).toContain("dependent data");
+    expect(message).not.toMatch(
+      /participant record|outbox record|venue slot|remove|clear 1 outbox/i,
+    );
+  });
+
   it("refuses a timezone-only change after participant data exists", () => {
     const setup = createSeasonSetup(database.db, () => pinnedNow);
     const created = setup.createSeason({
@@ -409,11 +482,83 @@ describe("season domain", () => {
         timeSlots: [],
         timezone: "America/New_York",
       }),
-    ).toThrowError(/participant record/i);
+    ).toThrowError(/dependent data/i);
     expect(setup.listSeasons()[0]?.timezone).toBe("America/Chicago");
   });
 
-  it("re-flags coordinates after a bounds-only change", () => {
+  it("re-checks only verified coordinates against changed bounds", () => {
+    const setup = createSeasonSetup(database.db, () => pinnedNow);
+    const created = setup.createSeason({
+      ...seasonSetupInput(),
+      localityName: "Old Locality",
+      bounds: { north: 45, south: 44, east: -93, west: -94 },
+    });
+    const insideVenueId = insertVenue(created.season.id, "Inside venue");
+    const outsideVenueId = insertVenue(created.season.id, "Outside venue");
+    const notFoundVenueId = insertVenue(created.season.id, "Not found venue");
+    const refusedVenueId = insertVenue(created.season.id, "Refused venue");
+    sqlite
+      .prepare(
+        "insert into venue_coordinates (venue_id, latitude, longitude, source, precision, provider, ref, status, address_at_geocode) values (?, 44.5, -93.5, 'geocoded', 'parcel', 'synthetic', 'node/1', 'verified', '123 Example Ave')",
+      )
+      .run(insideVenueId);
+    sqlite
+      .prepare(
+        "insert into venue_coordinates (venue_id, latitude, longitude, source, precision, provider, ref, status, address_at_geocode) values (?, 44.05, -93.5, 'geocoded', 'parcel', 'synthetic', 'node/2', 'verified', '456 Example Ave')",
+      )
+      .run(outsideVenueId);
+    sqlite
+      .prepare(
+        "insert into venue_coordinates (venue_id, latitude, longitude, source, precision, provider, ref, status, rejection_code, address_at_geocode) values (?, null, null, 'geocoded', null, 'synthetic', null, 'needs-review', 'not-found', '789 Example Ave')",
+      )
+      .run(notFoundVenueId);
+    sqlite
+      .prepare(
+        "insert into venue_coordinates (venue_id, latitude, longitude, source, precision, provider, ref, status, rejection_code, address_at_geocode) values (?, null, null, 'geocoded', null, 'synthetic', null, 'needs-review', 'refused', '987 Example Ave')",
+      )
+      .run(refusedVenueId);
+
+    const changed = setup.updateSeasonDetails(
+      created.season.id,
+      created.season.version,
+      {
+        ...seasonSetupInput(),
+        localityName: "Old Locality",
+        bounds: { north: 45.1, south: 44.1, east: -93.1, west: -94.1 },
+      },
+    );
+    const coordinateState = sqlite.prepare(
+      "select status, rejection_code as rejectionCode, version from venue_coordinates where venue_id = ?",
+    );
+    expect(coordinateState.get(insideVenueId)).toEqual({
+      status: "verified",
+      rejectionCode: null,
+      version: 1,
+    });
+    expect(coordinateState.get(outsideVenueId)).toEqual({
+      status: "needs-review",
+      rejectionCode: "out-of-bounds",
+      version: 2,
+    });
+    expect(coordinateState.get(notFoundVenueId)).toEqual({
+      status: "needs-review",
+      rejectionCode: "not-found",
+      version: 1,
+    });
+    expect(coordinateState.get(refusedVenueId)).toEqual({
+      status: "needs-review",
+      rejectionCode: "refused",
+      version: 1,
+    });
+    expect(changed.season).toMatchObject({
+      localityName: "Old Locality",
+      boundsNorth: 45.1,
+      boundsSouth: 44.1,
+      version: created.season.version + 1,
+    });
+  });
+
+  it("keeps coordinate review state on locality-only changes and bounds removal", () => {
     const setup = createSeasonSetup(database.db, () => pinnedNow);
     const created = setup.createSeason({
       ...seasonSetupInput(),
@@ -427,31 +572,37 @@ describe("season domain", () => {
       )
       .run(venueId);
 
-    const changed = setup.updateSeasonDetails(
+    const localityOnly = setup.updateSeasonDetails(
       created.season.id,
       created.season.version,
       {
         ...seasonSetupInput(),
-        localityName: "Old Locality",
-        bounds: { north: 45.1, south: 44.1, east: -93.1, west: -94.1 },
+        localityName: "New Locality",
+        bounds: { north: 45, south: 44, east: -93, west: -94 },
       },
     );
+    const withoutBounds = setup.updateSeasonDetails(
+      created.season.id,
+      localityOnly.season.version,
+      {
+        ...seasonSetupInput(),
+        localityName: "New Locality",
+        bounds: null,
+      },
+    );
+
     expect(
       sqlite
         .prepare(
           "select status, rejection_code as rejectionCode, version from venue_coordinates where venue_id = ?",
         )
         .get(venueId),
-    ).toEqual({
-      status: "needs-review",
-      rejectionCode: "address-changed",
-      version: 2,
-    });
-    expect(changed.season).toMatchObject({
-      localityName: "Old Locality",
-      boundsNorth: 45.1,
-      boundsSouth: 44.1,
-      version: created.season.version + 1,
+    ).toEqual({ status: "verified", rejectionCode: null, version: 1 });
+    expect(withoutBounds.season).toMatchObject({
+      boundsNorth: null,
+      boundsSouth: null,
+      boundsEast: null,
+      boundsWest: null,
     });
   });
 
