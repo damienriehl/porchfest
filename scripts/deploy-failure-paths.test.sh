@@ -16,6 +16,49 @@ fail() {
 
 fake_bin="$temp_dir/bin"
 mkdir -p -- "$fake_bin"
+rsync_marker="$temp_dir/rsync-called"
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'set -euo pipefail' \
+  'remote_command="${2:-}"' \
+  'case "$remote_command" in' \
+  '  test\ *) bash -c "$remote_command" ;;' \
+  '  cd\ --\ *) : ;;' \
+  '  *) exit 97 ;;' \
+  'esac' >"$fake_bin/ssh"
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'set -euo pipefail' \
+  ': >"$PORCHFEST_FAKE_RSYNC_MARKER"' >"$fake_bin/rsync"
+chmod +x "$fake_bin/ssh" "$fake_bin/rsync"
+
+remote_deploy_dir="$temp_dir/remote deploy directory"
+mkdir -p -- "$remote_deploy_dir"
+: >"$remote_deploy_dir/.env"
+: >"$remote_deploy_dir/.porchfest-deploy-root"
+ship_output="$temp_dir/ship-output.txt"
+if ! PATH="$fake_bin:$PATH" \
+  PORCHFEST_DEPLOY_HOST=deploy-host.example \
+  PORCHFEST_DEPLOY_DIR="$remote_deploy_dir" \
+  PORCHFEST_FAKE_RSYNC_MARKER="$rsync_marker" \
+  bash "$project_dir/deploy/deploy.sh" >"$ship_output" 2>&1; then
+  fail "ship mode rejected an existing deploy directory whose path requires quoting"
+fi
+[[ -e "$rsync_marker" ]] || fail "ship mode did not continue after the remote guard succeeded"
+
+rm -f -- "$remote_deploy_dir/.porchfest-deploy-root" "$rsync_marker"
+missing_marker_output="$temp_dir/missing-marker-output.txt"
+if PATH="$fake_bin:$PATH" \
+  PORCHFEST_DEPLOY_HOST=deploy-host.example \
+  PORCHFEST_DEPLOY_DIR="$remote_deploy_dir" \
+  PORCHFEST_FAKE_RSYNC_MARKER="$rsync_marker" \
+  bash "$project_dir/deploy/deploy.sh" >"$missing_marker_output" 2>&1; then
+  fail "ship mode accepted a deploy directory without its required root marker"
+fi
+grep -Fq 'remote deploy directory must exist with .env and .porchfest-deploy-root' \
+  "$missing_marker_output" || fail "missing remote marker did not report the guard failure"
+[[ ! -e "$rsync_marker" ]] || fail "ship mode invoked rsync after the remote guard failed"
+
 docker_marker="$temp_dir/docker-called"
 printf '%s\n' '#!/usr/bin/env bash' ': >"$PORCHFEST_FAKE_DOCKER_MARKER"' 'exit 99' >"$fake_bin/docker"
 chmod +x "$fake_bin/docker"
