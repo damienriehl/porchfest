@@ -160,6 +160,17 @@ export interface PriorSeasonContact {
   sourceSeason: Season;
 }
 
+export interface ParticipantAssignmentDisplay {
+  readonly assignmentId: number;
+  readonly slotId: number;
+  readonly actId: number;
+  readonly actName: string;
+  readonly venueId: number;
+  readonly venueTitle: string;
+  readonly startsAt: Date;
+  readonly endsAt: Date;
+}
+
 export type AssignmentCorrection = Partial<Pick<Assignment, "actId">>;
 
 export function createSeasonRepository(
@@ -1757,6 +1768,37 @@ export function createSeasonRepository(
       .all();
   }
 
+  function listAssignmentDisplayForRecord(
+    recordType: "act" | "venue",
+    recordId: number,
+  ): ParticipantAssignmentDisplay[] {
+    if (recordType === "act") getAct(recordId);
+    else getVenue(recordId);
+
+    return db
+      .select({
+        assignmentId: assignments.id,
+        slotId: slots.id,
+        actId: acts.id,
+        actName: acts.name,
+        venueId: venues.id,
+        venueTitle: venues.title,
+        startsAt: slots.startsAt,
+        endsAt: slots.endsAt,
+      })
+      .from(assignments)
+      .innerJoin(slots, eq(assignments.slotId, slots.id))
+      .innerJoin(acts, eq(assignments.actId, acts.id))
+      .innerJoin(venues, eq(slots.venueId, venues.id))
+      .where(
+        recordType === "act"
+          ? eq(assignments.actId, recordId)
+          : eq(slots.venueId, recordId),
+      )
+      .orderBy(asc(slots.startsAt), asc(assignments.id))
+      .all();
+  }
+
   function buildMatchingInput(seasonId: number): MatchingInput {
     const season = getSeason(seasonId);
     const seasonActs = db
@@ -1943,6 +1985,7 @@ export function createSeasonRepository(
     unassignSlot,
     listActivityQueue: records.listActivityQueue,
     listAssignments,
+    listAssignmentDisplayForRecord,
     buildMatchingInput,
     suggestForVenue,
     listEmailWaves,

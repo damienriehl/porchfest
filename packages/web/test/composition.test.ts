@@ -10,6 +10,7 @@ import { createAdapterSet, createRuntime } from "../src/composition.js";
 
 const SMTP_HOST = "smtp.porchfest.example.invalid";
 const SMTP_FROM = "Porchfest <organizers@porchfest.example.invalid>";
+const PUBLIC_BASE_URL = "https://porchfest.example";
 
 class RecordingEmailAdapter implements EmailPort {
   readonly name = "recording-test-adapter";
@@ -51,7 +52,7 @@ describe("web composition root", () => {
       join(tmpdir(), "porchfest-composition-"),
     );
     const runtime = await createRuntime({
-      env: {},
+      env: { PUBLIC_BASE_URL },
       dataDirectory,
       adapterOverrides: { email },
     });
@@ -303,6 +304,7 @@ describe("email provider selection", () => {
     const runtime = await createRuntime({
       dataDirectory,
       env: {
+        PUBLIC_BASE_URL,
         PORCHFEST_SMTP_HOST: SMTP_HOST,
         PORCHFEST_SMTP_FROM: SMTP_FROM,
       },
@@ -311,5 +313,20 @@ describe("email provider selection", () => {
     expect(runtime.adapters.email.name).toBe("smtp");
     expect(runtime.core.ports.email).toBe(runtime.adapters.email);
     runtime.close();
+  });
+
+  it("refuses configured email without the canonical public origin", async () => {
+    const dataDirectory = await mkdtemp(
+      join(tmpdir(), "porchfest-smtp-without-origin-"),
+    );
+    await expect(
+      createRuntime({
+        dataDirectory,
+        env: {
+          PORCHFEST_SMTP_HOST: SMTP_HOST,
+          PORCHFEST_SMTP_FROM: SMTP_FROM,
+        },
+      }),
+    ).rejects.toThrow("PUBLIC_BASE_URL");
   });
 });

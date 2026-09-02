@@ -190,7 +190,7 @@ describe("central route registry", () => {
     expect(response.headers.get("location")).toBe("/organizer-sign-in");
   });
 
-  it("does not redirect an unauthenticated participant HTML request", async () => {
+  it("explains how an unauthenticated participant can request a fresh link", async () => {
     const app = new Hono();
     const routes = new RouteRegistry(
       app,
@@ -214,7 +214,9 @@ describe("central route registry", () => {
     });
 
     expect(response.status).toBe(401);
-    expect(await response.json()).toEqual({ error: "unauthorized" });
+    expect(response.headers.get("location")).toBeNull();
+    expect(response.headers.get("cache-control")).toBe("no-store, private");
+    expect(await response.text()).toContain("/self-serve/request-link");
   });
 
   it("snapshots a declaration so caller mutations cannot remove protection", async () => {

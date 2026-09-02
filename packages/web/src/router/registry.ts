@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { adminHeaders } from "../auth.js";
 import { renderOrganizerSignInRequiredPage } from "../views/admin-shell.js";
+import { renderParticipantAccessRequiredPage } from "../views/self-serve.js";
 
 export const TRUST_TIERS = ["public", "participant", "organizer"] as const;
 export type TrustTier = (typeof TRUST_TIERS)[number];
@@ -201,6 +202,12 @@ export class RouteRegistry {
             }),
             { status: 401, headers: adminHeaders() },
           );
+        }
+        if (route.tier === "participant" && acceptsHtml(context)) {
+          return new Response(renderParticipantAccessRequiredPage(), {
+            status: 401,
+            headers: adminHeaders(),
+          });
         }
         return context.json(
           { error: "unauthorized" },

@@ -2,7 +2,7 @@
 // owns two KTD7 tokens: its own version prevents double decisions, and the
 // captured record version prevents accepting a request against a changed target.
 
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { createSeasonRepository } from "./season.js";
 import {
   acts,
@@ -269,29 +269,56 @@ export function createChangeRequestRepository(
   }
 
   function record(input: RecordChangeRequestInput): ParticipantChangeRequest {
-    if (!targetMatches(db, input)) {
-      throw new ChangeRequestTargetConflictError(
-        input.recordType,
-        input.recordId,
-        ["recordVersion"],
-      );
-    }
-    const stamp = now();
-    const row = db
-      .insert(changeRequests)
-      .values({
-        seasonId: input.seasonId,
-        recordType: input.recordType,
-        recordId: input.recordId,
-        recordVersion: input.recordVersion,
-        kind: input.kind,
-        proposedValue: proposedValue(input),
-        createdAt: stamp,
-        updatedAt: stamp,
-      })
-      .returning()
-      .get();
-    return decode(db, row);
+    const serializedProposal = proposedValue(input);
+    return db.transaction(
+      (tx) => {
+        if (!targetMatches(tx, input)) {
+          throw new ChangeRequestTargetConflictError(
+            input.recordType,
+            input.recordId,
+            ["recordVersion"],
+          );
+        }
+        const existing = tx
+          .select()
+          .from(changeRequests)
+          .where(
+            and(
+              eq(changeRequests.seasonId, input.seasonId),
+              eq(changeRequests.recordType, input.recordType),
+              eq(changeRequests.recordId, input.recordId),
+              eq(changeRequests.recordVersion, input.recordVersion),
+              eq(changeRequests.kind, input.kind),
+              serializedProposal === null
+                ? isNull(changeRequests.proposedValue)
+                : eq(changeRequests.proposedValue, serializedProposal),
+              eq(changeRequests.status, "pending"),
+            ),
+          )
+          .orderBy(desc(changeRequests.id))
+          .limit(1)
+          .get();
+        if (existing) return decode(tx, existing);
+
+        const stamp = now();
+        const row = tx
+          .insert(changeRequests)
+          .values({
+            seasonId: input.seasonId,
+            recordType: input.recordType,
+            recordId: input.recordId,
+            recordVersion: input.recordVersion,
+            kind: input.kind,
+            proposedValue: serializedProposal,
+            createdAt: stamp,
+            updatedAt: stamp,
+          })
+          .returning()
+          .get();
+        return decode(tx, row);
+      },
+      { behavior: "immediate" },
+    );
   }
 
   function listPendingForSeason(seasonId: number): ParticipantChangeRequest[] {

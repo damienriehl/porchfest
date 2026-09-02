@@ -19,6 +19,7 @@ import {
   registerSignupRoutes,
   type SignupRouteOptions,
 } from "./routes/signup.js";
+import { registerSelfServeRoutes } from "./routes/self-serve.js";
 import { createTrustAuthorizer, type SessionCookieOptions } from "./auth.js";
 import { renderPublicLandingPage } from "./views/signup-view.js";
 
@@ -43,6 +44,11 @@ export interface PorchfestApp {
 
 export function createApp(options: AppOptions): PorchfestApp {
   const app = new Hono();
+  if (options.core.ports.email.configured && !options.publicBaseUrl) {
+    throw new TypeError(
+      "PUBLIC_BASE_URL is required when email and participant self-serve are enabled.",
+    );
+  }
   app.onError((error) => {
     (options.onUnexpectedError ?? console.error)(error);
     return new Response(
@@ -123,6 +129,20 @@ export function createApp(options: AppOptions): PorchfestApp {
     trustedProxyHops: options.trustedProxyHops,
     guardOptions: options.signupGuardOptions,
   });
+
+  if (options.core.ports.email.configured && options.publicBaseUrl) {
+    registerSelfServeRoutes({
+      core: options.core,
+      routes,
+      csrfTokenFor,
+      publicBaseUrl: options.publicBaseUrl,
+      resolveSocketPeerAddress:
+        options.resolveSocketPeerAddress ?? defaultSocketPeerAddress,
+      trustedProxyHops: options.trustedProxyHops,
+      guardOptions: options.signupGuardOptions,
+      cookie: options.sessionCookie,
+    });
+  }
 
   registerMapRoutes({ core: options.core, routes });
 

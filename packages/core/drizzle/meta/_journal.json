@@ -127,6 +127,13 @@
       "when": 1788058731213,
       "tag": "0017_far_havok",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1788365476823,
+      "tag": "0018_clumsy_valeria_richards",
+      "breakpoints": true
     }
   ]
 }

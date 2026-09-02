@@ -77,6 +77,35 @@ function fixtures() {
 }
 
 describe("participant change requests", () => {
+  it("returns an identical pending proposal instead of recording a duplicate", () => {
+    const { season, requests, host } = fixtures();
+    const input = {
+      seasonId: season.id,
+      recordType: "venue" as const,
+      recordId: host.venue.id,
+      recordVersion: host.venue.version,
+      kind: "address" as const,
+      proposedAddress: "2 Proposed Ave",
+    };
+
+    const first = requests.record(input);
+    const duplicate = requests.record(input);
+
+    expect(duplicate).toEqual(first);
+    expect(requests.listPendingForSeason(season.id)).toEqual([first]);
+    expect(
+      database.sqlite
+        .prepare("select count(*) as count from change_requests")
+        .get(),
+    ).toEqual({ count: 1 });
+
+    requests.reject(first.id, first.version);
+    const replacement = requests.record(input);
+    expect(replacement.id).not.toBe(first.id);
+    expect(requests.find(first.id)?.status).toBe("rejected");
+    expect(requests.listPendingForSeason(season.id)).toEqual([replacement]);
+  });
+
   it("keeps a confirmed assignment until withdrawal is applied, then reopens its slot", () => {
     const { season, seasons, requests, host, performer } = fixtures();
     const confirmed = seasons.setRecordStatus(

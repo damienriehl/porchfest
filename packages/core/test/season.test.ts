@@ -648,6 +648,39 @@ describe("season domain", () => {
     ).toEqual({ count: 2 });
   });
 
+  it("projects assignment display data for only one participant record", () => {
+    const season = insertSeason(2105, "assigning");
+    const firstVenueId = insertVenue(season.id, "First Porch");
+    const secondVenueId = insertVenue(season.id, "Second Porch");
+    const firstActId = insertAct(season.id, "First Act");
+    const secondActId = insertAct(season.id, "Second Act");
+    const firstSlot = insertSlot(season.id, firstVenueId, 0);
+    const secondSlot = insertSlot(season.id, secondVenueId, 1);
+    const firstAssignment = seasonRepository.assignSlot(
+      firstSlot.id,
+      firstSlot.version,
+      firstActId,
+    );
+    seasonRepository.assignSlot(secondSlot.id, secondSlot.version, secondActId);
+
+    const expected = {
+      assignmentId: firstAssignment.id,
+      slotId: firstSlot.id,
+      actId: firstActId,
+      actName: "First Act",
+      venueId: firstVenueId,
+      venueTitle: "First Porch",
+      startsAt: pinnedNow,
+      endsAt: new Date(pinnedNow.getTime() + 3_600_000),
+    };
+    expect(
+      seasonRepository.listAssignmentDisplayForRecord("act", firstActId),
+    ).toEqual([expected]);
+    expect(
+      seasonRepository.listAssignmentDisplayForRecord("venue", firstVenueId),
+    ).toEqual([expected]);
+  });
+
   it("names filled, held, duplicate-act, and shared-member assignment conflicts", () => {
     const season = insertSeason(2105, "assigning");
     const firstVenueId = insertVenue(season.id, "12 Maple St");
