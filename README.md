@@ -99,6 +99,22 @@ The password is never logged and never written to the data volume. Prefer
 `PORCHFEST_SMTP_PASSWORD_FILE` with a `0600` mount or a Docker secret over putting the credential
 into the environment.
 
+#### Outbox staleness fingerprints
+
+Generated outbox messages store a SHA-256 `source_fingerprint` over the template key and the
+target's complete, key-sorted render context. The context is intentionally broader than the
+placeholders used by any one wave template. Adding or changing a context field can therefore
+change fingerprints for other generated waves even when their rendered subject and body do not
+change; this is conservative staleness churn, not a schema or asset-integrity pin that should be
+manually re-pinned.
+
+Opening or acting on the outbox recomputes the fingerprint. Drift marks unsent generated messages
+as stale and preserves unsent organizer edits as edited-stale. Regeneration may rewrite only
+generated or generated-stale messages and records the new fingerprint; it never rewrites edited,
+edited-stale, or sent messages. A source change that is later reversed clears the derived stale
+label when the stored fingerprint matches again. Change the fingerprint inputs only when the
+render context or template selection changes; do not regenerate pins for unrelated source edits.
+
 ## Where data lives
 
 Compose pins application state to the literal Docker volume name `porchfest-data`, mounted at
