@@ -48,7 +48,7 @@ if [[ "$mode" == "ship" ]]; then
   [[ "$PORCHFEST_DEPLOY_DIR" == /* && "$PORCHFEST_DEPLOY_DIR" != "/" ]] \
     || die "PORCHFEST_DEPLOY_DIR must be an absolute, non-root directory"
 
-  printf -v remote_guard 'test -d -- %q && test -f -- %q && test -f -- %q' \
+  printf -v remote_guard 'test -d %q && test -f %q && test -f %q' \
     "$PORCHFEST_DEPLOY_DIR" "$PORCHFEST_DEPLOY_DIR/.env" "$PORCHFEST_DEPLOY_DIR/.porchfest-deploy-root"
   ssh "$PORCHFEST_DEPLOY_HOST" "$remote_guard" \
     || die "remote deploy directory must exist with .env and .porchfest-deploy-root"
