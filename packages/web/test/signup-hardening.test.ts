@@ -77,6 +77,8 @@ async function makeRuntime(
     state?: SeasonState;
     socketPeer?: string | ((count: number) => string);
     trustedProxyHops?: string;
+    publicSiteUrl?: string;
+    senderEmail?: string;
   } = {},
 ) {
   const dataDirectory = await mkdtemp(join(tmpdir(), "porchfest-harden-"));
@@ -114,6 +116,8 @@ async function makeRuntime(
     eventDate: "2031-06-01",
     eventCity: "Exampleton",
     eventState: "WI",
+    publicSiteUrl: options.publicSiteUrl,
+    senderEmail: options.senderEmail,
     timeSlots: [],
     openSignups: requestedState === "signups_open",
   });
@@ -582,7 +586,54 @@ describe("participant responses and the challenge contract", () => {
 });
 
 describe("the confirmation page is a receipt", () => {
-  it("separates what the public sees from what only organizers see", async () => {
+  it("keeps receipt references free of secrets, private addresses, and mutable record links", async () => {
+    const operationalSender = "operations@example.invalid";
+    const { runtime, seasonId } = await makeRuntime({
+      publicSiteUrl: "https://festival.example.invalid/contact",
+      senderEmail: operationalSender,
+    });
+    const hostForm = await csrfToken(runtime, "/signup/host", seasonId);
+    const hostValues = hostBody(seasonId, hostForm.token);
+    const participantAddress = "private-host@example.invalid";
+    hostValues.set("contact_email", participantAddress);
+    const hostReceipt = await submit(runtime, "/signup/host", hostValues);
+    const performerForm = await csrfToken(
+      runtime,
+      "/signup/performer",
+      seasonId,
+    );
+    const performerReceipt = await submit(
+      runtime,
+      "/signup/performer",
+      performerBody(seasonId, performerForm.token),
+    );
+    expect(hostReceipt.headers.get("set-cookie")).toBeNull();
+    expect(performerReceipt.headers.get("set-cookie")).toBeNull();
+
+    for (const [html, csrf, participantEmail] of [
+      [await hostReceipt.text(), hostForm.token, participantAddress],
+      [
+        await performerReceipt.text(),
+        performerForm.token,
+        "performer@example.invalid",
+      ],
+    ] as const) {
+      const reference = html.match(/data-submission-reference="([^"]+)"/)?.[1];
+      expect(reference).toBeTruthy();
+      expect(reference).not.toContain(csrf);
+      expect(reference).not.toContain(participantEmail);
+      expect(reference).not.toContain(operationalSender);
+      expect(reference).not.toMatch(/https?:|\//);
+      expect(html).not.toContain(csrf);
+      expect(html).not.toContain('name="_csrf"');
+      expect(html).not.toContain("hardening-test-session-secret");
+      expect(html).not.toContain(operationalSender);
+      expect(html).not.toContain(`href="mailto:${participantEmail}"`);
+      expect(html).not.toContain('href="/admin/');
+    }
+  });
+
+  it("separates public, organizer-only, and confirmed-match receipt details", async () => {
     const { runtime, seasonId } = await makeRuntime();
     const { token } = await csrfToken(runtime, "/signup/host", seasonId);
     const values = hostBody(seasonId, token);
@@ -593,21 +644,31 @@ describe("the confirmation page is a receipt", () => {
 
     const response = await submit(runtime, "/signup/host", values);
     const html = await response.text();
-    const publicHalf = html.slice(
-      html.indexOf("Shown publicly"),
-      html.indexOf("Kept private"),
+    const publicDetails = html.slice(
+      html.indexOf('id="submission-public-title"'),
+      html.indexOf('id="submission-organizer-title"'),
     );
-    const privateHalf = html.slice(html.indexOf("Kept private"));
+    const organizerDetails = html.slice(
+      html.indexOf('id="submission-organizer-title"'),
+      html.indexOf('id="submission-match-title"'),
+    );
+    const matchDetails = html.slice(
+      html.indexOf('id="submission-match-title"'),
+    );
 
     expect(response.status).toBe(201);
-    expect(publicHalf).toContain("The Test Porch");
+    expect(publicDetails).toContain("The Test Porch");
+    expect(publicDetails).toContain("Synthetic Venue Address");
     // The human label, not the stored value: "pa" alone also matches "space".
-    expect(publicHalf).toContain("PA system");
-    expect(publicHalf).toContain("Water");
-    expect(publicHalf).not.toContain("synthetic-host-phone");
-    expect(privateHalf).toContain("synthetic-host-phone");
-    expect(privateHalf).toContain("host@example.invalid");
-    expect(privateHalf).toContain("Side gate is open");
+    expect(publicDetails).not.toContain("PA system");
+    expect(publicDetails).not.toContain("Water");
+    expect(publicDetails).not.toContain("synthetic-host-phone");
+    expect(organizerDetails).not.toContain("synthetic-host-phone");
+    expect(matchDetails).toContain("PA system");
+    expect(matchDetails).toContain("Water");
+    expect(matchDetails).toContain("synthetic-host-phone");
+    expect(matchDetails).toContain("host@example.invalid");
+    expect(matchDetails).toContain("Side gate is open");
   });
 
   it("persists the performer notes field and keeps it private", async () => {
@@ -626,9 +687,12 @@ describe("the confirmation page is a receipt", () => {
     expect(runtime.coreTesting.readAct(act?.record.id ?? 0)?.notes).toBe(
       "We need a shady spot",
     );
-    expect(html.slice(html.indexOf("Kept private"))).toContain(
-      "We need a shady spot",
-    );
+    expect(
+      html.slice(
+        html.indexOf('id="submission-organizer-title"'),
+        html.indexOf('id="submission-match-title"'),
+      ),
+    ).toContain("We need a shady spot");
   });
 });
 

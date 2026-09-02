@@ -6,9 +6,11 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { createApp } from "../src/app.js";
 import { createRuntime, type PorchfestRuntime } from "../src/composition.js";
 
 const PUBLIC_BASE_URL = "https://porchfest.example";
+const SESSION_SECRET = "setup-test-session-secret";
 const temporaryRoots: string[] = [];
 const runtimes: PorchfestRuntime[] = [];
 
@@ -29,7 +31,7 @@ async function bootAndSignIn() {
     dataDirectory,
     env: {
       PUBLIC_BASE_URL,
-      PORCHFEST_SESSION_SECRET: "setup-test-session-secret",
+      PORCHFEST_SESSION_SECRET: SESSION_SECRET,
     },
     announce: (message) => announced.push(message),
   });
@@ -59,11 +61,19 @@ async function bootAndSignIn() {
   return { runtime, cookie };
 }
 
-async function setupCsrf(runtime: PorchfestRuntime, cookie: string) {
-  const page = await runtime.request(`${PUBLIC_BASE_URL}/admin/setup`, {
+async function csrfFor(
+  runtime: PorchfestRuntime,
+  cookie: string,
+  path = "/admin/setup",
+) {
+  const page = await runtime.request(`${PUBLIC_BASE_URL}${path}`, {
     headers: { cookie },
   });
   return (await page.text()).match(/name="_csrf" value="([^"]+)"/)?.[1] ?? "";
+}
+
+async function setupCsrf(runtime: PorchfestRuntime, cookie: string) {
+  return csrfFor(runtime, cookie);
 }
 
 function completeSetup(csrf: string, overrides: Record<string, string> = {}) {
@@ -109,6 +119,70 @@ function submitSetup(
     },
     body,
   });
+}
+
+function submitSeason(
+  runtime: PorchfestRuntime,
+  cookie: string,
+  path: string,
+  body: URLSearchParams,
+  origin = PUBLIC_BASE_URL,
+) {
+  return runtime.request(`${PUBLIC_BASE_URL}${path}`, {
+    method: "POST",
+    headers: {
+      origin,
+      cookie,
+      "content-type": "application/x-www-form-urlencoded",
+    },
+    body,
+  });
+}
+
+function submitSeasonWithSetupFailure(
+  runtime: PorchfestRuntime,
+  cookie: string,
+  path: "/admin/setup" | "/admin/seasons/new",
+  body: URLSearchParams,
+) {
+  const setup =
+    path === "/admin/setup"
+      ? {
+          ...runtime.core.setup,
+          createFirstSeason: (): never => {
+            throw new Error("synthetic season storage failure");
+          },
+        }
+      : {
+          ...runtime.core.setup,
+          createAdditionalSeason: (): never => {
+            throw new Error("synthetic season storage failure");
+          },
+        };
+  const app = createApp({
+    core: { ...runtime.core, setup },
+    csrfSecret: SESSION_SECRET,
+    publicBaseUrl: PUBLIC_BASE_URL,
+  });
+  return app.request(`${PUBLIC_BASE_URL}${path}`, {
+    method: "POST",
+    headers: {
+      origin: PUBLIC_BASE_URL,
+      cookie,
+      "content-type": "application/x-www-form-urlencoded",
+    },
+    body,
+  });
+}
+
+async function createConfiguredSeason(
+  runtime: PorchfestRuntime,
+  cookie: string,
+) {
+  const csrf = await setupCsrf(runtime, cookie);
+  const response = await submitSetup(runtime, cookie, completeSetup(csrf));
+  expect(response.status).toBe(303);
+  return runtime.core.seasons.getSeason(1);
 }
 
 describe("first-run setup", () => {
@@ -172,6 +246,232 @@ describe("first-run setup", () => {
     });
 
     expect(signup.status).toBe(201);
+  });
+
+  it("redirects setup to the seasons page after the first season exists", async () => {
+    const { runtime, cookie } = await bootAndSignIn();
+    const csrf = await setupCsrf(runtime, cookie);
+    await submitSetup(runtime, cookie, completeSetup(csrf));
+
+    const response = await runtime.request(`${PUBLIC_BASE_URL}/admin/setup`, {
+      headers: { cookie },
+    });
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe("/admin/seasons");
+  });
+
+  it("refuses a repeated stale first-run submission without adding a season", async () => {
+    const { runtime, cookie } = await bootAndSignIn();
+    const csrf = await setupCsrf(runtime, cookie);
+    const body = completeSetup(csrf);
+
+    const first = await submitSetup(runtime, cookie, body);
+    const stale = await submitSetup(runtime, cookie, completeSetup(csrf));
+
+    expect(first.status).toBe(303);
+    expect(stale.status).toBe(409);
+    expect(await stale.text()).toContain(
+      "first season has already been created",
+    );
+    expect(runtime.core.setup.seasonCount()).toBe(1);
+  });
+
+  it("allows only one of two first-run tabs to create a season", async () => {
+    const { runtime, cookie } = await bootAndSignIn();
+    const csrf = await setupCsrf(runtime, cookie);
+
+    const responses = await Promise.all([
+      submitSetup(runtime, cookie, completeSetup(csrf)),
+      submitSetup(
+        runtime,
+        cookie,
+        completeSetup(csrf, { display_name: "Other tab", year: "2028" }),
+      ),
+    ]);
+
+    expect(responses.map((response) => response.status).sort()).toEqual([
+      303, 409,
+    ]);
+    expect(runtime.core.setup.seasonCount()).toBe(1);
+  });
+
+  it("returns a retryable first-season storage refusal without partial creation", async () => {
+    const { runtime, cookie } = await bootAndSignIn();
+    const csrf = await setupCsrf(runtime, cookie);
+
+    const response = await submitSeasonWithSetupFailure(
+      runtime,
+      cookie,
+      "/admin/setup",
+      completeSetup(csrf),
+    );
+    const html = await response.text();
+
+    expect(response.status).toBe(503);
+    expect(html).toContain("try again");
+    expect(html).toContain('value="SAP Porchfest 2027"');
+    expect(runtime.core.setup.seasonCount()).toBe(0);
+  });
+
+  it("lists seasons and opens another through a distinct creation route", async () => {
+    const { runtime, cookie } = await bootAndSignIn();
+    const firstCsrf = await setupCsrf(runtime, cookie);
+    await submitSetup(runtime, cookie, completeSetup(firstCsrf));
+
+    const seasons = await runtime.request(`${PUBLIC_BASE_URL}/admin/seasons`, {
+      headers: { cookie },
+    });
+    const seasonsHtml = await seasons.text();
+    expect(seasons.status).toBe(200);
+    expect(seasonsHtml).toContain("SAP Porchfest 2027");
+    expect(seasonsHtml).toContain("Accepting signups (signups_open)");
+    expect(seasonsHtml).toContain('href="/admin/seasons/new"');
+    expect(seasonsHtml).toContain("Open another season");
+
+    const newSeason = await runtime.request(
+      `${PUBLIC_BASE_URL}/admin/seasons/new`,
+      { headers: { cookie } },
+    );
+    const newSeasonHtml = await newSeason.text();
+    expect(newSeason.status).toBe(200);
+    expect(newSeasonHtml).toContain("Open another season");
+    expect(newSeasonHtml).toContain('action="/admin/seasons/new"');
+    const csrf = newSeasonHtml.match(/name="_csrf" value="([^"]+)"/)?.[1] ?? "";
+
+    const created = await submitSeason(
+      runtime,
+      cookie,
+      "/admin/seasons/new",
+      completeSetup(csrf, {
+        display_name: "SAP Porchfest 2028",
+        year: "2028",
+        event_date: "2028-09-09",
+      }),
+    );
+
+    expect(created.status).toBe(303);
+    expect(runtime.core.setup.seasonCount()).toBe(2);
+    expect(runtime.core.seasons.getSeason(2).displayName).toBe(
+      "SAP Porchfest 2028",
+    );
+  });
+
+  it("requires confirmation before opening another season in an existing year", async () => {
+    const { runtime, cookie } = await bootAndSignIn();
+    const firstCsrf = await setupCsrf(runtime, cookie);
+    await submitSetup(runtime, cookie, completeSetup(firstCsrf));
+    const csrf = await csrfFor(runtime, cookie, "/admin/seasons/new");
+
+    const refused = await submitSeason(
+      runtime,
+      cookie,
+      "/admin/seasons/new",
+      completeSetup(csrf, { display_name: "Second 2027 season" }),
+    );
+    const refusedHtml = await refused.text();
+    expect(refused.status).toBe(422);
+    expect(refusedHtml).toContain("Confirm that you want another 2027 season");
+    expect(refusedHtml).toContain('name="confirm_duplicate_year"');
+    expect(runtime.core.setup.seasonCount()).toBe(1);
+
+    const confirmed = await submitSeason(
+      runtime,
+      cookie,
+      "/admin/seasons/new",
+      completeSetup(csrf, {
+        display_name: "Second 2027 season",
+        confirm_duplicate_year: "yes",
+      }),
+    );
+
+    expect(confirmed.status).toBe(303);
+    expect(runtime.core.setup.seasonCount()).toBe(2);
+  });
+
+  it("returns a retryable additional-season storage refusal without partial creation", async () => {
+    const { runtime, cookie } = await bootAndSignIn();
+    await createConfiguredSeason(runtime, cookie);
+    const csrf = await csrfFor(runtime, cookie, "/admin/seasons/new");
+
+    const response = await submitSeasonWithSetupFailure(
+      runtime,
+      cookie,
+      "/admin/seasons/new",
+      completeSetup(csrf, {
+        display_name: "Retryable Synthetic Season",
+        year: "2028",
+        event_date: "2028-09-09",
+      }),
+    );
+    const html = await response.text();
+
+    expect(response.status).toBe(503);
+    expect(html).toContain("try again");
+    expect(html).toContain('value="Retryable Synthetic Season"');
+    expect(runtime.core.setup.seasonCount()).toBe(1);
+  });
+
+  it("protects both season-creation mutations with sign-in, Origin, and CSRF", async () => {
+    const { runtime, cookie } = await bootAndSignIn();
+    const setupToken = await setupCsrf(runtime, cookie);
+
+    const signedOut = await submitSeason(
+      runtime,
+      "",
+      "/admin/setup",
+      completeSetup(setupToken),
+    );
+    expect(signedOut.status).toBe(401);
+
+    const wrongOrigin = await submitSeason(
+      runtime,
+      cookie,
+      "/admin/setup",
+      completeSetup(setupToken),
+      "https://unrelated.example",
+    );
+    expect(wrongOrigin.status).toBe(403);
+
+    const missingCsrf = await submitSeason(
+      runtime,
+      cookie,
+      "/admin/setup",
+      completeSetup(""),
+    );
+    expect(missingCsrf.status).toBe(403);
+    expect(runtime.core.setup.seasonCount()).toBe(0);
+
+    await submitSetup(runtime, cookie, completeSetup(setupToken));
+    const additionalToken = await csrfFor(
+      runtime,
+      cookie,
+      "/admin/seasons/new",
+    );
+    const additionalWrongOrigin = await submitSeason(
+      runtime,
+      cookie,
+      "/admin/seasons/new",
+      completeSetup(additionalToken, { year: "2028" }),
+      "https://unrelated.example",
+    );
+    const additionalMissingCsrf = await submitSeason(
+      runtime,
+      cookie,
+      "/admin/seasons/new",
+      completeSetup("", { year: "2028" }),
+    );
+    const additionalSignedOut = await submitSeason(
+      runtime,
+      "",
+      "/admin/seasons/new",
+      completeSetup(additionalToken, { year: "2028" }),
+    );
+
+    expect(additionalWrongOrigin.status).toBe(403);
+    expect(additionalMissingCsrf.status).toBe(403);
+    expect(additionalSignedOut.status).toBe(401);
+    expect(runtime.core.setup.seasonCount()).toBe(1);
   });
 
   it("stores every R34 field the organizer entered", async () => {
@@ -368,5 +668,287 @@ describe("setup refuses what it cannot honour", () => {
     const response = await runtime.request(`${PUBLIC_BASE_URL}/admin/setup`);
 
     expect(response.status).toBe(401);
+  });
+});
+
+describe("season event-details editor", () => {
+  it("requires duplicate-year confirmation when an edit moves a season", async () => {
+    const { runtime, cookie } = await bootAndSignIn();
+    const created = await createConfiguredSeason(runtime, cookie);
+    const newSeasonCsrf = await csrfFor(runtime, cookie, "/admin/seasons/new");
+    const additional = await submitSeason(
+      runtime,
+      cookie,
+      "/admin/seasons/new",
+      completeSetup(newSeasonCsrf, {
+        display_name: "SAP Porchfest 2028",
+        year: "2028",
+        event_date: "2028-09-09",
+      }),
+    );
+    expect(additional.status).toBe(303);
+
+    const editPath = `/admin/seasons/${created.id}/edit`;
+    const csrf = await csrfFor(runtime, cookie, editPath);
+    const refused = await submitSeason(
+      runtime,
+      cookie,
+      editPath,
+      completeSetup(csrf, {
+        version: String(created.version),
+        display_name: "Moved into 2028",
+        year: "2028",
+      }),
+    );
+    const refusedHtml = await refused.text();
+
+    expect(refused.status).toBe(422);
+    expect(refusedHtml).toContain(
+      "Confirm that you want this season to share 2028",
+    );
+    expect(refusedHtml).toContain('name="confirm_duplicate_year"');
+    expect(refusedHtml).toContain('value="Moved into 2028"');
+    expect(runtime.core.seasons.getSeason(created.id)).toMatchObject({
+      year: 2027,
+      version: created.version,
+    });
+
+    const confirmed = await submitSeason(
+      runtime,
+      cookie,
+      editPath,
+      completeSetup(csrf, {
+        version: String(created.version),
+        display_name: "Moved into 2028",
+        year: "2028",
+        confirm_duplicate_year: "yes",
+      }),
+    );
+
+    expect(confirmed.status).toBe(303);
+    expect(runtime.core.seasons.getSeason(created.id)).toMatchObject({
+      displayName: "Moved into 2028",
+      year: 2028,
+      version: created.version + 1,
+    });
+  });
+
+  it("reads back and saves every setup field and replaces the published slots", async () => {
+    const { runtime, cookie } = await bootAndSignIn();
+    const created = await createConfiguredSeason(runtime, cookie);
+    const editPath = `/admin/seasons/${created.id}/edit`;
+
+    const seasonPage = await runtime.request(
+      `${PUBLIC_BASE_URL}/admin/seasons/${created.id}`,
+      { headers: { cookie } },
+    );
+    expect(await seasonPage.text()).toContain(`href="${editPath}"`);
+
+    const editPage = await runtime.request(`${PUBLIC_BASE_URL}${editPath}`, {
+      headers: { cookie },
+    });
+    const originalHtml = await editPage.text();
+    expect(editPage.status).toBe(200);
+    for (const value of [
+      "SAP Porchfest 2027",
+      "2027-09-11",
+      "Exampleton",
+      "WI",
+      "America/Chicago",
+      "2027-05-01",
+      "2027-07-01",
+      "14:00",
+      "15:00",
+      "Saint Anthony Park",
+      "44.99",
+      "https://sapporchfest.example/",
+      "organizers@example.invalid",
+    ]) {
+      expect(originalHtml).toContain(value);
+    }
+    expect(originalHtml).toContain(`name="version" value="${created.version}"`);
+    expect(originalHtml).toContain(
+      "assignments and holds are the organizer-clearable actions",
+    );
+    expect(originalHtml).not.toContain("venue-slot");
+    const csrf = originalHtml.match(/name="_csrf" value="([^"]+)"/)?.[1] ?? "";
+
+    const saved = await submitSeason(
+      runtime,
+      cookie,
+      editPath,
+      completeSetup(csrf, {
+        version: String(created.version),
+        display_name: "Edited Porchfest 2028",
+        year: "2028",
+        event_date: "2028-09-09",
+        event_city: "North Exampleton",
+        event_state: "MN",
+        timezone: "America/New_York",
+        signup_opens_on: "2028-04-01",
+        signup_closes_on: "2028-06-30",
+        slot_start_1: "13:30",
+        slot_end_1: "14:15",
+        slot_start_2: "",
+        slot_end_2: "",
+        locality_name: "New Locality",
+        bounds_north: "45.1",
+        bounds_south: "44.9",
+        bounds_east: "-93.1",
+        bounds_west: "-93.4",
+        public_site_url: "https://new.example.invalid/info",
+        public_map_url: "https://new.example.invalid/map",
+        sender_name: "New Organizers",
+        sender_email: "new-organizers@example.invalid",
+      }),
+    );
+    expect(saved.status).toBe(303);
+    expect(saved.headers.get("location")).toBe(`${editPath}?saved=1`);
+
+    const readback = await runtime.request(
+      `${PUBLIC_BASE_URL}${editPath}?saved=1`,
+      { headers: { cookie } },
+    );
+    const html = await readback.text();
+    expect(readback.status).toBe(200);
+    expect(html).toContain("Event details saved");
+    for (const value of [
+      "Edited Porchfest 2028",
+      "2028-09-09",
+      "North Exampleton",
+      "MN",
+      "America/New_York",
+      "2028-04-01",
+      "2028-06-30",
+      "13:30",
+      "New Locality",
+      "45.1",
+      "https://new.example.invalid/info",
+      "new-organizers@example.invalid",
+    ]) {
+      expect(html).toContain(value);
+    }
+    expect(runtime.core.setup.listTimeSlots(created.id)).toHaveLength(1);
+  });
+
+  it("returns an actionable 409 for a stale form and overwrites nothing", async () => {
+    const { runtime, cookie } = await bootAndSignIn();
+    const created = await createConfiguredSeason(runtime, cookie);
+    const editPath = `/admin/seasons/${created.id}/edit`;
+    const csrf = await csrfFor(runtime, cookie, editPath);
+
+    runtime.core.setup.updateSeasonDetails(created.id, created.version, {
+      ...{
+        year: created.year,
+        displayName: created.displayName,
+        timezone: created.timezone,
+        eventDate: created.eventDate ?? "",
+        eventCity: created.eventCity,
+        eventState: created.eventState,
+        timeSlots: [
+          { startsAt: "14:00", endsAt: "15:00" },
+          { startsAt: "15:00", endsAt: "16:00" },
+        ],
+        openSignups: false,
+      },
+      senderName: "Winner",
+    });
+    const stale = await submitSeason(
+      runtime,
+      cookie,
+      editPath,
+      completeSetup(csrf, {
+        version: String(created.version),
+        display_name: "Stale name",
+        sender_name: "Stale sender",
+      }),
+    );
+    const html = await stale.text();
+
+    expect(stale.status).toBe(409);
+    expect(html).toContain("Someone else changed these event details");
+    expect(html).toContain("Someone else saved event details first");
+    expect(html).toContain("Compare your submitted values");
+    expect(html).toContain("Yours:</strong> Stale name");
+    expect(html).toContain("Stored:</strong> SAP Porchfest 2027");
+    expect(html).toContain("Winner");
+    expect(html).toContain('value="Stale name"');
+    expect(html).toContain('value="Stale sender"');
+    expect(html).toContain(`name="version" value="${created.version + 1}"`);
+    expect(runtime.core.seasons.getSeason(created.id)).toMatchObject({
+      displayName: created.displayName,
+      senderName: "Winner",
+      version: created.version + 1,
+    });
+  });
+
+  it.each([
+    ["timezone", { timezone: "Mars/Olympus" }, "valid IANA timezone"],
+    ["partial bounds", { bounds_east: "" }, "decimal degrees"],
+    ["out-of-range bounds", { bounds_north: "91" }, "north edge"],
+    ["site URL", { public_site_url: "javascript:alert(1)" }, "full http"],
+    ["map URL", { public_map_url: "not a URL" }, "full http"],
+    ["sender email", { sender_email: "not-an-email" }, "name@example.com"],
+    [
+      "replacement slot",
+      { slot_start_1: "16:00", slot_end_1: "15:00" },
+      "end after it starts",
+    ],
+  ])(
+    "reuses setup validation for invalid %s",
+    async (_label, overrides, message) => {
+      const { runtime, cookie } = await bootAndSignIn();
+      const created = await createConfiguredSeason(runtime, cookie);
+      const editPath = `/admin/seasons/${created.id}/edit`;
+      const csrf = await csrfFor(runtime, cookie, editPath);
+
+      const response = await submitSeason(
+        runtime,
+        cookie,
+        editPath,
+        completeSetup(csrf, {
+          version: String(created.version),
+          ...overrides,
+        }),
+      );
+
+      expect(response.status).toBe(422);
+      expect(await response.text()).toContain(message);
+      expect(runtime.core.seasons.getSeason(created.id).version).toBe(
+        created.version,
+      );
+    },
+  );
+
+  it("protects the editor mutation with sign-in, Origin, and CSRF", async () => {
+    const { runtime, cookie } = await bootAndSignIn();
+    const created = await createConfiguredSeason(runtime, cookie);
+    const editPath = `/admin/seasons/${created.id}/edit`;
+    const csrf = await csrfFor(runtime, cookie, editPath);
+    const body = completeSetup(csrf, { version: String(created.version) });
+
+    expect(await submitSeason(runtime, "", editPath, body)).toMatchObject({
+      status: 401,
+    });
+    expect(
+      await submitSeason(
+        runtime,
+        cookie,
+        editPath,
+        completeSetup(csrf, { version: String(created.version) }),
+        "https://unrelated.example",
+      ),
+    ).toMatchObject({ status: 403 });
+    expect(
+      await submitSeason(
+        runtime,
+        cookie,
+        editPath,
+        completeSetup("", { version: String(created.version) }),
+      ),
+    ).toMatchObject({ status: 403 });
+    expect(runtime.core.seasons.getSeason(created.id).version).toBe(
+      created.version,
+    );
   });
 });

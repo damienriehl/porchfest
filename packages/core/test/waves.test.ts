@@ -18,6 +18,7 @@ const fullContext: RenderContext = {
   organizer_signature: "The Maple Ward Porchfest crew",
   organizer_name: "Robin Organizer",
   organizer_phone: "555-0100",
+  venue_title: "Maple Street Porch",
   address_display: "100 Maple Street",
   space_line: "Front porch with a wide step",
   electrical_line: "Yes",
@@ -60,6 +61,7 @@ describe("wave templates", () => {
       "THE MATCH\n- 6:00–7:00 PM — The Synthetic Notes",
     );
     expect(match.text).toContain("- Power: Yes");
+    expect(match.text).toContain("- Porch: Maple Street Porch");
     expect(match.text).toContain(
       "The event map at https://porchfest.example.invalid/map will show every porch",
     );

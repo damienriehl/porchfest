@@ -5,7 +5,7 @@ import {
   type ActLink,
   type Assignment,
   type MatchingAct,
-  type RankedPairing,
+  type RankedSuggestion,
   type Season,
   type Slot,
   type Venue,
@@ -31,7 +31,7 @@ export interface ActAssignmentPageOptions {
   } | null;
   readonly links: readonly ActLink[];
   readonly linkedActs: readonly Act[];
-  readonly suggestions: readonly RankedPairing[];
+  readonly suggestions: readonly RankedSuggestion[];
   readonly csrf: {
     readonly assign: string;
     readonly unassign: string;
@@ -121,7 +121,7 @@ function renderSuggestions(options: ActAssignmentPageOptions): string {
     return '<p class="help">No eligible porch slots are available.</p>';
   const groups: Array<{
     readonly venueId: number;
-    readonly pairings: RankedPairing[];
+    readonly pairings: RankedSuggestion[];
   }> = [];
   for (const pairing of candidates) {
     const group = groups.find((item) => item.venueId === pairing.venue.id);
@@ -131,7 +131,10 @@ function renderSuggestions(options: ActAssignmentPageOptions): string {
   return groups
     .map(({ venueId, pairings }) => {
       const venue = pairings[0]?.venue;
-      return `<section class="matching-venue"><h3><a href="/admin/venues/${venueId}/assign">${escapeHtml(venue?.title ?? "Venue")}</a></h3><ol class="matching-candidates">${pairings
+      const tieStatement = pairings.some(({ isBestScoreTie }) => isBestScoreTie)
+        ? '<p class="help">Equally suitable based on recorded information</p>'
+        : "";
+      return `<section class="matching-venue"><h3><a href="/admin/venues/${venueId}/assign">${escapeHtml(venue?.title ?? "Venue")}</a></h3>${tieStatement}<ol class="matching-candidates">${pairings
         .map((pairing) =>
           actCandidate(
             options,
@@ -147,7 +150,7 @@ function renderSuggestions(options: ActAssignmentPageOptions): string {
 function actCandidate(
   options: ActAssignmentPageOptions,
   slot: Slot | undefined,
-  pairing: RankedPairing,
+  pairing: RankedSuggestion,
 ): string {
   if (!slot) return "";
   const sharedMember = pairing.warnings.some(

@@ -1,8 +1,14 @@
-import type { AntibotClientChallenge } from "@porchfest/core";
+import {
+  formatZonedWindow,
+  type AntibotClientChallenge,
+  type Season,
+  type SeasonTimeSlot,
+} from "@porchfest/core";
 import {
   HOST_SIGNUP_PATH,
   PERFORMER_SIGNUP_PATH,
 } from "../routes/signup-paths.js";
+import { seasonStateLabel } from "./season-labels.js";
 
 export type SignupValues = Readonly<Record<string, readonly string[]>>;
 
@@ -11,6 +17,61 @@ export interface SignupError {
   readonly label: string;
   readonly message: string;
 }
+
+const SIGNUP_AUDIENCE_LABELS = Object.freeze({
+  public: "Public map",
+  match: "Shared with a confirmed match",
+  organizer: "Organizer-only",
+} as const);
+
+type SignupAudience = keyof typeof SIGNUP_AUDIENCE_LABELS;
+
+const eventDateFormatter = new Intl.DateTimeFormat("en-US", {
+  timeZone: "UTC",
+  year: "numeric",
+  month: "long",
+  day: "numeric",
+});
+
+/**
+ * The participant-facing disclosure contract. Forms and receipts both read
+ * these tables so a field cannot quietly change audiences between submission
+ * and confirmation.
+ */
+export const HOST_SIGNUP_AUDIENCES = Object.freeze({
+  contact_name: "match",
+  contact_email: "match",
+  contact_phone: "match",
+  venue_title: "public",
+  venue_address: "public",
+  space_description: "match",
+  has_power: "match",
+  rain_backup: "match",
+  requested_act_names: "organizer",
+  genre_preferences: "organizer",
+  gear: "match",
+  drinks: "match",
+  amenities: "match",
+  notes: "match",
+} satisfies Readonly<Record<string, SignupAudience>>);
+
+export const PERFORMER_SIGNUP_AUDIENCES = Object.freeze({
+  contact_name: "match",
+  contact_email: "match",
+  contact_phone: "match",
+  act_name: "public",
+  genres: "public",
+  description: "public",
+  links: "public",
+  duration_minutes: "organizer",
+  requires_amplification: "match",
+  availability_start: "organizer",
+  availability_end: "organizer",
+  house_preference: "organizer",
+  shared_member_note: "organizer",
+  can_lend_gear: "organizer",
+  performer_notes: "organizer",
+} satisfies Readonly<Record<string, SignupAudience>>);
 
 export function escapeHtml(value: unknown): string {
   return String(value ?? "")
@@ -34,6 +95,46 @@ export function renderOrganizerPage(title: string, body: string): string {
 </html>`;
 }
 
+export function renderPublicLandingPage(options: {
+  readonly organizerPath: string;
+}): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Porchfest</title>
+  <link rel="stylesheet" href="/signup/assets/signup.css">
+</head>
+<body>
+  <main class="signup-page">
+    <header class="signup-header">
+      <p class="eyebrow">Porchfest</p>
+      <h1>Bring music to the neighborhood</h1>
+      <p class="lede">Choose how you want to take part in the next Porchfest.</p>
+    </header>
+    <nav class="signup-single-column" aria-label="Porchfest access">
+      <section class="confirmation-card" aria-labelledby="host-signup-heading">
+        <h2 id="host-signup-heading">Host a porch</h2>
+        <p>Offer your porch, yard, or driveway as a place for performers to play.</p>
+        <p><a class="secondary-action" href="${HOST_SIGNUP_PATH}">Porch signup</a></p>
+      </section>
+      <section class="confirmation-card" aria-labelledby="performer-signup-heading">
+        <h2 id="performer-signup-heading">Play Porchfest</h2>
+        <p>Tell the organizers about your act and when everyone can perform.</p>
+        <p><a class="secondary-action" href="${PERFORMER_SIGNUP_PATH}">Performer signup</a></p>
+      </section>
+      <section class="confirmation-card" aria-labelledby="organizer-access-heading">
+        <h2 id="organizer-access-heading">Organize the festival</h2>
+        <p>Review signups, coordinate the schedule, and manage a Porchfest season.</p>
+        <p><a class="secondary-action" href="${escapeHtml(options.organizerPath)}">Organizer access</a></p>
+      </section>
+    </nav>
+  </main>
+</body>
+</html>`;
+}
+
 export function firstValue(values: SignupValues, name: string): string {
   return values[name]?.[0] ?? "";
 }
@@ -47,10 +148,7 @@ export function allValues(
 
 export function renderSignupSeasonPage(options: {
   readonly kind: "host" | "performer";
-  readonly seasons: readonly {
-    readonly id: number;
-    readonly displayName: string;
-  }[];
+  readonly seasons: readonly Season[];
   readonly errors: readonly SignupError[];
 }): string {
   const path =
@@ -71,7 +169,7 @@ export function renderSignupSeasonPage(options: {
         <div class="choices">${options.seasons
           .map(
             (season) =>
-              `<label class="choice"><input type="radio" name="season" value="${season.id}" required><span>${escapeHtml(season.displayName)}</span></label>`,
+              `<label class="choice"><input type="radio" name="season" value="${season.id}" required><span><strong>${escapeHtml(season.displayName)}</strong><br><span class="help">${escapeHtml(formatSeasonDate(season))} · ${escapeHtml(formatSeasonLocality(season))} · ${escapeHtml(seasonStateLabel(season.state))}</span></span></label>`,
           )
           .join("")}</div>
       </fieldset>
@@ -97,6 +195,66 @@ export function renderSignupSeasonPage(options: {
   </main>
 </body>
 </html>`;
+}
+
+export function renderSelectedSeason(season: Season | null): string {
+  if (season === null) return "";
+  return `<section class="confirmation-card season-context" aria-labelledby="selected-season-heading">
+    <h2 id="selected-season-heading">Selected Porchfest</h2>
+    <dl class="submission-list">
+      <div class="submission-row"><dt>Name</dt><dd>${escapeHtml(season.displayName)}</dd></div>
+      <div class="submission-row"><dt>Event date</dt><dd>${escapeHtml(formatSeasonDate(season))}</dd></div>
+      <div class="submission-row"><dt>Locality</dt><dd>${escapeHtml(formatSeasonLocality(season))}</dd></div>
+      <div class="submission-row"><dt>Signup status</dt><dd>${escapeHtml(seasonStateLabel(season.state))}</dd></div>
+    </dl>
+  </section>`;
+}
+
+export function renderPublishedTimeSlots(
+  season: Season | null,
+  timeSlots: readonly SeasonTimeSlot[],
+): string {
+  if (season === null) return "";
+  const slots =
+    timeSlots.length === 0
+      ? '<p class="help">The organizers have not published performance slots yet.</p>'
+      : `<ul>${timeSlots
+          .map(
+            (slot) =>
+              `<li>${escapeHtml(formatZonedWindow(slot, season.timezone))}</li>`,
+          )
+          .join("")}</ul>`;
+  return `<section class="season-slots" aria-labelledby="published-slots-heading">
+    <h3 id="published-slots-heading">Published performance slots</h3>
+    ${slots}
+    <p class="help">Your availability does not need to match a published slot exactly. Include the setup and teardown buffer your full act needs so organizers know the complete window when everyone can be on site.</p>
+  </section>`;
+}
+
+function formatSeasonDate(season: Season): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(season.eventDate ?? "");
+  if (match === null) return "Date to be announced";
+  const date = new Date(
+    Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])),
+  );
+  return Number.isNaN(date.getTime())
+    ? "Date to be announced"
+    : eventDateFormatter.format(date);
+}
+
+function formatSeasonLocality(season: Season): string {
+  const locality =
+    cleanSeasonPlace(season.localityName) ?? cleanSeasonPlace(season.eventCity);
+  const region = cleanSeasonPlace(season.eventState);
+  const parts = [locality, region].filter(
+    (part): part is string => part !== null,
+  );
+  return parts.length > 0 ? parts.join(", ") : "Locality to be announced";
+}
+
+function cleanSeasonPlace(value: string | null): string | null {
+  const cleaned = value?.trim();
+  return cleaned && cleaned.toLowerCase() !== "unconfigured" ? cleaned : null;
 }
 
 export function renderSignupPage(options: {
@@ -143,6 +301,8 @@ export function renderConfirmationPage(options: {
   readonly title: string;
   readonly kind: "host" | "performer";
   readonly seasonId: number;
+  readonly recordId: number;
+  readonly publicSiteUrl: string | null;
   readonly emailConfigured: boolean;
   readonly preview: string;
   readonly submission: string;
@@ -151,6 +311,10 @@ export function renderConfirmationPage(options: {
   const formPath =
     options.kind === "host" ? HOST_SIGNUP_PATH : PERFORMER_SIGNUP_PATH;
   const formHref = escapeHtml(`${formPath}?season=${options.seasonId}`);
+  const submissionReference = `${options.kind === "host" ? "HOST" : "PERFORMER"}-${options.recordId}`;
+  const organizerContact = options.publicSiteUrl
+    ? `<p>Use the <a href="${escapeHtml(options.publicSiteUrl)}">Porchfest public site</a> to find the organizer's public contact channel.</p>`
+    : "<p>Keep this reference and use the same public organizer channel that supplied this form.</p>";
   const emailNotice = options.emailConfigured
     ? "If the organizers send confirmation by email, it will go to the address you provided."
     : "No confirmation email will follow because email delivery is not configured for this deployment.";
@@ -169,6 +333,13 @@ export function renderConfirmationPage(options: {
       <h1 id="confirmation-title">${escapeHtml(options.title)}</h1>
       <p>The organizer will review your ${kindLabel} details and contact you when matching and scheduling move forward.</p>
       <p class="email-notice">${escapeHtml(emailNotice)}</p>
+    </section>
+    <section class="confirmation-card" aria-labelledby="submission-reference-title">
+      <h2 id="submission-reference-title">Submission reference</h2>
+      <p><strong data-submission-reference="${escapeHtml(submissionReference)}">${escapeHtml(submissionReference)}</strong></p>
+      <p>Quote this reference when contacting the organizers about your signup.</p>
+      <p>This receipt cannot be reopened to edit or withdraw your signup, or to check its status. Participant self-service is not available yet.</p>
+      ${organizerContact}
     </section>
     <section class="confirmation-card" aria-labelledby="confirmation-card-title">
       <h2 id="confirmation-card-title">Your public map card</h2>
@@ -209,6 +380,7 @@ export function renderField(options: {
   readonly min?: string;
   readonly max?: string;
   readonly step?: string;
+  readonly audience?: SignupAudience;
 }): string {
   const error = options.errors.find(({ field }) => field === options.id);
   const describedBy = [
@@ -236,7 +408,7 @@ export function renderField(options: {
     .filter(Boolean)
     .join(" ");
   return `<div class="field ${error ? "has-error" : ""}">
-    <label for="${escapeHtml(options.id)}">${escapeHtml(options.label)}${options.required ? ' <span aria-hidden="true">*</span>' : ""}</label>
+    <label for="${escapeHtml(options.id)}">${escapeHtml(options.label)}${options.required ? ' <span aria-hidden="true">*</span>' : ""}${renderAudienceLabel(options.name ?? options.id, options.audience)}</label>
     ${renderFieldError(options.id, error)}
     <input ${attributes}>
     ${options.help ? `<p class="help" id="${options.id}-help">${escapeHtml(options.help)}</p>` : ""}
@@ -250,6 +422,7 @@ export function renderTextarea(options: {
   readonly errors: readonly SignupError[];
   readonly help?: string;
   readonly required?: boolean;
+  readonly audience?: SignupAudience;
 }): string {
   const error = options.errors.find(({ field }) => field === options.id);
   const describedBy = [
@@ -259,7 +432,7 @@ export function renderTextarea(options: {
     .filter(Boolean)
     .join(" ");
   return `<div class="field ${error ? "has-error" : ""}">
-    <label for="${escapeHtml(options.id)}">${escapeHtml(options.label)}${options.required ? ' <span aria-hidden="true">*</span>' : ""}</label>
+    <label for="${escapeHtml(options.id)}">${escapeHtml(options.label)}${options.required ? ' <span aria-hidden="true">*</span>' : ""}${renderAudienceLabel(options.id, options.audience)}</label>
     ${renderFieldError(options.id, error)}
     <textarea id="${escapeHtml(options.id)}" name="${escapeHtml(options.id)}" rows="4"${options.required ? " required" : ""}${error ? ' aria-invalid="true"' : ""}${describedBy ? ` aria-describedby="${describedBy}"` : ""}>${escapeHtml(options.value)}</textarea>
     ${options.help ? `<p class="help" id="${options.id}-help">${escapeHtml(options.help)}</p>` : ""}
@@ -272,10 +445,11 @@ export function renderBooleanChoices(options: {
   readonly value: string;
   readonly errors: readonly SignupError[];
   readonly help?: string;
+  readonly audience?: SignupAudience;
 }): string {
   const error = options.errors.find(({ field }) => field === options.id);
   return `<fieldset class="choice-group field ${error ? "has-error" : ""}" id="${escapeHtml(options.id)}">
-    <legend>${escapeHtml(options.label)} <span aria-hidden="true">*</span></legend>
+    <legend>${escapeHtml(options.label)} <span aria-hidden="true">*</span>${renderAudienceLabel(options.id, options.audience)}</legend>
     ${renderFieldError(options.id, error)}
     <div class="choices">
       ${["yes", "no"]
@@ -299,10 +473,11 @@ export function renderCheckboxGroup(options: {
   }[];
   readonly errors: readonly SignupError[];
   readonly help?: string;
+  readonly audience?: SignupAudience;
 }): string {
   const error = options.errors.find(({ field }) => field === options.id);
   return `<fieldset class="choice-group field ${error ? "has-error" : ""}" id="${escapeHtml(options.id)}">
-    <legend>${escapeHtml(options.label)}</legend>
+    <legend>${escapeHtml(options.label)}${renderAudienceLabel(options.id, options.audience)}</legend>
     ${renderFieldError(options.id, error)}
     ${options.help ? `<p class="help">${escapeHtml(options.help)}</p>` : ""}
     <div class="checkboxes">${options.choices
@@ -312,6 +487,15 @@ export function renderCheckboxGroup(options: {
       )
       .join("")}</div>
   </fieldset>`;
+}
+
+function renderAudienceLabel(
+  field: string,
+  audience: SignupAudience | undefined,
+): string {
+  if (audience === undefined) return "";
+  const label = SIGNUP_AUDIENCE_LABELS[audience];
+  return ` <span class="audience-label" data-audience-field="${escapeHtml(field)}" data-audience-label="${escapeHtml(label)}">${escapeHtml(label)}</span>`;
 }
 
 export function renderFieldError(
@@ -386,50 +570,78 @@ export function renderHoneypot(): string {
 export function renderHostPreview(values: SignupValues): string {
   return renderPreviewCard({
     kind: "host",
-    title: firstValue(values, "venue_title"),
-    subtitle: firstValue(values, "venue_address"),
-    description: firstValue(values, "space_description"),
-    details: [
-      firstValue(values, "has_power") === "yes" ? "Power available" : "",
-      firstValue(values, "rain_backup") === "yes" ? "Rain backup" : "",
-    ],
+    title: publicPreviewField(values, HOST_SIGNUP_AUDIENCES, "venue_title"),
+    subtitle: publicPreviewField(
+      values,
+      HOST_SIGNUP_AUDIENCES,
+      "venue_address",
+    ),
   });
 }
 
 export function renderPerformerPreview(values: SignupValues): string {
   return renderPreviewCard({
     kind: "performer",
-    title: firstValue(values, "act_name"),
-    subtitle: firstValue(values, "genres"),
-    description: firstValue(values, "description"),
-    details: [
-      firstValue(values, "duration_minutes")
-        ? `${firstValue(values, "duration_minutes")} minutes`
-        : "",
-      firstValue(values, "requires_amplification") === "yes" ? "Amplified" : "",
-    ],
+    title: publicPreviewField(values, PERFORMER_SIGNUP_AUDIENCES, "act_name"),
+    subtitle: publicPreviewField(values, PERFORMER_SIGNUP_AUDIENCES, "genres"),
+    description: publicPreviewField(
+      values,
+      PERFORMER_SIGNUP_AUDIENCES,
+      "description",
+    ),
   });
+}
+
+interface PublicPreviewField {
+  readonly name: string;
+  readonly value: string;
+}
+
+function publicPreviewField(
+  values: SignupValues,
+  audiences: Readonly<Record<string, SignupAudience>>,
+  name: string,
+): PublicPreviewField | undefined {
+  return audiences[name] === "public"
+    ? { name, value: firstValue(values, name) }
+    : undefined;
 }
 
 export function renderPreviewCard(options: {
   readonly kind: "host" | "performer";
-  readonly title: string;
-  readonly subtitle: string;
-  readonly description: string;
-  readonly details?: readonly string[];
+  readonly title?: PublicPreviewField;
+  readonly subtitle?: PublicPreviewField;
+  readonly description?: PublicPreviewField;
 }): string {
   const emptyTitle = options.kind === "host" ? "Your porch" : "Your act";
-  return `<article class="porchfest-venue-card porch-card" data-signup-preview="${options.kind}">
+  const sourceAttributes = [
+    previewSourceAttribute("title", options.title),
+    previewSourceAttribute("subtitle", options.subtitle),
+    previewSourceAttribute("description", options.description),
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return `<article class="porchfest-venue-card porch-card" data-signup-preview="${options.kind}" ${sourceAttributes}>
     <div class="porchfest-venue-band porch-card-band">
       <p class="porch-card-type">${options.kind === "host" ? "Host porch" : "Performer"}</p>
-      <h2 class="porchfest-venue-title" data-preview-title>${escapeHtml(options.title || emptyTitle)}</h2>
-      <p class="porchfest-venue-address" data-preview-subtitle>${escapeHtml(options.subtitle || "Your details will appear here")}</p>
+      <h2 class="porchfest-venue-title" data-preview-title>${escapeHtml(options.title?.value || emptyTitle)}</h2>
+      <p class="porchfest-venue-address" data-preview-subtitle>${escapeHtml(options.subtitle?.value || "Your details will appear here")}</p>
     </div>
     <div class="porchfest-venue-acts porch-card-body">
-      <p data-preview-description>${escapeHtml(options.description || "Keep filling in the form to shape this card.")}</p>
-      <p class="porch-card-details" data-preview-details>${escapeHtml((options.details ?? []).filter(Boolean).join(" · "))}</p>
+      ${
+        options.description
+          ? `<p data-preview-description>${escapeHtml(options.description.value || "Keep filling in the form to shape this card.")}</p>`
+          : ""
+      }
     </div>
   </article>`;
+}
+
+function previewSourceAttribute(
+  slot: "title" | "subtitle" | "description",
+  field: PublicPreviewField | undefined,
+): string {
+  return field ? `data-preview-${slot}-field="${escapeHtml(field.name)}"` : "";
 }
 
 // ---------------------------------------------------------------------------
@@ -443,33 +655,56 @@ export function renderPreviewCard(options: {
 // before the season opens rather than after.
 
 interface SubmissionRow {
+  readonly field: string;
   readonly label: string;
   readonly value: string;
+  readonly audience: SignupAudience;
 }
 
-function rows(entries: readonly (SubmissionRow | null)[]): string {
-  const present = entries.filter((row): row is SubmissionRow => row !== null);
+function rows(
+  entries: readonly (SubmissionRow | null)[],
+  audience: SignupAudience,
+): string {
+  const present = entries.filter(
+    (row): row is SubmissionRow => row !== null && row.audience === audience,
+  );
   if (present.length === 0) return "";
   return `<dl class="submission-list">${present
     .map(
       (row) =>
-        `<div class="submission-row"><dt>${escapeHtml(row.label)}</dt><dd>${escapeHtml(row.value)}</dd></div>`,
+        `<div class="submission-row" data-submission-field="${escapeHtml(row.field)}" data-audience-label="${escapeHtml(SIGNUP_AUDIENCE_LABELS[row.audience])}"><dt>${escapeHtml(row.label)}</dt><dd>${escapeHtml(row.value)}</dd></div>`,
     )
     .join("")}</dl>`;
 }
 
-function row(label: string, value: string): SubmissionRow | null {
+function row(
+  audiences: Readonly<Record<string, SignupAudience>>,
+  field: string,
+  label: string,
+  value: string,
+): SubmissionRow | null {
   const trimmed = value.trim();
-  return trimmed ? { label, value: trimmed } : null;
+  const audience = audiences[field];
+  if (!trimmed || audience === undefined) return null;
+  return { field, label, value: trimmed, audience };
 }
 
 function listRow(
+  audiences: Readonly<Record<string, SignupAudience>>,
+  field: string,
   label: string,
   values: readonly string[],
 ): SubmissionRow | null {
   const present = values.filter((value) => value.trim().length > 0);
   if (present.length === 0) return null;
-  return { label, value: present.map(readableChoice).join(", ") };
+  const audience = audiences[field];
+  if (audience === undefined) return null;
+  return {
+    field,
+    label,
+    value: present.map(readableChoice).join(", "),
+    audience,
+  };
 }
 
 function readableChoice(value: string): string {
@@ -483,45 +718,115 @@ function yesNo(value: string): string {
 }
 
 function renderSubmission(
-  publicRows: string,
-  privateRows: string,
+  entries: readonly (SubmissionRow | null)[],
   note: string,
 ): string {
+  const publicRows = rows(entries, "public");
+  const organizerRows = rows(entries, "organizer");
+  const matchRows = rows(entries, "match");
   return `<section class="submission" aria-labelledby="submission-title">
     <h2 id="submission-title">Everything you sent</h2>
     <section class="submission-group submission-public" aria-labelledby="submission-public-title">
-      <h3 id="submission-public-title">Shown publicly</h3>
-      <p class="help">${escapeHtml(note)}</p>
+      <h3 id="submission-public-title">${SIGNUP_AUDIENCE_LABELS.public}</h3>
+      <p class="help">Shown publicly. ${escapeHtml(note)}</p>
       ${publicRows || `<p class="help">Nothing public was submitted.</p>`}
     </section>
-    <section class="submission-group submission-private" aria-labelledby="submission-private-title">
-      <h3 id="submission-private-title">Kept private</h3>
-      <p class="help">Only the Porchfest organizers see these. They never appear on the public map.</p>
-      ${privateRows || `<p class="help">Nothing private was submitted.</p>`}
+    <section class="submission-group submission-organizer" aria-labelledby="submission-organizer-title">
+      <h3 id="submission-organizer-title">${SIGNUP_AUDIENCE_LABELS.organizer}</h3>
+      <p class="help">Kept private from the public map and confirmed matches. Only Porchfest organizers see these answers.</p>
+      ${organizerRows || `<p class="help">No organizer-only answers were submitted.</p>`}
+    </section>
+    <section class="submission-group submission-match" aria-labelledby="submission-match-title">
+      <h3 id="submission-match-title">${SIGNUP_AUDIENCE_LABELS.match}</h3>
+      <p class="help">These answers are sent to the host and performers only after the organizer confirms their match. They never appear on the public map.</p>
+      ${matchRows || `<p class="help">No match-shared answers were submitted.</p>`}
     </section>
   </section>`;
 }
 
 export function renderHostSubmission(values: SignupValues): string {
   return renderSubmission(
-    rows([
-      row("Porch name", firstValue(values, "venue_title")),
-      row("Street address", firstValue(values, "venue_address")),
-      row("Performance space", firstValue(values, "space_description")),
-      row("Electrical power", yesNo(firstValue(values, "has_power"))),
-      row("Rain backup", yesNo(firstValue(values, "rain_backup"))),
-      listRow("Gear", allValues(values, "gear")),
-      listRow("Drinks", allValues(values, "drinks")),
-      listRow("Amenities", allValues(values, "amenities")),
-    ]),
-    rows([
-      row("Your name", firstValue(values, "contact_name")),
-      row("Email", firstValue(values, "contact_email")),
-      row("Phone", firstValue(values, "contact_phone")),
-      row("Requested acts", firstValue(values, "requested_act_names")),
-      row("Genre preferences", firstValue(values, "genre_preferences")),
-      row("Notes for the organizers", firstValue(values, "notes")),
-    ]),
+    [
+      row(
+        HOST_SIGNUP_AUDIENCES,
+        "venue_title",
+        "Porch name",
+        firstValue(values, "venue_title"),
+      ),
+      row(
+        HOST_SIGNUP_AUDIENCES,
+        "venue_address",
+        "Street address",
+        firstValue(values, "venue_address"),
+      ),
+      row(
+        HOST_SIGNUP_AUDIENCES,
+        "space_description",
+        "Performance space",
+        firstValue(values, "space_description"),
+      ),
+      row(
+        HOST_SIGNUP_AUDIENCES,
+        "has_power",
+        "Electrical power",
+        yesNo(firstValue(values, "has_power")),
+      ),
+      row(
+        HOST_SIGNUP_AUDIENCES,
+        "rain_backup",
+        "Rain backup",
+        yesNo(firstValue(values, "rain_backup")),
+      ),
+      listRow(HOST_SIGNUP_AUDIENCES, "gear", "Gear", allValues(values, "gear")),
+      listRow(
+        HOST_SIGNUP_AUDIENCES,
+        "drinks",
+        "Drinks",
+        allValues(values, "drinks"),
+      ),
+      listRow(
+        HOST_SIGNUP_AUDIENCES,
+        "amenities",
+        "Amenities",
+        allValues(values, "amenities"),
+      ),
+      row(
+        HOST_SIGNUP_AUDIENCES,
+        "contact_name",
+        "Your name",
+        firstValue(values, "contact_name"),
+      ),
+      row(
+        HOST_SIGNUP_AUDIENCES,
+        "contact_email",
+        "Email",
+        firstValue(values, "contact_email"),
+      ),
+      row(
+        HOST_SIGNUP_AUDIENCES,
+        "contact_phone",
+        "Phone",
+        firstValue(values, "contact_phone"),
+      ),
+      row(
+        HOST_SIGNUP_AUDIENCES,
+        "requested_act_names",
+        "Requested acts",
+        firstValue(values, "requested_act_names"),
+      ),
+      row(
+        HOST_SIGNUP_AUDIENCES,
+        "genre_preferences",
+        "Genre preferences",
+        firstValue(values, "genre_preferences"),
+      ),
+      row(
+        HOST_SIGNUP_AUDIENCES,
+        "notes",
+        "Notes for your confirmed match",
+        firstValue(values, "notes"),
+      ),
+    ],
     "These details help neighbours find your porch and help performers plan.",
   );
 }
@@ -541,30 +846,92 @@ export function renderPerformerSubmission(
     .filter(Boolean);
 
   return renderSubmission(
-    rows([
-      row("Act name", firstValue(values, "act_name")),
-      row("Genres", firstValue(values, "genres")),
-      row("Act description", firstValue(values, "description")),
-      row("Music and website links", firstValue(values, "links")),
+    [
       row(
+        PERFORMER_SIGNUP_AUDIENCES,
+        "act_name",
+        "Act name",
+        firstValue(values, "act_name"),
+      ),
+      row(
+        PERFORMER_SIGNUP_AUDIENCES,
+        "genres",
+        "Genres",
+        firstValue(values, "genres"),
+      ),
+      row(
+        PERFORMER_SIGNUP_AUDIENCES,
+        "description",
+        "Act description",
+        firstValue(values, "description"),
+      ),
+      row(
+        PERFORMER_SIGNUP_AUDIENCES,
+        "links",
+        "Music and website links",
+        firstValue(values, "links"),
+      ),
+      row(
+        PERFORMER_SIGNUP_AUDIENCES,
+        "duration_minutes",
         "Set duration",
         durationLabel(firstValue(values, "duration_minutes")),
       ),
-      row("Amplification", yesNo(firstValue(values, "requires_amplification"))),
-    ]),
-    rows([
-      row("Your name", firstValue(values, "contact_name")),
-      row("Email", firstValue(values, "contact_email")),
-      row("Phone", firstValue(values, "contact_phone")),
-      listRow(`Availability (${timezone})`, windows),
-      row("Can lend gear", yesNo(firstValue(values, "can_lend_gear"))),
       row(
+        PERFORMER_SIGNUP_AUDIENCES,
+        "requires_amplification",
+        "Amplification",
+        yesNo(firstValue(values, "requires_amplification")),
+      ),
+      row(
+        PERFORMER_SIGNUP_AUDIENCES,
+        "contact_name",
+        "Your name",
+        firstValue(values, "contact_name"),
+      ),
+      row(
+        PERFORMER_SIGNUP_AUDIENCES,
+        "contact_email",
+        "Email",
+        firstValue(values, "contact_email"),
+      ),
+      row(
+        PERFORMER_SIGNUP_AUDIENCES,
+        "contact_phone",
+        "Phone",
+        firstValue(values, "contact_phone"),
+      ),
+      listRow(
+        PERFORMER_SIGNUP_AUDIENCES,
+        "availability_start",
+        `Availability (${timezone})`,
+        windows,
+      ),
+      row(
+        PERFORMER_SIGNUP_AUDIENCES,
+        "can_lend_gear",
+        "Can lend gear",
+        yesNo(firstValue(values, "can_lend_gear")),
+      ),
+      row(
+        PERFORMER_SIGNUP_AUDIENCES,
+        "house_preference",
         "Porch or neighbourhood preference",
         firstValue(values, "house_preference"),
       ),
-      row("Members in other acts", firstValue(values, "shared_member_note")),
-      row("Anything else", firstValue(values, "performer_notes")),
-    ]),
+      row(
+        PERFORMER_SIGNUP_AUDIENCES,
+        "shared_member_note",
+        "Members in other acts",
+        firstValue(values, "shared_member_note"),
+      ),
+      row(
+        PERFORMER_SIGNUP_AUDIENCES,
+        "performer_notes",
+        "Anything else",
+        firstValue(values, "performer_notes"),
+      ),
+    ],
     "These details go on the public map and into organizer materials.",
   );
 }

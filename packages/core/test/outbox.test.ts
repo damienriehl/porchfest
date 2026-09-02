@@ -588,7 +588,7 @@ describe("outbox", () => {
     expect(text).toContain(
       `- ${formatZonedWindow(slots[0]!, fixture.season.timezone)} — The Synthetic Notes`,
     );
-    expect(text).toContain("The Synthetic Notes need amplification");
+    expect(text).toContain("The Synthetic Notes requires amplification");
     expect(text).toContain("https://porchfest.example.invalid/map");
     expect(text).toContain("September 12, 2105");
     expect(text).not.toContain("{{");
@@ -599,6 +599,34 @@ describe("outbox", () => {
     );
     expect(contactOrder.every((position) => position >= 0)).toBe(true);
     expect([...contactOrder].sort((a, b) => a - b)).toEqual(contactOrder);
+  });
+
+  it("renders the current porch title, address, and neutral amplification wording", () => {
+    const original = venueIds.get("maple")!;
+    seasons.updateVenue(original.id, original.version, {
+      title: "Garden Gate Stage",
+      address: "204 Cedar Crescent",
+    });
+
+    const message = matchWave().messages[0]!;
+    for (const body of [message.textBody!, message.htmlBody!]) {
+      expect(body).toContain("Garden Gate Stage");
+      expect(body).toContain("204 Cedar Crescent");
+      expect(body).toContain("The Synthetic Notes requires amplification");
+      expect(body).not.toContain("Maple Street Porch");
+      expect(body).not.toContain("need amplification");
+    }
+  });
+
+  it("shares disclosed match details without sending organizer-only performer answers to the host", () => {
+    const message = matchWave().messages[0]?.textBody ?? "";
+
+    expect(message).toContain("wren@example.invalid");
+    expect(message).toContain("ash@example.invalid");
+    expect(message).toContain("Park on the north side of the street.");
+    expect(message).not.toContain("folk / jazz");
+    expect(message).not.toContain("A porch with a roof");
+    expect(message).not.toContain("can lend gear");
   });
 
   it("renders every ordered continuation window in an act schedule", () => {

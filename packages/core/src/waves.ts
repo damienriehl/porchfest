@@ -36,6 +36,7 @@ export const wavePlaceholders = [
   "organizer_signature",
   "organizer_name",
   "organizer_phone",
+  "venue_title",
   "address_display",
   "space_line",
   "electrical_line",
@@ -86,6 +87,7 @@ THE MATCH
 {{slot_lines}}
 
 VENUE
+- Porch: {{venue_title}}
 - Address: {{address_display}}
 - Space: {{space_line}}
 - Power: {{electrical_line}}

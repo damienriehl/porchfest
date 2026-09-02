@@ -6,6 +6,7 @@ import {
   createTestingRuntime,
   type PorchfestRuntime,
 } from "../src/composition.js";
+import { renderPublicSeasonLinks } from "../src/views/public-season-links.js";
 
 const PUBLIC_BASE_URL = "https://porchfest.example";
 const temporaryRoots: string[] = [];
@@ -20,14 +21,14 @@ afterEach(async () => {
   );
 });
 
-async function boot() {
+async function boot(publicBaseUrl = PUBLIC_BASE_URL) {
   const dataDirectory = await mkdtemp(join(tmpdir(), "porchfest-lifecycle-"));
   temporaryRoots.push(dataDirectory);
   const announced: string[] = [];
   const runtime = await createTestingRuntime({
     dataDirectory,
     env: {
-      PUBLIC_BASE_URL,
+      PUBLIC_BASE_URL: publicBaseUrl,
       PORCHFEST_SESSION_SECRET: "season-lifecycle-test-secret",
     },
     announce: (message) => announced.push(message),
@@ -37,14 +38,14 @@ async function boot() {
   const bootstrapToken =
     announced.join("\n").match(/token=([A-Za-z0-9_-]+)/)?.[1] ?? "";
   const signInPage = await runtime.request(
-    `${PUBLIC_BASE_URL}/admin/sign-in?token=${bootstrapToken}`,
+    `${publicBaseUrl}/admin/sign-in?token=${bootstrapToken}`,
   );
   const signInCsrf =
     (await signInPage.text()).match(/name="_csrf" value="([^"]+)"/)?.[1] ?? "";
-  const signedIn = await runtime.request(`${PUBLIC_BASE_URL}/admin/sign-in`, {
+  const signedIn = await runtime.request(`${publicBaseUrl}/admin/sign-in`, {
     method: "POST",
     headers: {
-      origin: PUBLIC_BASE_URL,
+      origin: publicBaseUrl,
       "content-type": "application/x-www-form-urlencoded",
     },
     body: new URLSearchParams({
@@ -122,6 +123,96 @@ async function transition(
 }
 
 describe("organizer season lifecycle", () => {
+  it("names unavailable public links when deployment or season configuration is absent", () => {
+    const html = renderPublicSeasonLinks(null, null, "setup");
+
+    expect(html).toContain(
+      "Shareable signup URLs are unavailable because PUBLIC_BASE_URL is not configured.",
+    );
+    expect(html).not.toContain("Inactive —");
+    expect(html).toContain("No public map URL is configured for this season.");
+  });
+
+  it.each(["setup", "signups_closed", "locked", "archived"] as const)(
+    "shows signup URLs as inactive text while the season is %s",
+    (state) => {
+      const stateLabels = {
+        setup: "Preparing the season",
+        signups_closed: "Signups closed",
+        locked: "Schedule confirmed",
+        archived: "Season closed and archived",
+      } as const;
+      const host = `${PUBLIC_BASE_URL}/signup/host?season=3`;
+      const performer = `${PUBLIC_BASE_URL}/signup/performer?season=3`;
+      const publicMap = "https://map.example.invalid/season-3";
+      const html = renderPublicSeasonLinks(
+        { host, performer },
+        publicMap,
+        state,
+      );
+
+      expect(html).toContain(`<span>${host}</span>`);
+      expect(html).toContain(`<span>${performer}</span>`);
+      expect(html).not.toContain(`href="${host}"`);
+      expect(html).not.toContain(`href="${performer}"`);
+      expect(
+        html.match(
+          new RegExp(`Inactive — ${stateLabels[state]} \\(${state}\\)`, "g"),
+        ),
+      ).toHaveLength(2);
+      expect(html).toContain(`href="${publicMap}"`);
+    },
+  );
+
+  it.each(["signups_open", "assigning"] as const)(
+    "shows live signup links while the season is %s",
+    (state) => {
+      const host = `${PUBLIC_BASE_URL}/signup/host?season=3`;
+      const performer = `${PUBLIC_BASE_URL}/signup/performer?season=3`;
+      const html = renderPublicSeasonLinks({ host, performer }, null, state);
+
+      expect(html).toContain(`<a href="${host}">${host}</a>`);
+      expect(html).toContain(`<a href="${performer}">${performer}</a>`);
+      expect(html).not.toContain("Inactive —");
+    },
+  );
+
+  it("shows shareable URLs and the configured public map for this season", async () => {
+    const publicBaseUrl = "https://events.example.invalid:8443";
+    const { runtime, cookie } = await boot(publicBaseUrl);
+    const publicMapUrl =
+      "https://map.example.invalid/porchfest?view=public&kind=all";
+    const { season } = runtime.core.setup.createSeason({
+      year: 2032,
+      displayName: "Second Synthetic Season",
+      timezone: "UTC",
+      eventDate: "2032-09-11",
+      eventCity: "Elsewhere",
+      eventState: "MN",
+      publicMapUrl,
+      timeSlots: [{ startsAt: "18:00", endsAt: "19:00" }],
+      openSignups: true,
+    });
+    expect(season.id).toBe(2);
+
+    const page = await runtime.request(
+      `${publicBaseUrl}/admin/seasons/${season.id}`,
+      { headers: { cookie, host: "request-host.example.invalid" } },
+    );
+    const html = await page.text();
+    const hostUrl = `${publicBaseUrl}/signup/host?season=2`;
+    const performerUrl = `${publicBaseUrl}/signup/performer?season=2`;
+
+    expect(page.status).toBe(200);
+    expect(html).toContain(`href="${hostUrl}"`);
+    expect(html).toContain(`href="${performerUrl}"`);
+    expect(html).toContain(
+      'href="https://map.example.invalid/porchfest?view=public&amp;kind=all"',
+    );
+    expect((await runtime.request(hostUrl)).status).toBe(200);
+    expect((await runtime.request(performerUrl)).status).toBe(200);
+  });
+
   it("refuses unauthenticated GET and POST requests", async () => {
     const { runtime, season } = await boot();
     expect((await get(runtime, `/admin/seasons/${season.id}`)).status).toBe(
@@ -157,6 +248,9 @@ describe("organizer season lifecycle", () => {
     expect(html).toMatch(
       /Moving to signups_closed stops allowing:[\s\S]*public signups/,
     );
+    expect(html).toMatch(
+      /<h3>Close and archive season<\/h3>[\s\S]*Internal state: archived[\s\S]*Moving to archived stops allowing:[\s\S]*public signups[\s\S]*name="version" value="1"[\s\S]*name="target_state" value="archived"[\s\S]*name="confirmation"[\s\S]*required>[\s\S]*I confirm moving this season to archived[\s\S]*<button[^>]*>Close and archive season<\/button>/,
+    );
 
     for (const target of [
       "signups_closed",
@@ -187,6 +281,13 @@ describe("organizer season lifecycle", () => {
         );
       }
     }
+
+    expect(runtime.core.seasons.getSeason(season.id).state).toBe("archived");
+    expect(html).toContain(
+      "This season is archived. No further transitions are available.",
+    );
+    expect(html).not.toContain('name="target_state"');
+    expect(html).not.toContain("Close and archive season");
   });
 
   it("names backwards, stale, missing-confirmation, and unknown-state refusals", async () => {
@@ -328,7 +429,7 @@ describe("organizer season lifecycle", () => {
     const current = runtime.core.seasons.getSeason(season.id);
     const page = await get(runtime, `/admin/seasons/${season.id}`, cookie);
     expect(await page.text()).toMatch(
-      /Move to archived[\s\S]*1 slot is still held/,
+      /Close and archive season[\s\S]*1 slot is still held/,
     );
 
     const response = await transition(

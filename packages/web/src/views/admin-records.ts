@@ -4,6 +4,8 @@ import type {
   QueueRecordType,
   SeasonState,
 } from "@porchfest/core";
+import type { SeasonSignupUrls } from "../routes/signup-paths.js";
+import { renderPublicSeasonLinks } from "./public-season-links.js";
 import { escapeHtml } from "./signup-view.js";
 
 export interface RecordFieldSpec {
@@ -90,6 +92,9 @@ export function renderQueuePage(options: {
   readonly organizerName: string;
   readonly seasonName: string;
   readonly seasonId: number;
+  readonly seasonState: SeasonState;
+  readonly signupUrls: SeasonSignupUrls | null;
+  readonly publicMapUrl: string | null;
   readonly items: readonly QueueItem[];
   readonly changeRequests: readonly ParticipantChangeRequest[];
   readonly correctionsClosed: boolean;
@@ -177,6 +182,7 @@ export function renderQueuePage(options: {
       <p class="lede"><a href="/admin/retention">Review participant retention</a></p>
       <p class="lede"><a href="/admin/seasons/${options.seasonId}">Season settings &amp; state</a> · <a href="/admin/seasons/${options.seasonId}/outbox">Email outbox</a></p>
     </header>
+    ${renderPublicSeasonLinks(options.signupUrls, options.publicMapUrl, options.seasonState)}
     <section aria-labelledby="change-requests-title">
       <h2 id="change-requests-title">Change requests needing a decision</h2>
       <p class="help">Assignments remain unchanged until you apply a request. Rejecting closes it without changing the record.</p>

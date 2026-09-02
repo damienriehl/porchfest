@@ -3,12 +3,13 @@ import {
   isSeasonActionLegal,
   type Act,
   type Assignment,
-  type RankedPairing,
+  type RankedSuggestion,
   type Season,
   type Slot,
   type Venue,
 } from "@porchfest/core";
 import { escapeHtml, renderOrganizerPage } from "./signup-view.js";
+import { formatZonedDateInput } from "../timezone.js";
 
 export interface VenueAssignmentPageOptions {
   readonly season: Season;
@@ -18,7 +19,7 @@ export interface VenueAssignmentPageOptions {
   readonly acts: readonly Act[];
   readonly venues: readonly Venue[];
   readonly assignments: readonly Assignment[];
-  readonly suggestions: readonly RankedPairing[];
+  readonly suggestions: readonly RankedSuggestion[];
   readonly csrf: {
     readonly assign: string;
     readonly unassign: string;
@@ -107,7 +108,7 @@ function slotSection(
         : `Fallback: ${options.venues.find((venue) => venue.id === slot.fallbackVenueId)?.title ?? "Unknown venue"}`;
     return `<section class="matching-slot" aria-labelledby="slot-${slot.id}">
       <h3 id="slot-${slot.id}">${escapeHtml(title)} · Held</h3>
-      <p>Held for ${escapeHtml(slot.heldForName ?? "Unnamed act")} until ${escapeHtml(slot.heldDecideBy ? formatZonedDate(slot.heldDecideBy, options.season.timezone) : "no decide-by date")}.</p>
+      <p>Held for ${escapeHtml(slot.heldForName ?? "Unnamed act")} until ${escapeHtml(slot.heldDecideBy ? formatZonedDateInput(slot.heldDecideBy, options.season.timezone) : "no decide-by date")}.</p>
       <p class="help">${escapeHtml(fallback)}</p>
       <form class="signup-form compact-form" method="post" action="/admin/slots/${slot.id}/release">
         ${hidden(options.csrf.release, slot.version, "venue")}
@@ -142,7 +143,7 @@ function slotSection(
       assignmentLegal
         ? candidates.length === 0
           ? '<p class="help">No eligible acts are available for this slot.</p>'
-          : `<ol class="matching-candidates">${candidates.map((pairing) => venueCandidate(options, slot, pairing)).join("")}</ol>`
+          : `${tieStatement(candidates)}<ol class="matching-candidates">${candidates.map((pairing) => venueCandidate(options, slot, pairing)).join("")}</ol>`
         : '<p class="help">Candidate assignments are unavailable in this season state.</p>'
     }
     ${isSeasonActionLegal(options.season.state, "hold") ? holdForm(options, slot) : ""}
@@ -152,7 +153,7 @@ function slotSection(
 function venueCandidate(
   options: VenueAssignmentPageOptions,
   slot: Slot,
-  pairing: RankedPairing,
+  pairing: RankedSuggestion,
 ): string {
   const sharedMember = pairing.warnings.some(
     (warning) => warning.code === "shared_member",
@@ -170,6 +171,12 @@ function venueCandidate(
       <button class="primary-action" type="submit">Assign ${escapeHtml(pairing.act.name)}</button>
     </form>
   </li>`;
+}
+
+function tieStatement(pairings: readonly RankedSuggestion[]): string {
+  return pairings.some(({ isBestScoreTie }) => isBestScoreTie)
+    ? '<p class="help">Equally suitable based on recorded information</p>'
+    : "";
 }
 
 function holdForm(options: VenueAssignmentPageOptions, slot: Slot): string {
@@ -190,22 +197,10 @@ function holdForm(options: VenueAssignmentPageOptions, slot: Slot): string {
   </form>`;
 }
 
-function explanation(pairing: RankedPairing): string {
+function explanation(pairing: RankedSuggestion): string {
   return `<div class="matching-explanation"><p class="help">Why this match:</p><ul>${pairing.reasons.map((reason) => `<li>${escapeHtml(reason.text)}</li>`).join("")}</ul>${pairing.warnings.length === 0 ? "" : `<p class="help">Warnings:</p><ul class="matching-warnings">${pairing.warnings.map((warning) => `<li>${escapeHtml(warning.text)}</li>`).join("")}</ul>`}</div>`;
 }
 
 function hidden(csrf: string, version: number, returnTo: string): string {
   return `<input type="hidden" name="_csrf" value="${escapeHtml(csrf)}"><input type="hidden" name="version" value="${version}"><input type="hidden" name="return_to" value="${returnTo}">`;
-}
-
-function formatZonedDate(date: Date, timezone: string): string {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: timezone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(date);
-  const value = (type: Intl.DateTimeFormatPartTypes) =>
-    parts.find((part) => part.type === type)?.value ?? "";
-  return `${value("year")}-${value("month")}-${value("day")}`;
 }

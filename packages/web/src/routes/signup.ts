@@ -276,11 +276,18 @@ export function registerSignupRoutes(options: SignupRouteOptions): void {
           );
         }
 
+        let recordId: number;
         try {
           if (validation.kind === "host") {
-            options.core.seasons.createHostSignup(validation.input);
+            const signup = options.core.seasons.createHostSignup(
+              validation.input,
+            );
+            recordId = signup.venue.id;
           } else {
-            options.core.seasons.createPerformerSignup(validation.input);
+            const signup = options.core.seasons.createPerformerSignup(
+              validation.input,
+            );
+            recordId = signup.act.id;
           }
         } catch (error) {
           return persistenceRefusal(
@@ -301,6 +308,8 @@ export function registerSignupRoutes(options: SignupRouteOptions): void {
                 : "Your performer signup is in.",
             kind,
             seasonId: season.id,
+            recordId,
+            publicSiteUrl: season.publicSiteUrl,
             emailConfigured: options.core.ports.email.configured,
             preview:
               kind === "host"
@@ -1038,19 +1047,24 @@ function formResponse(
   season: Season | null,
 ): Response {
   const path = kind === "host" ? HOST_SIGNUP_PATH : PERFORMER_SIGNUP_PATH;
-  const render = kind === "host" ? renderHostForm : renderPerformerForm;
-  return htmlResponse(
-    render({
-      seasonId: firstValue(values, "season_id"),
-      csrfToken: options.csrfTokenFor(path),
-      values,
-      errors,
-      challenge,
-      timezone: season?.timezone ?? null,
-    }),
-    status,
+  const shared = {
+    seasonId: firstValue(values, "season_id"),
+    csrfToken: options.csrfTokenFor(path),
+    values,
+    errors,
     challenge,
-  );
+    timezone: season?.timezone ?? null,
+    season,
+  };
+  const rendered =
+    kind === "host"
+      ? renderHostForm(shared)
+      : renderPerformerForm({
+          ...shared,
+          timeSlots:
+            season === null ? [] : options.core.setup.listTimeSlots(season.id),
+        });
+  return htmlResponse(rendered, status, challenge);
 }
 
 function htmlResponse(

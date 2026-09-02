@@ -162,13 +162,13 @@ describe("retention sweep composition", () => {
     vi.setSystemTime(new Date("2032-02-15T12:00:00.000Z"));
 
     monotonicNow = RETENTION_SWEEP_INTERVAL_MS - 1;
-    expect((await runtime.request("/admin/setup")).status).toBe(200);
+    expect((await runtime.request("/admin/setup")).status).toBe(303);
     expect(
       runtime.core.retention.findParticipant(signup.contact.id)?.name,
     ).toBe("Synthetic Sweep Participant");
 
     monotonicNow = RETENTION_SWEEP_INTERVAL_MS;
-    expect((await runtime.request("/admin/setup")).status).toBe(200);
+    expect((await runtime.request("/admin/setup")).status).toBe(303);
     await Promise.resolve();
     expect(
       runtime.core.retention.findParticipant(signup.contact.id)?.name,

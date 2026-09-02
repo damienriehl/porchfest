@@ -5,14 +5,33 @@
 // caller get the same refusals — a season that this function accepts is a season
 // that can take a public signup.
 
-import { desc, eq, sql } from "drizzle-orm";
-import { seasons, seasonTimeSlots, type Season } from "./storage/schema.js";
+import { and, desc, eq, gt, inArray, lt, ne, or, sql } from "drizzle-orm";
+import {
+  acts,
+  assignments,
+  outboxWaves,
+  seasons,
+  seasonTimeSlots,
+  slots,
+  venueCoordinates,
+  venues,
+  type Season,
+} from "./storage/schema.js";
+import {
+  isSeasonActionLegal,
+  SeasonActionError,
+  SeasonConflictError,
+  SeasonLifecycleError,
+} from "./season.js";
 import {
   isValidTimeZone,
   parseWallClock,
   zonedWallClockToUtc,
 } from "./time.js";
-import type { CoreExecutor } from "./storage/repository-errors.js";
+import type {
+  CoreDatabase,
+  CoreExecutor,
+} from "./storage/repository-errors.js";
 
 export class SeasonSetupError extends Error {
   override readonly name = "SeasonSetupError";
@@ -66,15 +85,19 @@ const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_PATTERN = /^\d{2}:\d{2}$/;
 
 export function createSeasonSetup(
-  db: CoreExecutor,
+  db: CoreDatabase,
   now: () => Date = () => new Date(),
 ) {
-  function seasonCount(): number {
-    const row = db
+  function seasonCountIn(executor: CoreExecutor): number {
+    const row = executor
       .select({ total: sql<number>`count(*)` })
       .from(seasons)
       .get();
     return row?.total ?? 0;
+  }
+
+  function seasonCount(): number {
+    return seasonCountIn(db);
   }
 
   /** True when this deployment has never opened a season — the first-run state. */
@@ -82,12 +105,15 @@ export function createSeasonSetup(
     return seasonCount() === 0;
   }
 
-  function createSeason(input: SeasonSetupInput): SeasonSetupResult {
-    const validated = validate(input);
+  function insertSeason(
+    executor: CoreExecutor,
+    validated: ValidatedSetup,
+    openSignups: boolean,
+  ): SeasonSetupResult {
     const stamp = now();
     const mutable = { version: 1, createdAt: stamp, updatedAt: stamp };
 
-    const season = db
+    const season = executor
       .insert(seasons)
       .values({
         year: validated.year,
@@ -95,7 +121,7 @@ export function createSeasonSetup(
         // R34 explicitly includes the signup state: an organizer finishing setup
         // expects a season that can accept a signup, not one they must then find
         // a second screen to open.
-        state: input.openSignups ? "signups_open" : "setup",
+        state: openSignups ? "signups_open" : "setup",
         timezone: validated.timezone,
         eventDate: validated.eventDate,
         eventCity: validated.eventCity,
@@ -118,7 +144,8 @@ export function createSeasonSetup(
       .get();
 
     if (validated.timeSlots.length > 0) {
-      db.insert(seasonTimeSlots)
+      executor
+        .insert(seasonTimeSlots)
         .values(
           validated.timeSlots.map((slot, index) => ({
             seasonId: season.id,
@@ -132,6 +159,64 @@ export function createSeasonSetup(
     }
 
     return { season, timeSlotCount: validated.timeSlots.length };
+  }
+
+  /** General creation remains available to imports and trusted domain callers.
+   * Organizer routes use the intention-revealing first/additional commands. */
+  function createSeason(input: SeasonSetupInput): SeasonSetupResult {
+    const validated = validate(input);
+    return insertSeason(db, validated, input.openSignups);
+  }
+
+  /** Create the deployment's first season only when the database is still empty.
+   * The emptiness check and insert share one immediate transaction so two open
+   * setup tabs cannot both pass a route-level preflight and create rows. */
+  function createFirstSeason(input: SeasonSetupInput): SeasonSetupResult {
+    return db.transaction(
+      (tx) => {
+        if (seasonCountIn(tx) !== 0) {
+          throw new SeasonSetupError(
+            "firstRun",
+            "The first season has already been created. Review the seasons already open before adding another.",
+          );
+        }
+        const validated = validate(input);
+        return insertSeason(tx, validated, input.openSignups);
+      },
+      { behavior: "immediate" },
+    );
+  }
+
+  /** Open a new season without implying that it edits an existing one. A second
+   * row for the same year is legal, but only after an explicit confirmation. */
+  function createAdditionalSeason(
+    input: SeasonSetupInput,
+    confirmDuplicateYear: boolean,
+  ): SeasonSetupResult {
+    const validated = validate(input);
+    return db.transaction(
+      (tx) => {
+        if (seasonCountIn(tx) === 0) {
+          throw new SeasonSetupError(
+            "additionalSeason",
+            "Open the first season before opening another one.",
+          );
+        }
+        const sameYear = tx
+          .select({ id: seasons.id })
+          .from(seasons)
+          .where(eq(seasons.year, validated.year))
+          .get();
+        if (sameYear && !confirmDuplicateYear) {
+          throw new SeasonSetupError(
+            "confirmDuplicateYear",
+            `Confirm that you want another ${validated.year} season. This creates a separate season; it does not edit the existing one.`,
+          );
+        }
+        return insertSeason(tx, validated, input.openSignups);
+      },
+      { behavior: "immediate" },
+    );
   }
 
   /** Seasons newest first. The admin uses this to pick a default landing season
@@ -153,13 +238,258 @@ export function createSeasonSetup(
       .all();
   }
 
+  /**
+   * Replace a season's editable setup details as one immediate unit. The season
+   * row is the aggregate CAS: dependent checks, template replacement, and
+   * coordinate invalidation all roll back when its submitted version is stale.
+   */
+  function updateSeasonDetails(
+    seasonId: number,
+    expectedVersion: number,
+    input: SeasonSetupInput,
+    confirmDuplicateYear = false,
+  ): SeasonSetupResult {
+    return db.transaction(
+      (tx) => {
+        const current = tx
+          .select()
+          .from(seasons)
+          .where(eq(seasons.id, seasonId))
+          .get();
+        if (!current) {
+          throw new SeasonLifecycleError(`season ${seasonId} does not exist`);
+        }
+        if (current.version !== expectedVersion) {
+          throw new SeasonConflictError("season", seasonId, ["eventDetails"]);
+        }
+        const validated = validate(input);
+        if (!isSeasonActionLegal(current.state, "correction")) {
+          throw new SeasonActionError(current.state, "correction");
+        }
+        if (current.year !== validated.year) {
+          const sameYear = tx
+            .select({ id: seasons.id })
+            .from(seasons)
+            .where(
+              and(eq(seasons.year, validated.year), ne(seasons.id, seasonId)),
+            )
+            .get();
+          if (sameYear && !confirmDuplicateYear) {
+            throw new SeasonSetupError(
+              "confirmDuplicateYear",
+              `Confirm that you want this season to share ${validated.year} with another season. This edits the current season; it does not create a new one.`,
+            );
+          }
+        }
+
+        const currentSlots = tx
+          .select()
+          .from(seasonTimeSlots)
+          .where(eq(seasonTimeSlots.seasonId, seasonId))
+          .orderBy(seasonTimeSlots.position)
+          .all();
+        const templatesChanged = !sameTimeSlots(
+          currentSlots,
+          validated.timeSlots,
+        );
+        const scheduleChanged =
+          current.eventDate !== validated.eventDate ||
+          current.timezone !== validated.timezone ||
+          templatesChanged;
+        if (scheduleChanged) {
+          assertScheduleDependenciesClear(tx, seasonId);
+        }
+
+        const boundsChanged =
+          current.boundsNorth !== (validated.bounds?.north ?? null) ||
+          current.boundsSouth !== (validated.bounds?.south ?? null) ||
+          current.boundsEast !== (validated.bounds?.east ?? null) ||
+          current.boundsWest !== (validated.bounds?.west ?? null);
+        const localityChanged =
+          current.localityName !== validated.localityName || boundsChanged;
+        if (localityChanged && current.mapPublishedAt !== null) {
+          throw new SeasonLifecycleError(
+            "Unpublish the public map before changing the locality or bounding box, so the published pins cannot become stale.",
+          );
+        }
+
+        const stamp = now();
+        const result = tx
+          .update(seasons)
+          .set({
+            year: validated.year,
+            displayName: validated.displayName,
+            timezone: validated.timezone,
+            eventDate: validated.eventDate,
+            eventCity: validated.eventCity,
+            eventState: validated.eventState,
+            signupOpensAt: validated.signupOpensAt,
+            signupClosesAt: validated.signupClosesAt,
+            localityName: validated.localityName,
+            boundsNorth: validated.bounds?.north ?? null,
+            boundsSouth: validated.bounds?.south ?? null,
+            boundsEast: validated.bounds?.east ?? null,
+            boundsWest: validated.bounds?.west ?? null,
+            publicSiteUrl: validated.publicSiteUrl,
+            publicMapUrl: validated.publicMapUrl,
+            senderName: validated.senderName,
+            senderEmail: validated.senderEmail,
+            version: sql`${seasons.version} + 1`,
+            updatedAt: stamp,
+          })
+          .where(
+            and(eq(seasons.id, seasonId), eq(seasons.version, expectedVersion)),
+          )
+          .run();
+        if (result.changes !== 1) {
+          throw new SeasonConflictError("season", seasonId, ["eventDetails"]);
+        }
+
+        if (templatesChanged) {
+          tx.delete(seasonTimeSlots)
+            .where(eq(seasonTimeSlots.seasonId, seasonId))
+            .run();
+          if (validated.timeSlots.length > 0) {
+            tx.insert(seasonTimeSlots)
+              .values(
+                validated.timeSlots.map((slot, index) => ({
+                  seasonId,
+                  position: index + 1,
+                  startsAt: slot.startsAt,
+                  endsAt: slot.endsAt,
+                  version: 1,
+                  createdAt: stamp,
+                  updatedAt: stamp,
+                })),
+              )
+              .run();
+          }
+        }
+
+        if (boundsChanged && validated.bounds) {
+          const venueIds = tx
+            .select({ id: venues.id })
+            .from(venues)
+            .where(eq(venues.seasonId, seasonId));
+          tx.update(venueCoordinates)
+            .set({
+              status: "needs-review",
+              rejectionCode: "out-of-bounds",
+              version: sql`${venueCoordinates.version} + 1`,
+              updatedAt: stamp,
+            })
+            .where(
+              and(
+                inArray(venueCoordinates.venueId, venueIds),
+                eq(venueCoordinates.status, "verified"),
+                or(
+                  lt(venueCoordinates.latitude, validated.bounds.south),
+                  gt(venueCoordinates.latitude, validated.bounds.north),
+                  lt(venueCoordinates.longitude, validated.bounds.west),
+                  gt(venueCoordinates.longitude, validated.bounds.east),
+                ),
+              ),
+            )
+            .run();
+        }
+
+        const season = tx
+          .select()
+          .from(seasons)
+          .where(eq(seasons.id, seasonId))
+          .get();
+        if (!season) {
+          throw new SeasonLifecycleError(`season ${seasonId} disappeared`);
+        }
+        return { season, timeSlotCount: validated.timeSlots.length };
+      },
+      { behavior: "immediate" },
+    );
+  }
+
   return Object.freeze({
     needsFirstRun,
     seasonCount,
     createSeason,
+    createFirstSeason,
+    createAdditionalSeason,
+    updateSeasonDetails,
     listSeasons,
     listTimeSlots,
   });
+}
+
+function sameTimeSlots(
+  current: readonly { readonly startsAt: Date; readonly endsAt: Date }[],
+  next: readonly { readonly startsAt: Date; readonly endsAt: Date }[],
+): boolean {
+  return (
+    current.length === next.length &&
+    current.every(
+      (slot, index) =>
+        slot.startsAt.getTime() === next[index]?.startsAt.getTime() &&
+        slot.endsAt.getTime() === next[index]?.endsAt.getTime(),
+    )
+  );
+}
+
+function countRows(
+  executor: CoreExecutor,
+  table:
+    | typeof acts
+    | typeof venues
+    | typeof slots
+    | typeof assignments
+    | typeof outboxWaves,
+  seasonId: number,
+): number {
+  const row = executor
+    .select({ total: sql<number>`count(*)` })
+    .from(table)
+    .where(eq(table.seasonId, seasonId))
+    .get();
+  return row?.total ?? 0;
+}
+
+function assertScheduleDependenciesClear(
+  executor: CoreExecutor,
+  seasonId: number,
+): void {
+  const assignmentCount = countRows(executor, assignments, seasonId);
+  const heldCount =
+    executor
+      .select({ total: sql<number>`count(*)` })
+      .from(slots)
+      .where(and(eq(slots.seasonId, seasonId), eq(slots.state, "held")))
+      .get()?.total ?? 0;
+  const slotCount = countRows(executor, slots, seasonId);
+  const participantCount =
+    countRows(executor, acts, seasonId) + countRows(executor, venues, seasonId);
+  const outboxCount = countRows(executor, outboxWaves, seasonId);
+  const clearable: string[] = [];
+  if (assignmentCount > 0) {
+    clearable.push(
+      `unassign ${assignmentCount} assignment${assignmentCount === 1 ? "" : "s"}`,
+    );
+  }
+  if (heldCount > 0) {
+    clearable.push(`release ${heldCount} hold${heldCount === 1 ? "" : "s"}`);
+  }
+  if (
+    assignmentCount > 0 ||
+    heldCount > 0 ||
+    slotCount > 0 ||
+    participantCount > 0 ||
+    outboxCount > 0
+  ) {
+    const actions =
+      clearable.length === 0
+        ? ""
+        : ` Organizer-clearable actions: ${clearable.join("; ")}.`;
+    throw new SeasonLifecycleError(
+      `Schedule changes are unavailable because this season has dependent data that cannot be cleared in the event-details editor.${actions}`,
+    );
+  }
 }
 
 export type SeasonSetupRepository = ReturnType<typeof createSeasonSetup>;

@@ -5,7 +5,11 @@
 import {
   AccessError,
   isSeasonActionLegal,
+  SeasonActionError,
+  SeasonConflictError,
+  SeasonLifecycleError,
   SeasonSetupError,
+  type Season,
   type CoreRuntime,
 } from "@porchfest/core";
 import type { Context } from "hono";
@@ -18,11 +22,22 @@ import {
   type SessionCookieOptions,
 } from "../auth.js";
 import type { RouteRegistry } from "../router/registry.js";
+import {
+  findSeason,
+  notFound,
+  positiveInteger,
+  redirect,
+} from "./admin-http.js";
+import { seasonSignupUrls } from "./signup-paths.js";
+import { formatZonedDateInput } from "../timezone.js";
 import { renderQueuePage } from "../views/admin-records.js";
 import {
   renderAdminShell,
+  renderFirstRunConflictPage,
+  renderSeasonsPage,
   renderSetupPage,
   renderSignInPage,
+  type SetupConflictDetail,
   type SetupFieldError,
 } from "../views/admin-shell.js";
 
@@ -30,11 +45,15 @@ export const ADMIN_PATH = "/admin";
 export const ADMIN_SIGN_IN_PATH = "/admin/sign-in";
 export const ADMIN_SIGN_OUT_PATH = "/admin/sign-out";
 export const ADMIN_SETUP_PATH = "/admin/setup";
+const ADMIN_SEASONS_PATH = "/admin/seasons";
+const ADMIN_NEW_SEASON_PATH = "/admin/seasons/new";
+const ADMIN_EDIT_SEASON_PATH = "/admin/seasons/:id/edit";
 
 export interface AdminRouteOptions {
   readonly core: CoreRuntime;
   readonly routes: RouteRegistry;
   readonly csrfTokenFor: (path: string) => string;
+  readonly publicBaseUrl: string | null;
   readonly resolveSocketPeerAddress: (context: Context) => string | null;
   readonly cookie?: SessionCookieOptions;
 }
@@ -99,6 +118,9 @@ export function registerAdminRoutes(options: AdminRouteOptions): void {
           organizerName: organizer.displayName,
           seasonName: season.displayName,
           seasonId: season.id,
+          seasonState: season.state,
+          signupUrls: seasonSignupUrls(options.publicBaseUrl, season.id),
+          publicMapUrl: season.publicMapUrl,
           correctionsClosed: !isSeasonActionLegal(season.state, "correction"),
           items: options.core.queue.listForOrganizer(season.id, organizer.id),
           changeRequests: options.core.changeRequests.listPendingForSeason(
@@ -188,15 +210,20 @@ export function registerAdminRoutes(options: AdminRouteOptions): void {
     method: "GET",
     path: ADMIN_SETUP_PATH,
     tier: "organizer",
-    handler: () =>
-      new Response(
+    handler: () => {
+      if (!options.core.setup.needsFirstRun()) {
+        return redirect(ADMIN_SEASONS_PATH);
+      }
+      return new Response(
         renderSetupPage({
           csrfToken: options.csrfTokenFor(ADMIN_SETUP_PATH),
           values: { open_signups: "yes" },
           errors: [],
+          mode: "first",
         }),
         { status: 200, headers: adminHeaders() },
-      ),
+      );
+    },
   });
 
   options.routes.register({
@@ -214,49 +241,189 @@ export function registerAdminRoutes(options: AdminRouteOptions): void {
       }
 
       try {
-        const { season } = options.core.setup.createSeason({
-          year: Number(fields.year ?? ""),
-          displayName: fields.display_name ?? "",
-          timezone: fields.timezone ?? "",
-          eventDate: fields.event_date ?? "",
-          eventCity: fields.event_city ?? "",
-          eventState: fields.event_state ?? "",
-          signupOpensOn: fields.signup_opens_on ?? null,
-          signupClosesOn: fields.signup_closes_on ?? null,
-          timeSlots: [1, 2, 3, 4, 5, 6].map((index) => ({
-            startsAt: fields[`slot_start_${index}`] ?? "",
-            endsAt: fields[`slot_end_${index}`] ?? "",
-          })),
-          localityName: fields.locality_name ?? null,
-          bounds: boundsFrom(fields),
-          publicSiteUrl: fields.public_site_url ?? null,
-          publicMapUrl: fields.public_map_url ?? null,
-          senderName: fields.sender_name ?? null,
-          senderEmail: fields.sender_email ?? null,
-          openSignups: fields.open_signups === "yes",
-        });
-        return new Response(null, {
-          status: 303,
-          headers: {
-            ...adminHeaders(),
-            "content-type": "text/plain; charset=UTF-8",
-            location: `${ADMIN_PATH}?season=${season.id}`,
-          },
-        });
+        const { season } = options.core.setup.createFirstSeason(
+          setupInputFrom(fields),
+        );
+        return redirect(`${ADMIN_PATH}?season=${season.id}`);
       } catch (error) {
+        if (error instanceof SeasonSetupError && error.field === "firstRun") {
+          return new Response(renderFirstRunConflictPage(), {
+            status: 409,
+            headers: adminHeaders(),
+          });
+        }
         if (error instanceof SeasonSetupError) {
           return setupRefusal(options, fields, [
             { field: formFieldFor(error.field), message: error.message },
           ]);
         }
-        return setupRefusal(options, fields, [
-          {
-            field: "display_name",
-            message:
-              "That season could not be created. Your answers are still here.",
-          },
+        return seasonCreationUnavailable(options, fields, "first");
+      }
+    },
+  });
+
+  options.routes.register({
+    method: "GET",
+    path: ADMIN_SEASONS_PATH,
+    tier: "organizer",
+    handler: () => {
+      const seasons = options.core.setup.listSeasons();
+      if (seasons.length === 0) return redirect(ADMIN_SETUP_PATH);
+      return new Response(renderSeasonsPage({ seasons }), {
+        status: 200,
+        headers: adminHeaders(),
+      });
+    },
+  });
+
+  options.routes.register({
+    method: "GET",
+    path: ADMIN_NEW_SEASON_PATH,
+    tier: "organizer",
+    handler: () => {
+      if (options.core.setup.needsFirstRun()) return redirect(ADMIN_SETUP_PATH);
+      return new Response(
+        renderSetupPage({
+          csrfToken: options.csrfTokenFor(ADMIN_NEW_SEASON_PATH),
+          values: { open_signups: "yes" },
+          errors: [],
+          mode: "additional",
+        }),
+        { status: 200, headers: adminHeaders() },
+      );
+    },
+  });
+
+  options.routes.register({
+    method: "POST",
+    path: ADMIN_NEW_SEASON_PATH,
+    tier: "organizer",
+    handler: async (context: Context) => {
+      let fields: Readonly<Record<string, string>>;
+      try {
+        fields = await readFields(context);
+      } catch {
+        return additionalSeasonRefusal(options, {}, [
+          { field: "display_name", message: "That form could not be read." },
         ]);
       }
+
+      try {
+        const { season } = options.core.setup.createAdditionalSeason(
+          setupInputFrom(fields),
+          fields.confirm_duplicate_year === "yes",
+        );
+        return redirect(`${ADMIN_PATH}?season=${season.id}`);
+      } catch (error) {
+        if (error instanceof SeasonSetupError) {
+          if (error.field === "additionalSeason") {
+            return redirect(ADMIN_SETUP_PATH);
+          }
+          return additionalSeasonRefusal(options, fields, [
+            { field: formFieldFor(error.field), message: error.message },
+          ]);
+        }
+        return seasonCreationUnavailable(options, fields, "additional");
+      }
+    },
+  });
+
+  options.routes.register({
+    method: "GET",
+    path: ADMIN_EDIT_SEASON_PATH,
+    tier: "organizer",
+    handler: (context: Context) => {
+      const season = findSeason(options.core, context.req.param("id"));
+      if (!season) return notFound();
+      if (!isSeasonActionLegal(season.state, "correction")) {
+        return eventDetailsPage(options, season, {
+          status: 409,
+          formError: `A season in state ${season.state} no longer allows event-detail corrections.`,
+        });
+      }
+      return eventDetailsPage(options, season, {
+        status: 200,
+        saved: context.req.query("saved") === "1",
+      });
+    },
+  });
+
+  options.routes.register({
+    method: "POST",
+    path: ADMIN_EDIT_SEASON_PATH,
+    tier: "organizer",
+    handler: async (context: Context) => {
+      const season = findSeason(options.core, context.req.param("id"));
+      if (!season) return notFound();
+      let fields: Readonly<Record<string, string>>;
+      try {
+        fields = await readFields(context);
+      } catch {
+        return eventDetailsPage(options, season, {
+          status: 400,
+          submitted: {},
+          formError:
+            "That form could not be read. Review the refreshed values before trying again.",
+        });
+      }
+      if (!isSeasonActionLegal(season.state, "correction")) {
+        return eventDetailsPage(options, season, {
+          status: 409,
+          submitted: fields,
+          formError: `A season in state ${season.state} no longer allows event-detail corrections.`,
+        });
+      }
+      const version = positiveInteger(fields.version);
+      if (version === null) {
+        return eventDetailsPage(options, season, {
+          status: 400,
+          submitted: fields,
+          formError:
+            "A valid season version is required. Reload the editor before trying again.",
+        });
+      }
+
+      try {
+        options.core.setup.updateSeasonDetails(
+          season.id,
+          version,
+          setupInputFrom(fields),
+          fields.confirm_duplicate_year === "yes",
+        );
+      } catch (error) {
+        if (error instanceof SeasonSetupError) {
+          return eventDetailsPage(options, season, {
+            status: 422,
+            submitted: fields,
+            errors: [
+              { field: formFieldFor(error.field), message: error.message },
+            ],
+          });
+        }
+        if (error instanceof SeasonConflictError) {
+          const current = options.core.seasons.getSeason(season.id);
+          const stored = seasonValues(options.core, current);
+          return eventDetailsPage(options, current, {
+            status: 409,
+            submitted: fields,
+            conflicts: setupConflicts(fields, stored),
+            formError: `Someone else changed these event details. Compare your submitted values with stored version ${current.version} before trying again. Nothing from the stale form was saved.`,
+          });
+        }
+        if (
+          error instanceof SeasonLifecycleError ||
+          error instanceof SeasonActionError
+        ) {
+          const current = options.core.seasons.getSeason(season.id);
+          return eventDetailsPage(options, current, {
+            status: 409,
+            submitted: fields,
+            formError: error.message,
+          });
+        }
+        throw error;
+      }
+      return redirect(`/admin/seasons/${season.id}/edit?saved=1`);
     },
   });
 
@@ -332,6 +499,150 @@ function boundsFrom(fields: Readonly<Record<string, string>>) {
   };
 }
 
+function setupInputFrom(fields: Readonly<Record<string, string>>) {
+  return {
+    year: Number(fields.year ?? ""),
+    displayName: fields.display_name ?? "",
+    timezone: fields.timezone ?? "",
+    eventDate: fields.event_date ?? "",
+    eventCity: fields.event_city ?? "",
+    eventState: fields.event_state ?? "",
+    signupOpensOn: fields.signup_opens_on ?? null,
+    signupClosesOn: fields.signup_closes_on ?? null,
+    timeSlots: [1, 2, 3, 4, 5, 6].map((index) => ({
+      startsAt: fields[`slot_start_${index}`] ?? "",
+      endsAt: fields[`slot_end_${index}`] ?? "",
+    })),
+    localityName: fields.locality_name ?? null,
+    bounds: boundsFrom(fields),
+    publicSiteUrl: fields.public_site_url ?? null,
+    publicMapUrl: fields.public_map_url ?? null,
+    senderName: fields.sender_name ?? null,
+    senderEmail: fields.sender_email ?? null,
+    openSignups: fields.open_signups === "yes",
+  };
+}
+
+interface EventDetailsPageState {
+  readonly status: number;
+  readonly submitted?: Readonly<Record<string, string>>;
+  readonly conflicts?: readonly SetupConflictDetail[];
+  readonly formError?: string;
+  readonly saved?: boolean;
+  readonly errors?: readonly SetupFieldError[];
+}
+
+function eventDetailsPage(
+  options: AdminRouteOptions,
+  season: Season,
+  state: EventDetailsPageState,
+): Response {
+  return new Response(
+    renderSetupPage({
+      csrfToken: options.csrfTokenFor(ADMIN_EDIT_SEASON_PATH),
+      values: state.submitted ?? seasonValues(options.core, season),
+      errors: state.errors ?? [],
+      mode: "edit",
+      seasonId: season.id,
+      version: season.version,
+      formError: state.formError,
+      saved: state.saved,
+      conflicts: state.conflicts,
+    }),
+    { status: state.status, headers: adminHeaders() },
+  );
+}
+
+const SETUP_CONFLICT_FIELDS: readonly {
+  readonly name: string;
+  readonly label: string;
+}[] = [
+  { name: "display_name", label: "Season name" },
+  { name: "year", label: "Year" },
+  { name: "event_date", label: "Event date" },
+  { name: "event_city", label: "Event city" },
+  { name: "event_state", label: "Event state or region" },
+  { name: "timezone", label: "Timezone" },
+  { name: "signup_opens_on", label: "Signups open" },
+  { name: "signup_closes_on", label: "Signups close" },
+  ...[1, 2, 3, 4, 5, 6].flatMap((index) => [
+    { name: `slot_start_${index}`, label: `Slot ${index} starts` },
+    { name: `slot_end_${index}`, label: `Slot ${index} ends` },
+  ]),
+  { name: "locality_name", label: "Locality" },
+  { name: "bounds_north", label: "North edge" },
+  { name: "bounds_south", label: "South edge" },
+  { name: "bounds_west", label: "West edge" },
+  { name: "bounds_east", label: "East edge" },
+  { name: "public_site_url", label: "Public site" },
+  { name: "public_map_url", label: "Public map" },
+  { name: "sender_name", label: "Sender name" },
+  { name: "sender_email", label: "Sender address" },
+];
+
+function setupConflicts(
+  submitted: Readonly<Record<string, string>>,
+  stored: Readonly<Record<string, string>>,
+): SetupConflictDetail[] {
+  return SETUP_CONFLICT_FIELDS.filter(
+    (field) => (submitted[field.name] ?? "") !== (stored[field.name] ?? ""),
+  ).map((field) => ({
+    label: field.label,
+    attempted: submitted[field.name] ?? "",
+    stored: stored[field.name] ?? "",
+  }));
+}
+
+function seasonValues(core: CoreRuntime, season: Season) {
+  const values: Record<string, string> = {
+    display_name: season.displayName,
+    year: String(season.year),
+    event_date: season.eventDate ?? "",
+    event_city: season.eventCity,
+    event_state: season.eventState,
+    timezone: season.timezone,
+    signup_opens_on: season.signupOpensAt
+      ? formatZonedDateInput(season.signupOpensAt, season.timezone)
+      : "",
+    signup_closes_on: season.signupClosesAt
+      ? formatZonedDateInput(season.signupClosesAt, season.timezone)
+      : "",
+    locality_name: season.localityName ?? "",
+    bounds_north: decimal(season.boundsNorth),
+    bounds_south: decimal(season.boundsSouth),
+    bounds_east: decimal(season.boundsEast),
+    bounds_west: decimal(season.boundsWest),
+    public_site_url: season.publicSiteUrl ?? "",
+    public_map_url: season.publicMapUrl ?? "",
+    sender_name: season.senderName ?? "",
+    sender_email: season.senderEmail ?? "",
+  };
+  core.setup.listTimeSlots(season.id).forEach((slot, index) => {
+    values[`slot_start_${index + 1}`] = zonedTime(
+      slot.startsAt,
+      season.timezone,
+    );
+    values[`slot_end_${index + 1}`] = zonedTime(slot.endsAt, season.timezone);
+  });
+  return values;
+}
+
+function zonedTime(value: Date, timezone: string): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(value);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((entry) => entry.type === type)?.value ?? "";
+  return `${part("hour")}:${part("minute")}`;
+}
+
+function decimal(value: number | null): string {
+  return value === null ? "" : String(value);
+}
+
 /** Map a domain field name onto the form control that carries it, so the error
  *  summary's anchor lands on something that exists. */
 function formFieldFor(field: string): string {
@@ -349,6 +660,7 @@ function formFieldFor(field: string): string {
     publicMapUrl: "public_map_url",
     senderName: "sender_name",
     senderEmail: "sender_email",
+    confirmDuplicateYear: "confirm_duplicate_year",
     "bounds.north": "bounds_north",
     "bounds.south": "bounds_south",
     "bounds.east": "bounds_east",
@@ -367,8 +679,48 @@ function setupRefusal(
       csrfToken: options.csrfTokenFor(ADMIN_SETUP_PATH),
       values,
       errors,
+      mode: "first",
     }),
     { status: 422, headers: adminHeaders() },
+  );
+}
+
+function additionalSeasonRefusal(
+  options: AdminRouteOptions,
+  values: Readonly<Record<string, string>>,
+  errors: readonly SetupFieldError[],
+): Response {
+  return new Response(
+    renderSetupPage({
+      csrfToken: options.csrfTokenFor(ADMIN_NEW_SEASON_PATH),
+      values,
+      errors,
+      mode: "additional",
+    }),
+    { status: 422, headers: adminHeaders() },
+  );
+}
+
+function seasonCreationUnavailable(
+  options: AdminRouteOptions,
+  values: Readonly<Record<string, string>>,
+  mode: "first" | "additional",
+): Response {
+  const path = mode === "first" ? ADMIN_SETUP_PATH : ADMIN_NEW_SEASON_PATH;
+  return new Response(
+    renderSetupPage({
+      csrfToken: options.csrfTokenFor(path),
+      values,
+      errors: [
+        {
+          field: "display_name",
+          message:
+            "The season service is unavailable right now. Your answers are still here; try again.",
+        },
+      ],
+      mode,
+    }),
+    { status: 503, headers: adminHeaders() },
   );
 }
 

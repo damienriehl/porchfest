@@ -5,6 +5,8 @@ import {
   type SeasonAction,
   type SeasonState,
 } from "@porchfest/core";
+import type { SeasonSignupUrls } from "../routes/signup-paths.js";
+import { renderPublicSeasonLinks } from "./public-season-links.js";
 import { escapeHtml, renderOrganizerPage } from "./signup-view.js";
 
 export const SEASON_ACTION_LABELS: Readonly<Record<SeasonAction, string>> = {
@@ -32,6 +34,8 @@ export function renderSeasonLifecyclePage(options: {
   readonly season: Season;
   readonly heldSlotCount: number;
   readonly csrfToken: string;
+  readonly signupUrls: SeasonSignupUrls | null;
+  readonly publicMapUrl: string | null;
   readonly error?: string;
   readonly transitioned?: boolean;
 }): string {
@@ -44,9 +48,10 @@ export function renderSeasonLifecyclePage(options: {
     `    <header class="signup-header">
       <p class="eyebrow">${escapeHtml(options.season.displayName)}</p>
       <h1>Season settings &amp; state</h1>
-      <p class="lede"><a href="/admin?season=${options.season.id}">Back to activity queue</a> · <a href="/admin/seasons/${options.season.id}/outbox">Email outbox</a> · <a href="/seasons/${options.season.id}/coordinates">Coordinate review &amp; map publication</a></p>
+      <p class="lede"><a href="/admin?season=${options.season.id}">Back to activity queue</a> · <a href="/admin/seasons/${options.season.id}/edit">Edit event details</a> · <a href="/admin/seasons/${options.season.id}/outbox">Email outbox</a> · <a href="/seasons/${options.season.id}/coordinates">Coordinate review &amp; map publication</a></p>
     </header>
     ${notice}
+    ${renderPublicSeasonLinks(options.signupUrls, options.publicMapUrl, options.season.state)}
     <section aria-labelledby="current-season-state">
       <h2 id="current-season-state">Current season</h2>
       <dl class="submission-list">
@@ -94,9 +99,12 @@ function transitionForm(
     (action) => SEASON_ACTION_LABELS[action],
   );
   const irreversible = target === "locked" || target === "archived";
+  const actionLabel =
+    target === "archived" ? "Close and archive season" : `Move to ${target}`;
   return `<li class="queue-item">
     <div class="queue-item-body">
-      <h3>Move to ${escapeHtml(target)}</h3>
+      <h3>${escapeHtml(actionLabel)}</h3>
+      ${target === "archived" ? `<p class="help">Internal state: ${escapeHtml(target)}</p>` : ""}
       <p>Moving to ${escapeHtml(target)} stops allowing: ${stopped.length ? escapeHtml(stopped.join(", ")) : "nothing new"}.</p>
       ${target === "archived" && options.heldSlotCount > 0 ? `<p class="help">${options.heldSlotCount === 1 ? "1 slot is still held; release it before archiving." : `${options.heldSlotCount} slots are still held; release them before archiving.`}</p>` : ""}
     </div>
@@ -105,7 +113,7 @@ function transitionForm(
       <input type="hidden" name="version" value="${options.season.version}">
       <input type="hidden" name="target_state" value="${escapeHtml(target)}">
       ${irreversible ? `<div class="field"><label class="choice" for="confirmation-${escapeHtml(target)}"><input id="confirmation-${escapeHtml(target)}" name="confirmation" type="checkbox" value="confirmed" required> I confirm moving this season to ${escapeHtml(target)}</label></div>` : ""}
-      <button class="${irreversible ? "primary-action" : "secondary-action"}" type="submit">Move to ${escapeHtml(target)}</button>
+      <button class="${irreversible ? "primary-action" : "secondary-action"}" type="submit">${escapeHtml(actionLabel)}</button>
     </form>
   </li>`;
 }

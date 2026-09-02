@@ -35,6 +35,119 @@ function fixture(): MatchingInput {
 }
 
 describe("deterministic matching", () => {
+  it("marks only pairings tied at the best score in each suggestion context", () => {
+    const input: MatchingInput = {
+      timezone: "America/Chicago",
+      venues: [
+        {
+          id: 1,
+          title: "Example Porch",
+          hostName: "Example Host",
+          hasPower: true,
+          requestedActNames: null,
+          genrePreferences: "Jazz",
+          slots: [
+            {
+              id: 11,
+              venueId: 1,
+              startsAt: new Date("2031-09-13T18:00:00.000Z"),
+              endsAt: new Date("2031-09-13T19:00:00.000Z"),
+              state: "open",
+            },
+            {
+              id: 12,
+              venueId: 1,
+              startsAt: new Date("2031-09-13T19:00:00.000Z"),
+              endsAt: new Date("2031-09-13T20:00:00.000Z"),
+              state: "open",
+            },
+          ],
+        },
+        {
+          id: 2,
+          title: "Single-slot Porch",
+          hostName: "Second Host",
+          hasPower: true,
+          requestedActNames: null,
+          genrePreferences: "Jazz",
+          slots: [
+            {
+              id: 21,
+              venueId: 2,
+              startsAt: new Date("2031-09-13T20:00:00.000Z"),
+              endsAt: new Date("2031-09-13T21:00:00.000Z"),
+              state: "open",
+            },
+          ],
+        },
+      ],
+      acts: [
+        {
+          id: 101,
+          name: "Jazz Leader",
+          genre: "Jazz",
+          requiresAmplification: false,
+          housePreference: null,
+          availabilities: [],
+          linkedActIds: [],
+        },
+        {
+          id: 102,
+          name: "Equal Lower One",
+          genre: null,
+          requiresAmplification: false,
+          housePreference: null,
+          availabilities: [],
+          linkedActIds: [],
+        },
+        {
+          id: 103,
+          name: "Equal Lower Two",
+          genre: null,
+          requiresAmplification: false,
+          housePreference: null,
+          availabilities: [],
+          linkedActIds: [],
+        },
+      ],
+      assignments: [],
+    };
+
+    const venueSuggestions = suggestionsForVenue(input, 1);
+    expect(venueSuggestions[0]?.act.name).toBe("Jazz Leader");
+    expect(
+      venueSuggestions.every(({ isBestScoreTie }) => !isBestScoreTie),
+    ).toBe(true);
+
+    const actSuggestions = suggestionsForAct(input, 101);
+    expect(
+      actSuggestions.map(({ slot, venue, isBestScoreTie }) => ({
+        slot: slot.id,
+        venue: venue.id,
+        isBestScoreTie,
+      })),
+    ).toEqual([
+      { slot: 11, venue: 1, isBestScoreTie: true },
+      { slot: 12, venue: 1, isBestScoreTie: true },
+      { slot: 21, venue: 2, isBestScoreTie: false },
+    ]);
+
+    input.acts[1] = { ...input.acts[1]!, genre: "Jazz" };
+    const tiedVenueSuggestions = suggestionsForVenue(input, 1).filter(
+      ({ slot }) => slot.id === 11,
+    );
+    expect(
+      tiedVenueSuggestions.map(({ act, isBestScoreTie }) => ({
+        act: act.name,
+        isBestScoreTie,
+      })),
+    ).toEqual([
+      { act: "Equal Lower One", isBestScoreTie: true },
+      { act: "Jazz Leader", isBestScoreTie: true },
+      { act: "Equal Lower Two", isBestScoreTie: false },
+    ]);
+  });
+
   it("prioritizes mutual and one-sided requests and explains every pairing", () => {
     const ranked = rankPairings(fixture());
     expect(ranked[0]?.act.name).toBe("The Porch Cats");

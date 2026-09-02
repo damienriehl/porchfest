@@ -3,7 +3,11 @@ import type { CoreRuntime } from "@porchfest/core";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { Hono, type Context } from "hono";
 import { RouteRegistry, type TrustAuthorizer } from "./router/registry.js";
-import { ADMIN_SIGN_IN_PATH, registerAdminRoutes } from "./routes/admin.js";
+import {
+  ADMIN_PATH,
+  ADMIN_SIGN_IN_PATH,
+  registerAdminRoutes,
+} from "./routes/admin.js";
 import { registerAdminRecordRoutes } from "./routes/admin-records.js";
 import { registerAdminRetentionRoutes } from "./routes/admin-retention.js";
 import { registerSeasonLifecycleRoutes } from "./routes/season-lifecycle.js";
@@ -16,6 +20,7 @@ import {
   type SignupRouteOptions,
 } from "./routes/signup.js";
 import { createTrustAuthorizer, type SessionCookieOptions } from "./auth.js";
+import { renderPublicLandingPage } from "./views/signup-view.js";
 
 export interface AppOptions {
   readonly core: CoreRuntime;
@@ -27,6 +32,7 @@ export interface AppOptions {
   readonly signupGuardOptions?: SignupRouteOptions["guardOptions"];
   readonly trustedProxyHops?: number;
   readonly onOrganizerActivity?: () => void;
+  readonly onUnexpectedError?: (error: unknown) => void;
 }
 
 export interface PorchfestApp {
@@ -37,6 +43,24 @@ export interface PorchfestApp {
 
 export function createApp(options: AppOptions): PorchfestApp {
   const app = new Hono();
+  app.onError((error) => {
+    (options.onUnexpectedError ?? console.error)(error);
+    return new Response(
+      `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Service unavailable</title></head>
+<body><main><h1>Service temporarily unavailable</h1><p>Please try again.</p></main></body>
+</html>`,
+      {
+        status: 503,
+        headers: {
+          "cache-control": "no-store",
+          "content-type": "text/html; charset=UTF-8",
+          "x-content-type-options": "nosniff",
+        },
+      },
+    );
+  });
   const allowedOrigin = options.publicBaseUrl
     ? new URL(options.publicBaseUrl).origin
     : null;
@@ -77,6 +101,17 @@ export function createApp(options: AppOptions): PorchfestApp {
       context.json({ ok: true, service: "porchfest" } as const),
   });
 
+  routes.register({
+    method: "GET",
+    path: "/",
+    tier: "public",
+    handler: () =>
+      new Response(renderPublicLandingPage({ organizerPath: ADMIN_PATH }), {
+        status: 200,
+        headers: { "content-type": "text/html; charset=UTF-8" },
+      }),
+  });
+
   registerSignupRoutes({
     core: options.core,
     routes,
@@ -93,6 +128,7 @@ export function createApp(options: AppOptions): PorchfestApp {
     core: options.core,
     routes,
     csrfTokenFor,
+    publicBaseUrl: options.publicBaseUrl ?? null,
     resolveSocketPeerAddress:
       options.resolveSocketPeerAddress ?? defaultSocketPeerAddress,
     cookie: options.sessionCookie,
@@ -102,7 +138,12 @@ export function createApp(options: AppOptions): PorchfestApp {
 
   registerAdminRecordRoutes({ core: options.core, routes, csrfTokenFor });
 
-  registerSeasonLifecycleRoutes({ core: options.core, routes, csrfTokenFor });
+  registerSeasonLifecycleRoutes({
+    core: options.core,
+    routes,
+    csrfTokenFor,
+    publicBaseUrl: options.publicBaseUrl ?? null,
+  });
 
   registerCoordinateRoutes({ core: options.core, routes, csrfTokenFor });
 

@@ -4,7 +4,7 @@ import {
   overlaps,
   suggestionsForVenue,
   type MatchingInput,
-  type RankedPairing,
+  type RankedSuggestion,
 } from "./matching.js";
 import { applyContactAddressChange } from "./outbox.js";
 import {
@@ -1851,7 +1851,7 @@ export function createSeasonRepository(
     };
   }
 
-  function suggestForVenue(venueId: number): RankedPairing[] {
+  function suggestForVenue(venueId: number): RankedSuggestion[] {
     const venue = getVenue(venueId);
     return suggestionsForVenue(buildMatchingInput(venue.seasonId), venueId);
   }

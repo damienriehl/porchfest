@@ -54,6 +54,8 @@ export interface RankedPairing {
   warnings: SuggestionReason[];
 }
 
+export type RankedSuggestion = RankedPairing & { isBestScoreTie: boolean };
+
 function normalize(value: string): string {
   return value.toLocaleLowerCase("en").trim().replace(/\s+/g, " ");
 }
@@ -325,13 +327,51 @@ export function rankPairings(input: MatchingInput): RankedPairing[] {
 export function suggestionsForVenue(
   input: MatchingInput,
   venueId: number,
-): RankedPairing[] {
-  return rankPairings(input).filter(({ venue }) => venue.id === venueId);
+): RankedSuggestion[] {
+  return markBestScoreTies(
+    rankPairings(input).filter(({ venue }) => venue.id === venueId),
+    ({ slot }) => slot.id,
+  );
 }
 
 export function suggestionsForAct(
   input: MatchingInput,
   actId: number,
-): RankedPairing[] {
-  return rankPairings(input).filter(({ act }) => act.id === actId);
+): RankedSuggestion[] {
+  return markBestScoreTies(
+    rankPairings(input).filter(({ act }) => act.id === actId),
+    ({ venue }) => venue.id,
+  );
+}
+
+function markBestScoreTies(
+  pairings: RankedPairing[],
+  groupFor: (pairing: RankedPairing) => number,
+): RankedSuggestion[] {
+  const scoresByGroup = new Map<
+    number,
+    { bestScore: number; bestScoreCount: number }
+  >();
+  for (const pairing of pairings) {
+    const group = groupFor(pairing);
+    const scores = scoresByGroup.get(group);
+    if (!scores || pairing.score > scores.bestScore) {
+      scoresByGroup.set(group, {
+        bestScore: pairing.score,
+        bestScoreCount: 1,
+      });
+    } else if (pairing.score === scores.bestScore) {
+      scores.bestScoreCount += 1;
+    }
+  }
+  return pairings.map((pairing) => {
+    const scores = scoresByGroup.get(groupFor(pairing));
+    return {
+      ...pairing,
+      isBestScoreTie:
+        scores !== undefined &&
+        scores.bestScoreCount > 1 &&
+        pairing.score === scores.bestScore,
+    };
+  });
 }
