@@ -1,11 +1,43 @@
 import type { CoreRuntime } from "@porchfest/core";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
-import { createRuntime } from "../src/composition.js";
+import { createRuntime, type PorchfestRuntime } from "../src/composition.js";
 import { SESSION_SECRET_PLACEHOLDER } from "../src/config/session-secret.js";
+
+const PROXY_PUBLIC_BASE_URL = "https://app.sapporchfest.org";
+const proxyTestRoots: string[] = [];
+const proxyTestRuntimes: PorchfestRuntime[] = [];
+
+afterEach(async () => {
+  for (const runtime of proxyTestRuntimes.splice(0)) runtime.close();
+  await Promise.all(
+    proxyTestRoots
+      .splice(0)
+      .map((root) => rm(root, { recursive: true, force: true })),
+  );
+});
+
+async function createProxyTestRuntime(
+  trustedProxyHops: string,
+  publicBaseUrl = PROXY_PUBLIC_BASE_URL,
+) {
+  const dataDirectory = await mkdtemp(join(tmpdir(), "porchfest-proxy-"));
+  proxyTestRoots.push(dataDirectory);
+  const runtime = await createRuntime({
+    dataDirectory,
+    env: {
+      PUBLIC_BASE_URL: publicBaseUrl,
+      PORCHFEST_SESSION_SECRET: "proxy-test-session-secret",
+      PORCHFEST_TRUSTED_PROXY_HOPS: trustedProxyHops,
+    },
+    announce: () => undefined,
+  });
+  proxyTestRuntimes.push(runtime);
+  return runtime;
+}
 
 describe("application scaffold", () => {
   it("boots with an empty configuration and serves health", async () => {
@@ -276,5 +308,85 @@ describe("application scaffold", () => {
         dataDirectory,
       }),
     ).rejects.toThrow(/placeholder/i);
+  });
+});
+
+describe("configured request origin guard", () => {
+  it("keeps the loopback healthcheck reachable", async () => {
+    const runtime = await createProxyTestRuntime("1");
+
+    const response = await runtime.request("http://127.0.0.1:9398/health", {
+      headers: { host: "127.0.0.1:9398" },
+    });
+
+    expect(response.status).toBe(200);
+  });
+
+  it("accepts the external HTTPS origin reported by a trusted proxy", async () => {
+    const runtime = await createProxyTestRuntime("1");
+
+    const response = await runtime.request("http://app.sapporchfest.org/", {
+      headers: {
+        host: "app.sapporchfest.org",
+        "x-forwarded-proto": "https",
+      },
+    });
+
+    expect(response.status).toBe(200);
+  });
+
+  it("uses one canonical protocol value for a multi-proxy deployment", async () => {
+    const runtime = await createProxyTestRuntime("2");
+
+    const response = await runtime.request("http://app.sapporchfest.org/", {
+      headers: {
+        host: "app.sapporchfest.org",
+        "x-forwarded-proto": "https",
+      },
+    });
+
+    expect(response.status).toBe(200);
+  });
+
+  it("preserves an external port that the internal scheme would normalize away", async () => {
+    const runtime = await createProxyTestRuntime(
+      "1",
+      "https://app.sapporchfest.org:80",
+    );
+
+    const response = await runtime.request("http://app.sapporchfest.org:80/", {
+      headers: {
+        host: "app.sapporchfest.org:80",
+        "x-forwarded-proto": "https",
+      },
+    });
+
+    expect(response.status).toBe(200);
+  });
+
+  it("refuses an ambiguous forwarded protocol value", async () => {
+    const runtime = await createProxyTestRuntime("1");
+
+    const response = await runtime.request("http://app.sapporchfest.org/", {
+      headers: {
+        host: "app.sapporchfest.org",
+        "x-forwarded-proto": "http, https",
+      },
+    });
+
+    expect(response.status).toBe(421);
+  });
+
+  it("ignores a spoofed forwarded protocol when no proxy is trusted", async () => {
+    const runtime = await createProxyTestRuntime("0");
+
+    const response = await runtime.request("http://app.sapporchfest.org/", {
+      headers: {
+        host: "app.sapporchfest.org",
+        "x-forwarded-proto": "https",
+      },
+    });
+
+    expect(response.status).toBe(421);
   });
 });

@@ -14,6 +14,8 @@ export interface RouteDeclaration {
   readonly method: HttpMethod;
   readonly path: string;
   readonly tier: TrustTier;
+  /** Exempts infrastructure routes from the configured request-origin guard. */
+  readonly requestOriginCheck?: "exempt";
   readonly handler: Handler;
 }
 
@@ -24,6 +26,7 @@ export type TrustAuthorizer = (
 
 export interface MutationProtection {
   readonly allowedOrigin: string | null;
+  readonly trustedProxyHops?: number;
   readonly validateCsrf: (
     token: string | null,
     route: RouteDeclaration,
@@ -68,6 +71,7 @@ function validateRoute(input: unknown): RouteDeclaration {
   const method = candidate.method;
   const path = candidate.path;
   const tier = candidate.tier;
+  const requestOriginCheck = candidate.requestOriginCheck;
   const handler = candidate.handler;
 
   if (!isHttpMethod(method)) {
@@ -85,6 +89,11 @@ function validateRoute(input: unknown): RouteDeclaration {
       `Route ${method} ${path} has a missing or unknown trust tier; registration refused.`,
     );
   }
+  if (requestOriginCheck !== undefined && requestOriginCheck !== "exempt") {
+    throw new RouteRegistrationError(
+      `Route ${method} ${path} has an unknown origin-check policy; registration refused.`,
+    );
+  }
   if (typeof handler !== "function") {
     throw new RouteRegistrationError(`Route ${method} ${path} has no handler.`);
   }
@@ -93,6 +102,7 @@ function validateRoute(input: unknown): RouteDeclaration {
     method,
     path,
     tier,
+    ...(requestOriginCheck === "exempt" ? { requestOriginCheck } : {}),
     handler: handler as Handler,
   });
 }
@@ -141,11 +151,17 @@ export class RouteRegistry {
     this.#keys.add(key);
     this.#routes.push(route);
     this.#app.on(route.method, route.path, async (context, next) => {
-      if (this.#mutationProtection?.allowedOrigin !== null) {
+      if (
+        route.requestOriginCheck !== "exempt" &&
+        this.#mutationProtection?.allowedOrigin !== null
+      ) {
         const expectedOrigin = this.#mutationProtection?.allowedOrigin;
         if (
           expectedOrigin !== undefined &&
-          new URL(context.req.url).origin !== expectedOrigin
+          effectiveRequestOrigin(
+            context,
+            this.#mutationProtection?.trustedProxyHops,
+          ) !== expectedOrigin
         ) {
           return context.text(
             "Unrecognized request host.",
@@ -261,6 +277,42 @@ export class RouteRegistry {
 
   list(): readonly RouteDeclaration[] {
     return [...this.#routes];
+  }
+}
+
+function effectiveRequestOrigin(
+  context: Context,
+  trustedProxyHops: number | undefined,
+): string {
+  const requestUrl = new URL(context.req.url);
+  if (trustedProxyHops === undefined || trustedProxyHops < 1) {
+    return requestUrl.origin;
+  }
+
+  const protocol = context.req
+    .header("x-forwarded-proto")
+    ?.trim()
+    .toLowerCase();
+  if (protocol !== "http" && protocol !== "https") {
+    return requestUrl.origin;
+  }
+
+  const requestAuthority =
+    context.req.header("host")?.trim() ?? requestUrl.host;
+  try {
+    const externalUrl = new URL(`${protocol}://${requestAuthority}`);
+    if (
+      externalUrl.username ||
+      externalUrl.password ||
+      externalUrl.pathname !== "/" ||
+      externalUrl.search ||
+      externalUrl.hash
+    ) {
+      return requestUrl.origin;
+    }
+    return externalUrl.origin;
+  } catch {
+    return requestUrl.origin;
   }
 }
 

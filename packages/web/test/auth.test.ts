@@ -23,7 +23,7 @@ afterEach(async () => {
   );
 });
 
-async function boot() {
+async function boot(options: { trustedProxyHops?: string } = {}) {
   const dataDirectory = await mkdtemp(join(tmpdir(), "porchfest-auth-"));
   temporaryRoots.push(dataDirectory);
   const announced: string[] = [];
@@ -32,6 +32,9 @@ async function boot() {
     env: {
       PUBLIC_BASE_URL,
       PORCHFEST_SESSION_SECRET: "auth-test-session-secret",
+      ...(options.trustedProxyHops === undefined
+        ? {}
+        : { PORCHFEST_TRUSTED_PROXY_HOPS: options.trustedProxyHops }),
     },
     announce: (message) => announced.push(message),
   });
@@ -420,7 +423,7 @@ describe("admin responses", () => {
   });
 
   it("refuse a cookie-authenticated write from another origin", async () => {
-    const { runtime, announced } = await boot();
+    const { runtime, announced } = await boot({ trustedProxyHops: "1" });
     const signedIn = await signIn(runtime, bootstrapTokenFrom(announced), {
       displayName: "First",
       email: "first@example.invalid",
@@ -430,7 +433,7 @@ describe("admin responses", () => {
     const csrf = await signOutCsrf(runtime, cookie);
 
     const response = await runtime.request(
-      `${PUBLIC_BASE_URL}/admin/sign-out`,
+      "http://porchfest.example/admin/sign-out",
       {
         method: "POST",
         headers: {
@@ -439,6 +442,8 @@ describe("admin responses", () => {
           origin: "https://sapporchfest.org",
           cookie,
           "content-type": "application/x-www-form-urlencoded",
+          host: "porchfest.example",
+          "x-forwarded-proto": "https",
         },
         body: new URLSearchParams({ _csrf: csrf }),
       },
