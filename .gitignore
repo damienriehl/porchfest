@@ -26,3 +26,6 @@ generated-messages/
 # Scratch output from codex-run.sh, which requires its out-file inside the repo.
 # The clean-room scanner still reads ignored paths, so this hides nothing from it.
 .codex-out/
+
+# Machine-local Claude Code state
+.claude/
