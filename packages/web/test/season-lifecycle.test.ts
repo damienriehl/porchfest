@@ -124,13 +124,58 @@ async function transition(
 
 describe("organizer season lifecycle", () => {
   it("names unavailable public links when deployment or season configuration is absent", () => {
-    const html = renderPublicSeasonLinks(null, null);
+    const html = renderPublicSeasonLinks(null, null, "setup");
 
     expect(html).toContain(
       "Shareable signup URLs are unavailable because PUBLIC_BASE_URL is not configured.",
     );
+    expect(html).not.toContain("Inactive —");
     expect(html).toContain("No public map URL is configured for this season.");
   });
+
+  it.each(["setup", "signups_closed", "locked", "archived"] as const)(
+    "shows signup URLs as inactive text while the season is %s",
+    (state) => {
+      const stateLabels = {
+        setup: "Preparing the season",
+        signups_closed: "Signups closed",
+        locked: "Schedule confirmed",
+        archived: "Season closed and archived",
+      } as const;
+      const host = `${PUBLIC_BASE_URL}/signup/host?season=3`;
+      const performer = `${PUBLIC_BASE_URL}/signup/performer?season=3`;
+      const publicMap = "https://map.example.invalid/season-3";
+      const html = renderPublicSeasonLinks(
+        { host, performer },
+        publicMap,
+        state,
+      );
+
+      expect(html).toContain(`<span>${host}</span>`);
+      expect(html).toContain(`<span>${performer}</span>`);
+      expect(html).not.toContain(`href="${host}"`);
+      expect(html).not.toContain(`href="${performer}"`);
+      expect(
+        html.match(
+          new RegExp(`Inactive — ${stateLabels[state]} \\(${state}\\)`, "g"),
+        ),
+      ).toHaveLength(2);
+      expect(html).toContain(`href="${publicMap}"`);
+    },
+  );
+
+  it.each(["signups_open", "assigning"] as const)(
+    "shows live signup links while the season is %s",
+    (state) => {
+      const host = `${PUBLIC_BASE_URL}/signup/host?season=3`;
+      const performer = `${PUBLIC_BASE_URL}/signup/performer?season=3`;
+      const html = renderPublicSeasonLinks({ host, performer }, null, state);
+
+      expect(html).toContain(`<a href="${host}">${host}</a>`);
+      expect(html).toContain(`<a href="${performer}">${performer}</a>`);
+      expect(html).not.toContain("Inactive —");
+    },
+  );
 
   it("shows shareable URLs and the configured public map for this season", async () => {
     const publicBaseUrl = "https://events.example.invalid:8443";

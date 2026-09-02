@@ -672,6 +672,67 @@ describe("setup refuses what it cannot honour", () => {
 });
 
 describe("season event-details editor", () => {
+  it("requires duplicate-year confirmation when an edit moves a season", async () => {
+    const { runtime, cookie } = await bootAndSignIn();
+    const created = await createConfiguredSeason(runtime, cookie);
+    const newSeasonCsrf = await csrfFor(runtime, cookie, "/admin/seasons/new");
+    const additional = await submitSeason(
+      runtime,
+      cookie,
+      "/admin/seasons/new",
+      completeSetup(newSeasonCsrf, {
+        display_name: "SAP Porchfest 2028",
+        year: "2028",
+        event_date: "2028-09-09",
+      }),
+    );
+    expect(additional.status).toBe(303);
+
+    const editPath = `/admin/seasons/${created.id}/edit`;
+    const csrf = await csrfFor(runtime, cookie, editPath);
+    const refused = await submitSeason(
+      runtime,
+      cookie,
+      editPath,
+      completeSetup(csrf, {
+        version: String(created.version),
+        display_name: "Moved into 2028",
+        year: "2028",
+      }),
+    );
+    const refusedHtml = await refused.text();
+
+    expect(refused.status).toBe(422);
+    expect(refusedHtml).toContain(
+      "Confirm that you want this season to share 2028",
+    );
+    expect(refusedHtml).toContain('name="confirm_duplicate_year"');
+    expect(refusedHtml).toContain('value="Moved into 2028"');
+    expect(runtime.core.seasons.getSeason(created.id)).toMatchObject({
+      year: 2027,
+      version: created.version,
+    });
+
+    const confirmed = await submitSeason(
+      runtime,
+      cookie,
+      editPath,
+      completeSetup(csrf, {
+        version: String(created.version),
+        display_name: "Moved into 2028",
+        year: "2028",
+        confirm_duplicate_year: "yes",
+      }),
+    );
+
+    expect(confirmed.status).toBe(303);
+    expect(runtime.core.seasons.getSeason(created.id)).toMatchObject({
+      displayName: "Moved into 2028",
+      year: 2028,
+      version: created.version + 1,
+    });
+  });
+
   it("reads back and saves every setup field and replaces the published slots", async () => {
     const { runtime, cookie } = await bootAndSignIn();
     const created = await createConfiguredSeason(runtime, cookie);
@@ -706,6 +767,10 @@ describe("season event-details editor", () => {
       expect(originalHtml).toContain(value);
     }
     expect(originalHtml).toContain(`name="version" value="${created.version}"`);
+    expect(originalHtml).toContain(
+      "assignments and holds are the organizer-clearable actions",
+    );
+    expect(originalHtml).not.toContain("venue-slot");
     const csrf = originalHtml.match(/name="_csrf" value="([^"]+)"/)?.[1] ?? "";
 
     const saved = await submitSeason(
@@ -802,9 +867,14 @@ describe("season event-details editor", () => {
 
     expect(stale.status).toBe(409);
     expect(html).toContain("Someone else changed these event details");
-    expect(html).toContain("Review the refreshed values");
+    expect(html).toContain("Someone else saved event details first");
+    expect(html).toContain("Compare your submitted values");
+    expect(html).toContain("Yours:</strong> Stale name");
+    expect(html).toContain("Stored:</strong> SAP Porchfest 2027");
     expect(html).toContain("Winner");
-    expect(html).not.toContain('value="Stale name"');
+    expect(html).toContain('value="Stale name"');
+    expect(html).toContain('value="Stale sender"');
+    expect(html).toContain(`name="version" value="${created.version + 1}"`);
     expect(runtime.core.seasons.getSeason(created.id)).toMatchObject({
       displayName: created.displayName,
       senderName: "Winner",

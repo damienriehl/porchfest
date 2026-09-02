@@ -37,6 +37,7 @@ import {
   renderSeasonsPage,
   renderSetupPage,
   renderSignInPage,
+  type SetupConflictDetail,
   type SetupFieldError,
 } from "../views/admin-shell.js";
 
@@ -44,9 +45,9 @@ export const ADMIN_PATH = "/admin";
 export const ADMIN_SIGN_IN_PATH = "/admin/sign-in";
 export const ADMIN_SIGN_OUT_PATH = "/admin/sign-out";
 export const ADMIN_SETUP_PATH = "/admin/setup";
-export const ADMIN_SEASONS_PATH = "/admin/seasons";
-export const ADMIN_NEW_SEASON_PATH = "/admin/seasons/new";
-export const ADMIN_EDIT_SEASON_PATH = "/admin/seasons/:id/edit";
+const ADMIN_SEASONS_PATH = "/admin/seasons";
+const ADMIN_NEW_SEASON_PATH = "/admin/seasons/new";
+const ADMIN_EDIT_SEASON_PATH = "/admin/seasons/:id/edit";
 
 export interface AdminRouteOptions {
   readonly core: CoreRuntime;
@@ -117,6 +118,7 @@ export function registerAdminRoutes(options: AdminRouteOptions): void {
           organizerName: organizer.displayName,
           seasonName: season.displayName,
           seasonId: season.id,
+          seasonState: season.state,
           signupUrls: seasonSignupUrls(options.publicBaseUrl, season.id),
           publicMapUrl: season.publicMapUrl,
           correctionsClosed: !isSeasonActionLegal(season.state, "correction"),
@@ -386,6 +388,7 @@ export function registerAdminRoutes(options: AdminRouteOptions): void {
           season.id,
           version,
           setupInputFrom(fields),
+          fields.confirm_duplicate_year === "yes",
         );
       } catch (error) {
         if (error instanceof SeasonSetupError) {
@@ -399,9 +402,12 @@ export function registerAdminRoutes(options: AdminRouteOptions): void {
         }
         if (error instanceof SeasonConflictError) {
           const current = options.core.seasons.getSeason(season.id);
+          const stored = seasonValues(options.core, current);
           return eventDetailsPage(options, current, {
             status: 409,
-            formError: `Someone else changed these event details. Review the refreshed values from version ${current.version} before trying again. Nothing from the stale form was saved.`,
+            submitted: fields,
+            conflicts: setupConflicts(fields, stored),
+            formError: `Someone else changed these event details. Compare your submitted values with stored version ${current.version} before trying again. Nothing from the stale form was saved.`,
           });
         }
         if (
@@ -520,6 +526,7 @@ function setupInputFrom(fields: Readonly<Record<string, string>>) {
 interface EventDetailsPageState {
   readonly status: number;
   readonly submitted?: Readonly<Record<string, string>>;
+  readonly conflicts?: readonly SetupConflictDetail[];
   readonly formError?: string;
   readonly saved?: boolean;
   readonly errors?: readonly SetupFieldError[];
@@ -540,9 +547,50 @@ function eventDetailsPage(
       version: season.version,
       formError: state.formError,
       saved: state.saved,
+      conflicts: state.conflicts,
     }),
     { status: state.status, headers: adminHeaders() },
   );
+}
+
+const SETUP_CONFLICT_FIELDS: readonly {
+  readonly name: string;
+  readonly label: string;
+}[] = [
+  { name: "display_name", label: "Season name" },
+  { name: "year", label: "Year" },
+  { name: "event_date", label: "Event date" },
+  { name: "event_city", label: "Event city" },
+  { name: "event_state", label: "Event state or region" },
+  { name: "timezone", label: "Timezone" },
+  { name: "signup_opens_on", label: "Signups open" },
+  { name: "signup_closes_on", label: "Signups close" },
+  ...[1, 2, 3, 4, 5, 6].flatMap((index) => [
+    { name: `slot_start_${index}`, label: `Slot ${index} starts` },
+    { name: `slot_end_${index}`, label: `Slot ${index} ends` },
+  ]),
+  { name: "locality_name", label: "Locality" },
+  { name: "bounds_north", label: "North edge" },
+  { name: "bounds_south", label: "South edge" },
+  { name: "bounds_west", label: "West edge" },
+  { name: "bounds_east", label: "East edge" },
+  { name: "public_site_url", label: "Public site" },
+  { name: "public_map_url", label: "Public map" },
+  { name: "sender_name", label: "Sender name" },
+  { name: "sender_email", label: "Sender address" },
+];
+
+function setupConflicts(
+  submitted: Readonly<Record<string, string>>,
+  stored: Readonly<Record<string, string>>,
+): SetupConflictDetail[] {
+  return SETUP_CONFLICT_FIELDS.filter(
+    (field) => (submitted[field.name] ?? "") !== (stored[field.name] ?? ""),
+  ).map((field) => ({
+    label: field.label,
+    attempted: submitted[field.name] ?? "",
+    stored: stored[field.name] ?? "",
+  }));
 }
 
 function seasonValues(core: CoreRuntime, season: Season) {

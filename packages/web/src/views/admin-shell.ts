@@ -121,6 +121,12 @@ export interface SetupFieldError {
   readonly message: string;
 }
 
+export interface SetupConflictDetail {
+  readonly label: string;
+  readonly attempted: string;
+  readonly stored: string;
+}
+
 interface SetupPageBaseOptions {
   readonly csrfToken: string;
   readonly values: Readonly<Record<string, string>>;
@@ -136,6 +142,7 @@ type SetupPageOptions = SetupPageBaseOptions &
         readonly version: number;
         readonly formError?: string;
         readonly saved?: boolean;
+        readonly conflicts?: readonly SetupConflictDetail[];
       }
   );
 
@@ -190,6 +197,20 @@ export function renderSetupPage(options: SetupPageOptions): string {
     : saved
       ? '<section class="confirmation-card" role="status"><p>Event details saved.</p></section>'
       : "";
+  const conflicts = editOptions?.conflicts ?? [];
+  const conflictBlock =
+    conflicts.length === 0
+      ? ""
+      : `<section class="error-summary" role="alert" tabindex="-1" aria-labelledby="setup-conflict-title">
+      <h2 id="setup-conflict-title">Someone else saved event details first</h2>
+      <p>Your submitted values remain in the form. Compare each attempted value with what is stored now, then save again to replace the stored version or edit yours first.</p>
+      <dl class="submission-list">${conflicts
+        .map(
+          (conflict) =>
+            `<div class="submission-row"><dt>${escapeHtml(conflict.label)}</dt><dd><strong>Yours:</strong> ${escapeHtml(conflict.attempted || "(empty)")}<br><strong>Stored:</strong> ${escapeHtml(conflict.stored || "(empty)")}</dd></div>`,
+        )
+        .join("")}</dl>
+    </section>`;
 
   const title =
     mode === "first"
@@ -208,7 +229,7 @@ export function renderSetupPage(options: SetupPageOptions): string {
       ? "Everything a season needs to accept a signup, in one pass. You can change any of it later."
       : mode === "additional"
         ? "Create a separate season with its own dates, signups, and records. This does not edit an existing season."
-        : "Update the event configuration. Schedule changes are refused while dependent participant, assignment, hold, venue-slot, or outbox data remains.";
+        : "Update the event configuration. Schedule changes are refused while dependent data remains; assignments and holds are the organizer-clearable actions.";
 
   return page(
     title,
@@ -219,6 +240,7 @@ export function renderSetupPage(options: SetupPageOptions): string {
       ${editOptions ? `<p><a href="/admin/seasons/${editOptions.seasonId}">Back to season settings &amp; state</a></p>` : ""}
     </header>
     ${notice}
+    ${conflictBlock}
     ${summary}
     <form class="signup-form" id="signup-form" method="post" action="${action}">
       <input type="hidden" name="_csrf" value="${escapeHtml(options.csrfToken)}">
@@ -277,11 +299,11 @@ export function renderSetupPage(options: SetupPageOptions): string {
         ${field("sender_email", "Sender address", "The address organizer email comes from.", 'type="email"')}
       </fieldset>
       ${
-        mode === "additional"
+        mode === "additional" || mode === "edit"
           ? `<fieldset>
-        <legend>Creation confirmation</legend>
-        <label class="choice" for="confirm_duplicate_year"><input id="confirm_duplicate_year" type="checkbox" name="confirm_duplicate_year" value="yes"${options.values.confirm_duplicate_year === "yes" ? " checked" : ""}><span>If another season already uses this year, create a separate season anyway</span></label>
-        <p class="help">Leave this clear for a new year. A matching year is refused until you confirm it here.</p>
+        <legend>${mode === "additional" ? "Creation confirmation" : "Year confirmation"}</legend>
+        <label class="choice" for="confirm_duplicate_year"><input id="confirm_duplicate_year" type="checkbox" name="confirm_duplicate_year" value="yes"${options.values.confirm_duplicate_year === "yes" ? " checked" : ""}><span>${mode === "additional" ? "If another season already uses this year, create a separate season anyway" : "If another season already uses the new year, move this season there anyway"}</span></label>
+        <p class="help">Leave this clear for a year no other season uses. A matching year is refused until you confirm it here.</p>
       </fieldset>`
           : ""
       }

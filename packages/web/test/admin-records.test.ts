@@ -259,6 +259,15 @@ describe("the activity queue", () => {
     expect(queue.status).toBe(200);
     expect(queueBody).not.toContain("/admin/placeholders/act/new");
     expect(queueBody).not.toContain("/admin/placeholders/venue/new");
+    const hostUrl = `${PUBLIC_BASE_URL}/signup/host?season=${season.id}`;
+    const performerUrl = `${PUBLIC_BASE_URL}/signup/performer?season=${season.id}`;
+    expect(queueBody).toContain(`<span>${hostUrl}</span>`);
+    expect(queueBody).toContain(`<span>${performerUrl}</span>`);
+    expect(queueBody).not.toContain(`href="${hostUrl}"`);
+    expect(queueBody).not.toContain(`href="${performerUrl}"`);
+    expect(
+      queueBody.match(/Inactive — Season closed and archived \(archived\)/g),
+    ).toHaveLength(2);
     expect(queueBody).toContain("Review participant retention");
     expect(placeholder.status).toBe(409);
     expect(placeholderBody).toContain(

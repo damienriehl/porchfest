@@ -51,7 +51,7 @@ export function renderSeasonLifecyclePage(options: {
       <p class="lede"><a href="/admin?season=${options.season.id}">Back to activity queue</a> · <a href="/admin/seasons/${options.season.id}/edit">Edit event details</a> · <a href="/admin/seasons/${options.season.id}/outbox">Email outbox</a> · <a href="/seasons/${options.season.id}/coordinates">Coordinate review &amp; map publication</a></p>
     </header>
     ${notice}
-    ${renderPublicSeasonLinks(options.signupUrls, options.publicMapUrl)}
+    ${renderPublicSeasonLinks(options.signupUrls, options.publicMapUrl, options.season.state)}
     <section aria-labelledby="current-season-state">
       <h2 id="current-season-state">Current season</h2>
       <dl class="submission-list">
