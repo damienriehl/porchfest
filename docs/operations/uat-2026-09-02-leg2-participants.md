@@ -1,0 +1,116 @@
+# UAT 2026-09-02 — Leg 2: participant and adversary personas (Hal P3, Priya P4, Mallory P7)
+
+Executed against the same running local instance as leg 1 by a UAT operator
+acting strictly as the personas (Chrome DevTools MCP at an emulated 375×812
+mobile viewport for the phone story; curl with browser-equivalent headers for
+the rest; no direct DB writes; no code paths a real person could not discover —
+where a path required reading the code, the story records a discoverability
+failure). Stories are S3.1–S3.7, S4.1–S4.5, and S7.1–S7.8 from
+`docs/operations/uat-2026-09-02-personas.md`.
+
+## Instance
+
+Same instance as `docs/operations/uat-2026-09-02-leg1-organizers.md` (app on
+`http://127.0.0.1:8912` from this worktree; data under
+`~/.local/state/porchfest-uat-20260902/`). Differences from leg 1:
+
+| | |
+| --- | --- |
+| SMTP | The app now runs with `PORCHFEST_SMTP_STARTTLS=0`, so **mail actually delivers**: leg 1's mail-blocked caveat is fixed. `mail/` went from 0 to 5 `.eml` files during this leg. |
+| Season | All leg-2 signups went to season 2 ("Elm Hollow Porchfest 2027", id 2, `signups_open`, published slots 12:00–12:45 and 1:00–1:45 PM). Season 1 remained archived and untouched. |
+| Organizer hat | Leg 1 established that Marge cannot exist (no invite surface), so every organizer-approval step inside participant stories ran as **`dana@example.test`** instead, per the leg dispatch. Dana's leg-1 session cookie was still valid; `organizer:link` was not needed. Hat switches are marked "as Dana" below. |
+
+Seeded this leg (all via the public forms, all `@example.test`): hosts Hal
+Berglund ("The Berglund Wraparound", HOST-7) and Ilsa Quist ("Quist Corner
+Steps", HOST-8); performers Priya Nair ("Priya and the Low End", PERFORMER-12,
+later withdrawn) and Sam Becker ("Becker Brass Collective", PERFORMER-13). The
+app stayed running throughout and is still running.
+
+## Tally
+
+**16 PASS · 3 FAIL · 1 NOT-EXECUTABLE** (20 stories)
+
+| Story | Verdict | Evidence (abridged) |
+| --- | --- | --- |
+| S3.1 phone signup, every field | PASS | Chrome DevTools, emulated 375×812 mobile viewport: single-column form, no horizontal overflow (`scrollWidth` 375 = `innerWidth` 375); every 2026 field filled (contact ×3, porch name/address/space, power, rain backup, requested acts, genre prefs, 3 gear, 2 drinks, 3 amenities, notes); live map-card preview updated while typing; submit → receipt HOST-7 with every value echoed; values re-verified later in the self-serve edit form. Only console error: `favicon.ico` 404 (cosmetic) |
+| S3.2 validation re-render | PASS | Bad email + missing address → `422`; error summary "Check these answers" links `#contact_email` ("Enter an email address in the form name@example.com.") and `#venue_address` ("Add a street address so performers can find your porch."); inline `field-error` + `aria-invalid` on both; every typed value re-rendered intact |
+| S3.3 receipt | PASS (caveat) | States what happens next ("The organizer will review… contact you when matching and scheduling move forward"); durable reference **HOST-7** ("Quote this reference…"); honest conditional email notice for the configured branch ("If the organizers send confirmation by email, it will go to the address you provided" — the unconfigured wording exists in the template but is NOT-EXECUTABLE on this configured instance); map-card preview shows ONLY the two Public-map fields (porch name, address); "Everything you sent" grouped by audience with honest scope notes. Caveat: the receipt's "Participant self-service is not available yet" is **false** on this instance — see S3.5 |
+| S3.4 address-is-public statement | PASS | Address field carries the "Public map" audience label plus help text "Your full street address will appear on the public map once the organizer publishes the matched porch"; receipt repeats "Shown publicly. These details help neighbours find your porch…" |
+| S3.5 magic-link edit | **FAIL** (discoverability; mechanics pass) | No participant-reachable path to self-serve exists: the homepage offers only host/performer/organizer cards, signup sends no email, and the receipt affirmatively says "Participant self-service is not available yet" while `/self-serve/request-link` exists and works. The operator found the route only by reading `packages/web/src/routes/self-serve-paths.ts` — a real Hal cannot. Once reached: request link → 202 → email delivered → magic link opens "Edit The Berglund Wraparound"; contact + descriptive fields editable (edit saved, record version 1→2, values persisted); status/assignment/coordinates/organizer annotations rendered read-only with no form fields; participant notes stored separately ("These are your notes. Organizer annotations stay separate and read-only."). Caveats: the read-only assignment renders a raw UTC ISO range ("2027-09-25T17:00:00.000Z–…") instead of local time; annotations separation verified structurally only (no organizer annotation-writing surface was found on the record page to create one) |
+| S3.6 address correction | PASS | As Hal: change request `kind=address` → `303 ?requested=1`. As Dana: queue section "Change requests needing a decision" shows "Address correction" with the proposed address and "Assignments remain unchanged until you apply a request"; Priya's assignment on the porch stood the whole time (verified in Hal's read-only panel before and after); Apply opened the venue editor prefilled with the proposed address alongside the stored one; save → address updated, queue → "No pending change requests"; Hal's next self-serve view shows the corrected address and the intact assignment. The participant edit also resurfaced The Berglund Wraparound in "New for you" (R15) |
+| S3.7 expiry/reissue/enumeration | **FAIL** (reissue-offer clause) | Reissue throttling works twice over: per-record issuance cap (3 accepted requests produced exactly 1 email) and per-IP throttle (`429` "Too many link requests arrived from this address. Wait a minute and try again.", form re-rendered). Enumeration-safe: known vs unknown address both `202` with byte-identical bodies (csrf normalized) and the page says "this page gives the same answer for every address"; only the known address produced mail. But a dead link (garbage token, revoked token, superseded token) is refused as raw JSON **`401 {"error":"unauthorized"}`** — no human-readable page and no reissue offer, which is exactly the surface a participant with a stale emailed link lands on. True 7-day expiry not reproducible inside the UAT window |
+| S4.1 performer signup, messy links | **FAIL** (structuring clause) | Messy links text ("soundcloud dot com/…", "find us on insta @priyalowend" + one https line) → `422` "Use only links that begin with http:// or https://." with all values kept — the form refuses rather than structuring links and moving residue to a note; Priya had to clean her own links (residue self-moved to porch preference). Everything else captured and round-tripped: genres, description, two https links, 45-min duration, amplification=yes, availability 11:30 AM–2:30 PM (shown on the assign page's matching details), house preference, shared-member note, can-lend-gear; receipt PERFORMER-12 |
+| S4.2 shared member | PASS (caveat) | The note is surfaced in both acts' record views and in the assign page's "Matching details → Shared-member note". With the acts linked (organizer "Link acts" form on the assign page — a surface leg 1 believed did not exist), same-time assignment → `409` "Priya and the Low End shares a member and is already assigned to The Berglund Wraparound, 12:00–12:45 PM; **record an organizer override to continue**"; the re-render adds a required "Shared-member override reason" field; with a reason → assigned (then unassigned to restore state). Caveat: the participant's free-text note alone never blocks — before Dana recorded the link, the same-time assignment was **silently allowed** (leg 1 finding #2's residue: the block keys on organizer-recorded links, and nothing prompts the organizer to record one) |
+| S4.3 availability change request | PASS | Priya's `kind=availability` request → queued as "Availability change" with apply/reject; her act's stored availability unchanged (still 11:30 start) until a decision; Dana rejected it → closed without changing the record. Caveat: the queue renders the proposed window in UTC ("2027-09-25 17:30–20:00 UTC") rather than the festival's local clock |
+| S4.4 withdrawal | PASS | Priya's `kind=withdrawal` request queued; as Dana, apply → act status Withdrawn; the 12:00 slot at The Berglund Wraparound returned to "Open"; Priya's session cookie AND her original magic link both dead (`401`) immediately after processing |
+| S4.5 XSS contract | PASS | `javascript:alert(document.cookie)` link → `422` (same links rule) — never stored; `<script>alert('xss')</script>` and `<b>` in her description stored but rendered escaped (`&lt;script&gt;…`) on the public receipt and the organizer record page. (Map rendering unverifiable on this instance — no map can publish, leg 1 S1.8) |
+| S7.1 challenge timeout | **NOT-EXECUTABLE** | The anti-bot challenge adapter is Turnstile, wired at process start from `PORCHFEST_TURNSTILE_SITE_KEY`/`_SECRET_KEY` (`packages/web/src/composition.ts`); the running instance's environment has neither (verified via `/proc/<pid>/environ` name listing), and the composition exposes no runtime or test-mode toggle — the `overrides.antibot` seam is code-level only. Enabling would require an env change and restart, which this leg's dispatch forbids. Not hacked in |
+| S7.2 unconfigured guards | PASS | Burst of rapid signup POSTs from one IP: 4 × `422` then `429` "Too many signup attempts arrived from this address. Wait a minute, then try again." (limiter counts attempts before validation, so nothing was stored to trip it); honeypot (`website` filled) → `400` form re-render with no receipt, no reference, and nothing stored (record absent from Dana's queue) |
+| S7.3 spoofed X-Forwarded-For | PASS | With `PORCHFEST_TRUSTED_PROXY_HOPS=0`, while rate-limited: `X-Forwarded-For: 203.0.113.77` → still `429`; `X-Forwarded-For` + `X-Real-IP: 198.51.100.9` → still `429`. The cap never reset |
+| S7.4 hostile Host on reissue | PASS | `Host: evil.example` (+ forwarded-host/proto) on request-link → **`421` "Unrecognized request host."**, no mail sent. `X-Forwarded-Host: evil.example` with the legitimate Host → `202`, and the delivered email's link is exactly `http://127.0.0.1:8912/self-serve?...` (= `PUBLIC_BASE_URL`) |
+| S7.5 token scope / revocation | PASS | Sessions are record-bound with no record-addressable URL; forged cross-record writes refused: a venue session posting `kind=availability` → `422` "Nothing was saved"; a save smuggling `record_id=8`, `act_id=13`, `status=confirmed`, `assignment=27` → `422`, status still "tentative", venue 8 untouched. Revoked link dead after withdrawal (S4.4); and requesting a new link **rotates** credentials — the older emailed link and any session from it go `401` the moment a newer link is issued (observed twice) |
+| S7.6 cross-origin write | PASS | With Dana's valid session cookie AND a valid per-form CSRF token: `Origin: https://evil.example` → `403` "Request origin was refused."; missing Origin/Referer → same `403`; record unchanged. (The origin check even runs before CSRF: curl POSTs without Origin were refused all leg until a same-origin header was added, exactly as a browser would send) |
+| S7.7 unauthenticated admin | PASS | Every admin GET without a cookie → `401 {"error":"unauthorized"}` (or, with a browser `Accept: text/html`, `303 → /admin/sign-in`); unauthenticated assign and change-request-apply POSTs → `401`; `/self-serve` without a session → `401`; unknown admin sub-route → `404`. Nothing served, nothing leaked |
+| S7.8 honest errors, no traces | PASS (note) | No 5xx could be induced from the HTTP surface at all: bad percent-encoding → `400`; non-numeric and overflow record ids → `404` "No such record in this season."; JSON body to a form endpoint → `403` "CSRF token was refused."; 200KB body → **`413` "Mutation body is too large."** Zero occurrences of stack/trace/`.ts`/node_modules in any error body. The 5xx catch-all itself was therefore not observable without code-level fault injection (out of scope for UAT) |
+
+## The three failures
+
+1. **S3.5 — participant self-serve exists but is undiscoverable, and the receipt
+   denies it exists.** `/self-serve/request-link` works, delivers a magic link,
+   and the whole U8 lifecycle behind it held up (edit, change requests,
+   withdrawal, rotation, revocation — the best-behaved surface in this leg).
+   But no participant can find it: the homepage has no card for it, signup
+   sends no email, and the receipt hardcodes "This receipt cannot be reopened…
+   Participant self-service is not available yet"
+   (`packages/web/src/views/signup-view.ts:341`, unconditional). Every
+   participant story past submission is reachable only with developer
+   knowledge. One receipt line and one homepage card would flip this to PASS.
+2. **S3.7 — a dead magic link is a JSON wall, not a reissue path.** Invalid,
+   revoked, and superseded tokens all land on `401 {"error":"unauthorized"}` —
+   no human page, no link to request a fresh one. Since reissue *rotation*
+   deliberately kills older links (a good property, S7.5), a participant who
+   clicks yesterday's email gets bare JSON with no way forward. The throttle
+   and enumeration clauses of the story pass.
+3. **S4.1 — messy links are bounced, not structured.** R1's 2026-field promise
+   ("structured links plus note residue" per the story) is not implemented:
+   anything that isn't an http(s) line is a `422` and the participant must
+   restructure by hand. Values are kept and the error is clear, so the form is
+   honest — it just puts the cleanup labor on the performer. (Same behavior
+   leg 1 hit while seeding; now recorded against its own story.)
+
+## Notable non-failures (worth keeping)
+
+- **Mail delivers end-to-end now.** 5 messages through the catcher this leg
+  (Hal ×3 — two consumed by rotation, Priya ×1, Sam ×1), all with
+  `PUBLIC_BASE_URL` links, 7-day expiry stated, and a rotation policy where
+  the newest link is the only live one.
+- **The shared-member block became reachable.** Leg 1 recorded R7's
+  shared-member conflict as dead code for web-built seasons; the assign page's
+  "Link acts" form makes it an organizer-recordable fact, the 409 names both
+  the act and the exact slot, and the override demands a written reason. The
+  remaining gap is only that nothing nudges the organizer from the
+  participant's free-text note to the structured link.
+- **Every adversary probe was turned away with a named reason** — 421 for a
+  bogus Host, 403 for origin games, 429 with honest wait guidance on both
+  limiters, 413 for oversized bodies, 401 everywhere auth was missing — and
+  the per-IP limiter counts pre-validation attempts, so burst probing stores
+  nothing.
+
+## Cosmetic/UX notes (no story failed on these)
+
+- Self-serve read-only assignment and the change-request queue render UTC ISO
+  timestamps ("2027-09-25T17:00:00.000Z", "17:30–20:00 UTC") where every other
+  surface speaks the festival's local clock.
+- `favicon.ico` 404s on every public page (the only console error at 375px).
+- The honeypot answers `400` rather than a bot-indistinguishable success.
+
+## Instance state after this leg
+
+Season 2 now holds: venues 7 (Berglund, address corrected via change request,
+Priya-era assignment released) and 8 (Quist); acts 12 (Priya and the Low End,
+**withdrawn**, both slots free again) and 13 (Becker Brass Collective,
+unassigned, act-link to act 12 recorded with note); change requests: 1 applied
+(address), 2 rejected (availability), 3 applied (withdrawal). All four
+participant contacts are fictional `@example.test` identities. Cookie jars and
+token files live under `~/.local/state/porchfest-uat-20260902/` (no token
+values appear in this report). The app was left running.
