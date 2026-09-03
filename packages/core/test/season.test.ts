@@ -204,8 +204,63 @@ describe("season domain", () => {
     );
     expect(moved.season).toMatchObject({
       year: 2106,
+      eventDate: "2106-09-11",
       displayName: "Moved season",
       version: first.season.version + 1,
+    });
+  });
+
+  it("refuses a locked season year change while dependent data exists", () => {
+    const setup = createSeasonSetup(database.db, () => pinnedNow);
+    const created = setup.createSeason(seasonSetupInput());
+    insertSeason(2106, "setup");
+    const venueId = insertVenue(created.season.id, "Assigned venue");
+    const slot = insertSlot(created.season.id, venueId);
+    sqlite
+      .prepare("update seasons set state = 'assigning' where id = ?")
+      .run(created.season.id);
+    seasonRepository.assignSlot(
+      slot.id,
+      slot.version,
+      insertAct(created.season.id, "Assigned act"),
+    );
+    sqlite
+      .prepare(
+        "insert into outbox_waves (season_id, kind, label, subject_template, body_template, recipient_rule) values (?, 'ad_hoc', 'Dependent wave', 'Subject', 'Body', 'manual')",
+      )
+      .run(created.season.id);
+    sqlite
+      .prepare("update seasons set state = 'locked' where id = ?")
+      .run(created.season.id);
+
+    expect(() =>
+      setup.updateSeasonDetails(created.season.id, created.season.version, {
+        ...seasonSetupInput(2106),
+      }),
+    ).toThrowError(/Schedule changes.*dependent data.*unassign 1 assignment/i);
+    expect(
+      setup.listSeasons().find((season) => season.id === created.season.id),
+    ).toMatchObject({
+      year: 2105,
+      eventDate: "2105-09-11",
+      version: created.season.version,
+    });
+  });
+
+  it("refuses an edit that would make the season year disagree with its event date", () => {
+    const setup = createSeasonSetup(database.db, () => pinnedNow);
+    const created = setup.createSeason(seasonSetupInput());
+
+    expect(() =>
+      setup.updateSeasonDetails(created.season.id, created.season.version, {
+        ...seasonSetupInput(),
+        year: 2106,
+      }),
+    ).toThrowError(/year must match the event date/i);
+    expect(setup.listSeasons()[0]).toMatchObject({
+      year: 2105,
+      eventDate: "2105-09-11",
+      version: created.season.version,
     });
   });
 

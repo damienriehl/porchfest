@@ -266,22 +266,6 @@ export function createSeasonSetup(
         if (!isSeasonActionLegal(current.state, "correction")) {
           throw new SeasonActionError(current.state, "correction");
         }
-        if (current.year !== validated.year) {
-          const sameYear = tx
-            .select({ id: seasons.id })
-            .from(seasons)
-            .where(
-              and(eq(seasons.year, validated.year), ne(seasons.id, seasonId)),
-            )
-            .get();
-          if (sameYear && !confirmDuplicateYear) {
-            throw new SeasonSetupError(
-              "confirmDuplicateYear",
-              `Confirm that you want this season to share ${validated.year} with another season. This edits the current season; it does not create a new one.`,
-            );
-          }
-        }
-
         const currentSlots = tx
           .select()
           .from(seasonTimeSlots)
@@ -293,11 +277,32 @@ export function createSeasonSetup(
           validated.timeSlots,
         );
         const scheduleChanged =
+          current.year !== validated.year ||
           current.eventDate !== validated.eventDate ||
           current.timezone !== validated.timezone ||
           templatesChanged;
         if (scheduleChanged) {
           assertScheduleDependenciesClear(tx, seasonId);
+        }
+        const eventYear = Number(validated.eventDate.slice(0, 4));
+        if (validated.year !== eventYear) {
+          throw new SeasonSetupError(
+            "year",
+            "Year must match the event date's year.",
+          );
+        }
+        if (current.year !== eventYear) {
+          const sameYear = tx
+            .select({ id: seasons.id })
+            .from(seasons)
+            .where(and(eq(seasons.year, eventYear), ne(seasons.id, seasonId)))
+            .get();
+          if (sameYear && !confirmDuplicateYear) {
+            throw new SeasonSetupError(
+              "confirmDuplicateYear",
+              `Confirm that you want this season to share ${eventYear} with another season. This edits the current season; it does not create a new one.`,
+            );
+          }
         }
 
         const boundsChanged =
@@ -317,7 +322,7 @@ export function createSeasonSetup(
         const result = tx
           .update(seasons)
           .set({
-            year: validated.year,
+            year: eventYear,
             displayName: validated.displayName,
             timezone: validated.timezone,
             eventDate: validated.eventDate,
