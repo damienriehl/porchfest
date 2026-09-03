@@ -213,7 +213,6 @@ describe("season domain", () => {
   it("refuses a locked season year change while dependent data exists", () => {
     const setup = createSeasonSetup(database.db, () => pinnedNow);
     const created = setup.createSeason(seasonSetupInput());
-    insertSeason(2106, "setup");
     const venueId = insertVenue(created.season.id, "Assigned venue");
     const slot = insertSlot(created.season.id, venueId);
     sqlite
@@ -235,7 +234,8 @@ describe("season domain", () => {
 
     expect(() =>
       setup.updateSeasonDetails(created.season.id, created.season.version, {
-        ...seasonSetupInput(2106),
+        ...seasonSetupInput(),
+        year: 2106,
       }),
     ).toThrowError(/Schedule changes.*dependent data.*unassign 1 assignment/i);
     expect(
@@ -247,20 +247,47 @@ describe("season domain", () => {
     });
   });
 
-  it("refuses an edit that would make the season year disagree with its event date", () => {
+  it("allows an unlocked season year change without dependent data", () => {
     const setup = createSeasonSetup(database.db, () => pinnedNow);
     const created = setup.createSeason(seasonSetupInput());
 
-    expect(() =>
-      setup.updateSeasonDetails(created.season.id, created.season.version, {
+    const updated = setup.updateSeasonDetails(
+      created.season.id,
+      created.season.version,
+      {
         ...seasonSetupInput(),
         year: 2106,
-      }),
-    ).toThrowError(/year must match the event date/i);
-    expect(setup.listSeasons()[0]).toMatchObject({
-      year: 2105,
+      },
+    );
+
+    expect(updated.season).toMatchObject({
+      year: 2106,
       eventDate: "2105-09-11",
-      version: created.season.version,
+      version: created.season.version + 1,
+    });
+  });
+
+  it("allows a locked season year change without dependent data", () => {
+    const setup = createSeasonSetup(database.db, () => pinnedNow);
+    const created = setup.createSeason(seasonSetupInput());
+    sqlite
+      .prepare("update seasons set state = 'locked' where id = ?")
+      .run(created.season.id);
+
+    const updated = setup.updateSeasonDetails(
+      created.season.id,
+      created.season.version,
+      {
+        ...seasonSetupInput(),
+        year: 2106,
+      },
+    );
+
+    expect(updated.season).toMatchObject({
+      year: 2106,
+      eventDate: "2105-09-11",
+      state: "locked",
+      version: created.season.version + 1,
     });
   });
 

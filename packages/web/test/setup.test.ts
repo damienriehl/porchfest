@@ -698,7 +698,6 @@ describe("season event-details editor", () => {
         version: String(created.version),
         display_name: "Moved into 2028",
         year: "2028",
-        event_date: "2028-09-09",
       }),
     );
     const refusedHtml = await refused.text();
@@ -722,7 +721,6 @@ describe("season event-details editor", () => {
         version: String(created.version),
         display_name: "Moved into 2028",
         year: "2028",
-        event_date: "2028-09-09",
         confirm_duplicate_year: "yes",
       }),
     );
@@ -731,18 +729,18 @@ describe("season event-details editor", () => {
     expect(runtime.core.seasons.getSeason(created.id)).toMatchObject({
       displayName: "Moved into 2028",
       year: 2028,
-      eventDate: "2028-09-09",
+      eventDate: "2027-09-11",
       version: created.version + 1,
     });
   });
 
-  it("refuses an edit that would make the season year disagree with its event date", async () => {
+  it("allows a year-only edit while the season has no dependent data", async () => {
     const { runtime, cookie } = await bootAndSignIn();
     const created = await createConfiguredSeason(runtime, cookie);
     const editPath = `/admin/seasons/${created.id}/edit`;
     const csrf = await csrfFor(runtime, cookie, editPath);
 
-    const refused = await submitSeason(
+    const saved = await submitSeason(
       runtime,
       cookie,
       editPath,
@@ -751,14 +749,12 @@ describe("season event-details editor", () => {
         year: "2028",
       }),
     );
-    const refusedHtml = await refused.text();
 
-    expect(refused.status).toBe(422);
-    expect(refusedHtml).toContain("Year must match the event date");
+    expect(saved.status).toBe(303);
     expect(runtime.core.seasons.getSeason(created.id)).toMatchObject({
-      year: 2027,
+      year: 2028,
       eventDate: "2027-09-11",
-      version: created.version,
+      version: created.version + 1,
     });
   });
 

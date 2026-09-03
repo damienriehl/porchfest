@@ -284,23 +284,18 @@ export function createSeasonSetup(
         if (scheduleChanged) {
           assertScheduleDependenciesClear(tx, seasonId);
         }
-        const eventYear = Number(validated.eventDate.slice(0, 4));
-        if (validated.year !== eventYear) {
-          throw new SeasonSetupError(
-            "year",
-            "Year must match the event date's year.",
-          );
-        }
-        if (current.year !== eventYear) {
+        if (current.year !== validated.year) {
           const sameYear = tx
             .select({ id: seasons.id })
             .from(seasons)
-            .where(and(eq(seasons.year, eventYear), ne(seasons.id, seasonId)))
+            .where(
+              and(eq(seasons.year, validated.year), ne(seasons.id, seasonId)),
+            )
             .get();
           if (sameYear && !confirmDuplicateYear) {
             throw new SeasonSetupError(
               "confirmDuplicateYear",
-              `Confirm that you want this season to share ${eventYear} with another season. This edits the current season; it does not create a new one.`,
+              `Confirm that you want this season to share ${validated.year} with another season. This edits the current season; it does not create a new one.`,
             );
           }
         }
@@ -322,7 +317,7 @@ export function createSeasonSetup(
         const result = tx
           .update(seasons)
           .set({
-            year: eventYear,
+            year: validated.year,
             displayName: validated.displayName,
             timezone: validated.timezone,
             eventDate: validated.eventDate,
