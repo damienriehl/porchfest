@@ -729,6 +729,31 @@ describe("season event-details editor", () => {
     expect(runtime.core.seasons.getSeason(created.id)).toMatchObject({
       displayName: "Moved into 2028",
       year: 2028,
+      eventDate: "2027-09-11",
+      version: created.version + 1,
+    });
+  });
+
+  it("allows a year-only edit while the season has no dependent data", async () => {
+    const { runtime, cookie } = await bootAndSignIn();
+    const created = await createConfiguredSeason(runtime, cookie);
+    const editPath = `/admin/seasons/${created.id}/edit`;
+    const csrf = await csrfFor(runtime, cookie, editPath);
+
+    const saved = await submitSeason(
+      runtime,
+      cookie,
+      editPath,
+      completeSetup(csrf, {
+        version: String(created.version),
+        year: "2028",
+      }),
+    );
+
+    expect(saved.status).toBe(303);
+    expect(runtime.core.seasons.getSeason(created.id)).toMatchObject({
+      year: 2028,
+      eventDate: "2027-09-11",
       version: created.version + 1,
     });
   });

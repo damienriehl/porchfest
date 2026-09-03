@@ -266,6 +266,24 @@ export function createSeasonSetup(
         if (!isSeasonActionLegal(current.state, "correction")) {
           throw new SeasonActionError(current.state, "correction");
         }
+        const currentSlots = tx
+          .select()
+          .from(seasonTimeSlots)
+          .where(eq(seasonTimeSlots.seasonId, seasonId))
+          .orderBy(seasonTimeSlots.position)
+          .all();
+        const templatesChanged = !sameTimeSlots(
+          currentSlots,
+          validated.timeSlots,
+        );
+        const scheduleChanged =
+          current.year !== validated.year ||
+          current.eventDate !== validated.eventDate ||
+          current.timezone !== validated.timezone ||
+          templatesChanged;
+        if (scheduleChanged) {
+          assertScheduleDependenciesClear(tx, seasonId);
+        }
         if (current.year !== validated.year) {
           const sameYear = tx
             .select({ id: seasons.id })
@@ -280,24 +298,6 @@ export function createSeasonSetup(
               `Confirm that you want this season to share ${validated.year} with another season. This edits the current season; it does not create a new one.`,
             );
           }
-        }
-
-        const currentSlots = tx
-          .select()
-          .from(seasonTimeSlots)
-          .where(eq(seasonTimeSlots.seasonId, seasonId))
-          .orderBy(seasonTimeSlots.position)
-          .all();
-        const templatesChanged = !sameTimeSlots(
-          currentSlots,
-          validated.timeSlots,
-        );
-        const scheduleChanged =
-          current.eventDate !== validated.eventDate ||
-          current.timezone !== validated.timezone ||
-          templatesChanged;
-        if (scheduleChanged) {
-          assertScheduleDependenciesClear(tx, seasonId);
         }
 
         const boundsChanged =
