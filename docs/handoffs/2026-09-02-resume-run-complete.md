@@ -3,7 +3,17 @@ artifact_contract: "ce-handoff/v1"
 created_at: "2026-09-02T21:30:00Z"
 title: "Resume run complete: U8–U12 landed, app.sapporchfest.org live through two KTD9 gates; the 2026 import is blocked on lost artifacts"
 summary: "2026-09-02: #44 review fixes, #46, #47, U8 (#48), and the 50-story persona UAT with its 12-fix packet (#49) all merged; prod serves main at 9b7589c over HTTPS with R2 offsite and a passed restore rehearsal; U12 staged as sapporchfest-site#2 (draft, merge after Sept 16); the corrected Goal-1 artifacts vanished with ~/worktrees/woodshed-porchfest, so the season import and shakedown wait on Damien's recovery decision."
-keywords: ["porchfest", "u8", "uat", "deploy", "import-blocked", "goal1-artifacts", "shakedown", "u12"]
+keywords:
+  [
+    "porchfest",
+    "u8",
+    "uat",
+    "deploy",
+    "import-blocked",
+    "goal1-artifacts",
+    "shakedown",
+    "u12",
+  ]
 resume_focus: "Resolve the Goal-1 artifact recovery decision (sheet: claude.ai/code/artifact/e23207ae-6871-4c3c-b9c8-a424865cd163), then import on the box, configure SMTP, stage the shakedown wave (Damien triggers every send), and merge sapporchfest-site#2 after the Sept 16 event"
 repository: "porchfest"
 branch: "main"
@@ -17,15 +27,15 @@ commit; its open items either landed today or are re-recorded here).
 
 ## Landed today
 
-| What | Where |
-| --- | --- |
-| PR #44's 11-item review-fix packet (previous UAT round) | merged `babb86d` |
-| PR #19 closed as superseded by #21 | closed, branch deleted |
-| deploy.sh ship-guard POSIX fix (#46) — found by the first real ship | merged `462b5cb` |
-| Origin-guard trusted-proxy + loopback-health fix (#47) — found by the first real deploy; without it every proxied request 421'd | merged `9678e5e` |
-| **U8: participant self-serve + magic links (#48)** — the last unbuilt unit; 12/12 plan scenarios covered; three review P2s fixed | merged `94ab861` |
-| **Persona UAT (#49): 7 personas, 50 stories, 3 legs; 33P/10F/7NE before fixes; all 10 FAILs + 2 browser findings fixed (F1–F12) + 1 review P2** | merged `9b7589c` |
-| U12 site cutover | **staged draft PR sapporchfest-site#2 — merge after Sept 16, before 2027 signups** |
+| What                                                                                                                                            | Where                                                                              |
+| ----------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| PR #44's 11-item review-fix packet (previous UAT round)                                                                                         | merged `babb86d`                                                                   |
+| PR #19 closed as superseded by #21                                                                                                              | closed, branch deleted                                                             |
+| deploy.sh ship-guard POSIX fix (#46) — found by the first real ship                                                                             | merged `462b5cb`                                                                   |
+| Origin-guard trusted-proxy + loopback-health fix (#47) — found by the first real deploy; without it every proxied request 421'd                 | merged `9678e5e`                                                                   |
+| **U8: participant self-serve + magic links (#48)** — the last unbuilt unit; 12/12 plan scenarios covered; three review P2s fixed                | merged `94ab861`                                                                   |
+| **Persona UAT (#49): 7 personas, 50 stories, 3 legs; 33P/10F/7NE before fixes; all 10 FAILs + 2 browser findings fixed (F1–F12) + 1 review P2** | merged `9b7589c`                                                                   |
+| U12 site cutover                                                                                                                                | **staged draft PR sapporchfest-site#2 — merge after Sept 16, before 2027 signups** |
 
 ## Production state (verified, not claimed)
 
@@ -68,7 +78,7 @@ commit; its open items either landed today or are re-recorded here).
 
 ## Traps that cost time today (beyond the memory entries)
 
-- The KTD9 gate cannot self-bootstrap: the archive step restarts the *running*
+- The KTD9 gate cannot self-bootstrap: the archive step restarts the _running_
   (old) image and demands health, so a first boot — or recovery from an
   unhealthy old image — is the documented manual `compose up -d --build app`
   before `deploy.sh` gates cleanly.
