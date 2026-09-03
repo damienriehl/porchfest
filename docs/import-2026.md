@@ -66,7 +66,12 @@ infers that year from the current date or host timezone.
 The current artifact's expected fidelity summary is:
 
 - slate venues: 22
-- approved act entries: 26 (20 canonical acts and 6 placeholders)
+- approved act entries: 25 (23 canonical acts and 2 placeholders — only two of
+  the six placeholder acts hold assignments; three are assigned through their
+  real performer rows and one declined. The prior "26 (20 + 6)" line
+  double-counted; the 2026-08-30 fidelity run itself reported
+  `approvedActEntries: 25`, matching the Aug-22 listserv draft's "20 porches,
+  25 acts".)
 - host supersessions: 2
 - performer supersessions: 1
 - placeholder acts: 6
