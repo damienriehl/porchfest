@@ -1,7 +1,7 @@
 ---
 artifact_contract: "ce-handoff/v1"
-created_at: "2026-09-02T21:30:00Z"
-title: "Resume run complete: U8–U12 landed, app.sapporchfest.org live through two KTD9 gates; the 2026 import is blocked on lost artifacts"
+created_at: "2026-09-03T03:55:00Z"
+title: "Resume run complete: U8–U12 landed, app.sapporchfest.org live and green; the reconstructed 2026 artifacts await Damien's changelog review"
 summary: "2026-09-02: #44 review fixes, #46, #47, U8 (#48), and the 50-story persona UAT with its 12-fix packet (#49) all merged; prod serves main at 9b7589c over HTTPS with R2 offsite and a passed restore rehearsal; U12 staged as sapporchfest-site#2 (draft, merge after Sept 16); the corrected Goal-1 artifacts vanished with ~/worktrees/woodshed-porchfest, so the season import and shakedown wait on Damien's recovery decision."
 keywords:
   [
@@ -9,15 +9,15 @@ keywords:
     "u8",
     "uat",
     "deploy",
-    "import-blocked",
+    "import-reconstruction",
     "goal1-artifacts",
     "shakedown",
     "u12",
   ]
-resume_focus: "Resolve the Goal-1 artifact recovery decision (sheet: claude.ai/code/artifact/e23207ae-6871-4c3c-b9c8-a424865cd163), then import on the box, configure SMTP, stage the shakedown wave (Damien triggers every send), and merge sapporchfest-site#2 after the Sept 16 event"
+resume_focus: "With Damien present: walk RECONSTRUCTION-CHANGELOG.md (machine-local), decide the E6 rain-plan correction, then import on the box per docs/import-2026.md; wire SMTP by paste-safe prompts; stage the shakedown wave (his trigger); finish branch fix-locked-season-year; after Sept 16 merge sapporchfest-site#2"
 repository: "porchfest"
 branch: "main"
-head: "9b7589c"
+head: "bd6f1b0"
 ---
 
 # Where things stand (2026-09-02, end of the autonomous resume run)
@@ -87,3 +87,57 @@ commit; its open items either landed today or are re-recorded here).
   only gate that catches it.
 - `gh pr checks --watch` can race ahead of check registration right after a
   push ("no checks reported") — verify the run on the branch afterwards.
+
+## Evening update (2026-09-02 late / 09-03)
+
+Everything below happened after the section above was first written; the open
+items list above is superseded by this one.
+
+### Resolved since
+
+- **The artifact recovery ran its course.** Damien chose option A; a live
+  woodshed session (woodshed-fa) traced the deletion to the woodshed resume
+  session's merged-worktree sweep (`git worktree remove --force`, no archive —
+  confirmed in its transcript), and the Drive workbook predates the Aug-22
+  corrections. So a **reconstruction was staged and validated** (machine-local:
+  `~/.local/state/porchfest-goal1-reconstruction/`): it reproduces the
+  2026-08-30 fidelity record line-for-line under importer `ce0f450` and passes
+  the current documented gate exactly. All invented-not-recovered values are
+  flagged in its `RECONSTRUCTION-CHANGELOG.md` (7 timestamps, 1 submitter
+  identity, 2 OSM refs, prose). This session's call, per Damien's option-C
+  terms: **nothing imports until Damien reviews that changelog** — he also
+  decides the flagged E6 rain-plan correction (2349 Commonwealth is NOT fully
+  rain-safe; never made the Aug-22 finals; safety-relevant on event day).
+- **UAT residue re-verified: 4/4 PASS** — invites (S1.3/S2.1), manual
+  coordinates + publish (S1.8), map stories (S5.1–S5.4), self-serve
+  discoverability (S3.5) all work through the UI alone. Evidence was
+  session-local; the durable claims are the merged tests.
+- **`docs/import-2026.md` corrected** (#51): the fidelity line's "26 approved
+  act entries" double-counted placeholders; true value 25, per the 08-30
+  record and the Aug-22 listserv draft.
+- **CI tail closed:** #50 and #51 briefly ran main red on a prettier-only
+  violation in this very handoff; #52 fixed it and main HEAD `bd6f1b0` is
+  **green** (verified).
+
+### Still open
+
+1. **Branch `fix-locked-season-year` (pushed, WIP):** `year` must join the
+   event-details schedule dependency guard (a locked season with dependent
+   data accepts a `year` edit while refusing `event_date`, and the two can
+   disagree; `year` gates map publication by calendar year). The guard shape
+   in `packages/core/src/setup.ts` looks right; 4 tests need reconciliation
+   and prettier needs a pass. Two Codex dispatches were externally killed
+   (209 codex processes were live on the box; killer unidentified), so it was
+   preserved rather than forced. Task spec: quoted in the branch's WIP commit
+   message trail; full text was session-local.
+2. **Damien-gated (queue also in project memory `pending-for-damien-2026-09-02`):**
+   changelog review → real import per `docs/import-2026.md` → SMTP by
+   paste-safe prompts → shakedown wave staged with every send his trigger →
+   sapporchfest-site#2 merge after Sept 16 → Marge's E5 media answer.
+3. **Post-thaw cockpit reconciliation:** this run wrote no board/on-deck
+   entries and read no events.log (freeze honored); reconcile after Damien
+   thaws. If he switched models to Fable 5.1, update the ratchet's pinned
+   `interactive_model` string.
+4. **UAT instance leftovers (machine-local, deletable after item 1's re-run
+   needs pass):** `~/.local/state/porchfest-uat-20260902/` (fixture data,
+   @example.test only; processes stopped).
