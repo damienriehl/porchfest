@@ -10,6 +10,7 @@ import {
   changeRequests,
   participantMagicLinks,
   slots,
+  venues,
   venueAmenities,
   venueDrinks,
   venueGear,
@@ -100,6 +101,13 @@ export function createCoreTestingRepository(db: CoreExecutor) {
       .run();
   }
 
+  function overwriteVenueAddress(
+    venueId: number,
+    address: string | null,
+  ): void {
+    db.update(venues).set({ address }).where(eq(venues.id, venueId)).run();
+  }
+
   function readChangeRequestStatus(
     id: number,
   ): Pick<ChangeRequest, "status"> | undefined {
@@ -133,6 +141,7 @@ export function createCoreTestingRepository(db: CoreExecutor) {
     listRawActAvailabilities,
     createSlot,
     corruptChangeRequestProposal,
+    overwriteVenueAddress,
     readChangeRequestStatus,
     readAct,
     expireParticipantMagicLink,
