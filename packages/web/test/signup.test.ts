@@ -1413,7 +1413,7 @@ describe("public signup forms", () => {
     if (!mapVenue || !mapAct) throw new Error("expected a published map match");
 
     expect(mapVenue).toMatchObject({
-      title: "The Test Porch",
+      title: "Synthetic Venue Address",
       address: "Synthetic Venue Address",
     });
     expect(mapAct).toMatchObject({

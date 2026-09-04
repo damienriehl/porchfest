@@ -194,6 +194,9 @@ function buildPublishedMapDocument(
         venue.status !== "withdrawn" && venue.canonicalVenueId === null,
     )
     .flatMap((venue) => {
+      const address = venue.address;
+      if (address === null || address.trim().length === 0) return [];
+
       const coordinate = mapValue(coordinates, venue.id);
       if (coordinate === undefined) return [];
 
@@ -213,12 +216,13 @@ function buildPublishedMapDocument(
       if (acts.length === 0) return [];
 
       // Named fields only: adding a column to Venue can never widen this public
-      // response. The contract carries city/state at event level and
-      // rejects them as per-venue additional properties.
+      // response. Organizer free-text is excluded even from named fields: the
+      // public label is the usable address. The contract carries city/state at
+      // event level and rejects them as per-venue additional properties.
       return [
         {
-          title: venue.title,
-          address: venue.address ?? "",
+          title: address,
+          address,
           lat: coordinate.latitude,
           lng: coordinate.longitude,
           schedule: [...new Set(acts.map((act) => act.slot_label))].join(" · "),

@@ -365,7 +365,7 @@ describe("public map page and data (U9)", () => {
       },
       venues: [
         {
-          title: "Aurora Porch",
+          title: "101 Aurora Way",
           address: "101 Aurora Way",
           lat: 10.5,
           lng: 20.5,
@@ -389,6 +389,59 @@ describe("public map page and data (U9)", () => {
       ],
     });
   });
+
+  it("publishes the address as the venue title without serializing organizer free-text", async () => {
+    const runtime = await boot();
+    const fixture = assignedPublishedFixture(runtime);
+    const personalName = "Jordan Privateperson";
+    const venue = runtime.core.seasons.getVenue(fixture.signup.venue.id);
+    runtime.core.seasons.updateVenue(venue.id, venue.version, {
+      title: personalName,
+    });
+
+    const { document, text } = await mapDocument(runtime);
+
+    expect(document).toMatchObject({
+      schema_version: VENUES_MAP_SCHEMA_VERSION,
+      generated_from: "packages/web/src/routes/map.ts",
+      venues: [
+        {
+          title: "101 Aurora Way",
+          address: "101 Aurora Way",
+        },
+      ],
+    });
+    expect(text).not.toContain(personalName);
+    expect(validateVenuesMapDocument(document)).toMatchObject({ ok: true });
+  });
+
+  it.each([
+    ["null", null],
+    ["empty", ""],
+    ["whitespace-only", " \t "],
+  ])(
+    "omits a venue and its acts when its address is %s",
+    async (_, address) => {
+      const runtime = await boot();
+      const fixture = assignedPublishedFixture(runtime);
+      runtime.coreTesting.overwriteVenueAddress(
+        fixture.signup.venue.id,
+        address,
+      );
+      expect(
+        runtime.core.geocoding
+          .publishableCoordinatesForSeason(fixture.seasonId)
+          .has(fixture.signup.venue.id),
+      ).toBe(true);
+
+      const { document, text } = await mapDocument(runtime);
+
+      expect(document.venues).toEqual([]);
+      expect(text).not.toContain(fixture.signup.venue.title);
+      expect(text).not.toContain(fixture.performer.act.name);
+      expect(validateVenuesMapDocument(document)).toMatchObject({ ok: true });
+    },
+  );
 
   it("emits both slots for an act with a marked continuation assignment", async () => {
     const runtime = await boot();
@@ -629,8 +682,13 @@ describe("public map page and data (U9)", () => {
   it("returns 500, logs schema reasons, and serves no partial document on validation failure", async () => {
     const runtime = await boot();
     const season = createSeason(runtime);
-    const signup = createVenue(runtime, season.id, "", "301 Aurora Way");
-    const performer = createAct(runtime, season.id, "Invalid Fixture Act");
+    const signup = createVenue(
+      runtime,
+      season.id,
+      "Organizer-only venue title",
+      "301 Aurora Way",
+    );
+    const performer = createAct(runtime, season.id, "");
     const slot = runtime.core.seasons.ensureVenueSlots(signup.venue.id)[0]!;
     runtime.core.seasons.assignSlot(slot.id, slot.version, performer.act.id);
     runtime.core.geocoding.verifyVenueCoordinate(
@@ -659,7 +717,7 @@ describe("public map page and data (U9)", () => {
     expect(text).toBe("Map data is temporarily unavailable.");
     expect(text).not.toContain("301 Aurora Way");
     expect(error).toHaveBeenCalledWith(
-      expect.stringMatching(/venues-map validation failed.*title/i),
+      expect.stringMatching(/venues-map validation failed.*name/i),
     );
   });
 

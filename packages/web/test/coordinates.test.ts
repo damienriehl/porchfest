@@ -864,7 +864,7 @@ describe("organizer coordinate review and map publication (U9)", () => {
     expect(runtime.core.seasons.getSeason(season.id).mapPublishedAt).toBeNull();
   });
 
-  it("names an empty-title venue when schema preflight refuses publication", async () => {
+  it("does not let an empty organizer-only venue title block publication", async () => {
     const { runtime, cookie, season } = await boot();
     makePublishable(runtime, season.id, "");
     const locked = runtime.core.seasons.transitionSeason(
@@ -885,12 +885,13 @@ describe("organizer coordinate review and map publication (U9)", () => {
         event_state: "WI",
       }),
     });
-    const text = await response.text();
-
-    expect(response.status).toBe(409);
-    expect(text).toContain("Venue &quot;(empty title)&quot;");
-    expect(text).toMatch(/title.*must NOT have fewer than 1 characters/i);
-    expect(runtime.core.seasons.getSeason(season.id).mapPublishedAt).toBeNull();
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe(
+      `/seasons/${season.id}/coordinates?map=published`,
+    );
+    expect(
+      runtime.core.seasons.getSeason(season.id).mapPublishedAt,
+    ).not.toBeNull();
   });
 
   it("names a legacy null event date when preflight refuses publication", async () => {
