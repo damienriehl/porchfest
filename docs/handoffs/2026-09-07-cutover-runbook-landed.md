@@ -75,11 +75,12 @@ approval). The sheet had no rows newer than 8/27 when checked 2026-09-07.
 Run `docs/operations/post-event-cutover-2026.md` top to bottom. Read its
 Preconditions first; two of them are easy to miss:
 
-- **Bridge-era venues exist only in the site JSON.** 1528 Grantham (and any
-  second bridge) were never entered in the platform. PR #2's
+- **Bridge-era venues must be in the platform before the lock.** PR #2's
   `tools/pull-map-data.sh` regenerates `venues-2026.json` from
-  `/map/data.json`, so they vanish from the public map unless entered in the
-  platform **before the lock**. This is organizer data entry, not code.
+  `/map/data.json`, so a site-JSON-only venue vanishes from the public map.
+  This is organizer data entry, not code. _Done 2026-09-07 for 1528 Grantham:_
+  platform venue 26, acts 34/35, both slots assigned, coordinate verified
+  (canonical venue count now 22). Any second bridge still needs the same entry.
 - **A manual `deploy/archive.sh` never runs `deploy/offsite.sh`** — run both,
   or take evidence from a full `deploy.sh` gate.
 

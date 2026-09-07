@@ -68,6 +68,10 @@ Do not begin until every box is true.
       lock: placeholder records can still be corrected in `locked`, but
       assignments cannot. Keep any participant contact values in the platform
       and private operational record, not in this repository.
+      _Status 2026-09-07:_ the first bridge (1528 Grantham, two acts) is
+      entered — platform venue 26, acts 34 and 35, both slots assigned, the
+      coordinate organizer-verified against the site JSON point. Only a second
+      bridge, if one lands, still needs this step.
 - [ ] The owner has decided separately for each of the three
       `nominatim-house` / `cross-check-missing` coordinate rows recorded in
       `docs/operations/season-import-2026-09-03.md`: verify the candidate (or a
