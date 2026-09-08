@@ -72,6 +72,15 @@ Do not begin until every box is true.
       entered — platform venue 26, acts 34 and 35, both slots assigned, the
       coordinate organizer-verified against the site JSON point. Only a second
       bridge, if one lands, still needs this step.
+- [ ] Every withdrawal removed from the marketing-site map is also withdrawn in
+      the platform, so the two lineups agree in both directions. A venue or act
+      that is gone from the site but still active and assigned in the platform
+      will reappear on the published platform map at step 4.
+      _Open as of 2026-09-08:_ the 2379 Bourne Ave. venue and its only act,
+      Crazy Chester, withdrew (band contact emailed the owner; the host site
+      withdrew as well). They are removed from the marketing-site map in site
+      commit `f0d87df`, but their platform records — imported on 2026-09-03 and
+      not yet inspected — still need `status = 'withdrawn'` before lock.
 - [ ] The owner has decided separately for each of the three
       `nominatim-house` / `cross-check-missing` coordinate rows recorded in
       `docs/operations/season-import-2026-09-03.md`: verify the candidate (or a

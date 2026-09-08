@@ -157,6 +157,30 @@ across the street. The validator passed with 21 venues. About one minute after
 the push, the live data had the expected count and the map rendered the new
 marker and both lineup entries.
 
+## Withdrawals — the same bridge, in reverse
+
+A cancellation reaches the map the same way an addition does: edit
+`static/data/venues-2026.json`, validate, push, and verify the live data and
+`/map/`. Remove the act object; when the withdrawing act was the venue's only
+act, remove the whole venue object, as site commit `6ad2ec0` did for 991
+Bayless. Never leave a venue with an empty `acts` array on the map.
+
+A withdrawal has one obligation an addition does not. The platform still holds
+the imported venue and act, so the cutover checklist in
+`docs/operations/post-event-cutover-2026.md` carries a matching item: set those
+records to `status = 'withdrawn'` before lock, or the published platform map
+will restore the venue the site map just dropped.
+
+### Recorded withdrawal — 2026-09-08
+
+The contact for Crazy Chester wrote that the band and the 2379 Bourne Ave. host
+site are both unable to participate in 2026, and asked for the map to be
+corrected. Crazy Chester was that venue's only act, so the venue object was
+removed in site commit `f0d87df`. The validator reported 20 venues (down from
+21; 27 acts to 26), and the live `/map/` rendered 20 markers with no Bourne
+pin and no Crazy Chester lineup entry. The platform records were not changed —
+that is the open cutover item above.
+
 ## Pending at time of writing
 
 One performer submitted the form on 2026-08-27 for a solo acoustic set in
