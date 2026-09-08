@@ -76,11 +76,19 @@ Do not begin until every box is true.
       the platform, so the two lineups agree in both directions. A venue or act
       that is gone from the site but still active and assigned in the platform
       will reappear on the published platform map at step 4.
-      _Open as of 2026-09-08:_ the 2379 Bourne Ave. venue and its only act,
-      Crazy Chester, withdrew (band contact emailed the owner; the host site
-      withdrew as well). They are removed from the marketing-site map in site
-      commit `f0d87df`, but their platform records — imported on 2026-09-03 and
-      not yet inspected — still need `status = 'withdrawn'` before lock.
+      _Open as of 2026-09-08:_ Crazy Chester and its host site, 2379 Bourne
+      Ave., both withdrew (the band's contact emailed the owner; his message
+      named the host site as withdrawing too). Both are off the marketing-site
+      map in site commit `f0d87df`. In the platform, the owner decided on
+      2026-09-08 to **keep the venue record active** in case a late performer
+      needs a porch, and to withdraw only the act. So: set the Crazy Chester
+      act to `status = 'withdrawn'` and release its slot, and leave the venue
+      active with open slots. A venue with no assigned act is already omitted
+      from the published map by `packages/web/src/routes/map.ts`, so the open
+      venue cannot leak onto the map on its own. **Do not assign anyone to this
+      porch without the host's fresh confirmation** — the host's withdrawal is
+      on the record, and the owner's standing rule is that no placement is
+      published without his approval and the host's consent.
 - [ ] The owner has decided separately for each of the three
       `nominatim-house` / `cross-check-missing` coordinate rows recorded in
       `docs/operations/season-import-2026-09-03.md`: verify the candidate (or a

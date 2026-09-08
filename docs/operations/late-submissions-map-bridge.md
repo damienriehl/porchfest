@@ -167,9 +167,15 @@ Bayless. Never leave a venue with an empty `acts` array on the map.
 
 A withdrawal has one obligation an addition does not. The platform still holds
 the imported venue and act, so the cutover checklist in
-`docs/operations/post-event-cutover-2026.md` carries a matching item: set those
-records to `status = 'withdrawn'` before lock, or the published platform map
-will restore the venue the site map just dropped.
+`docs/operations/post-event-cutover-2026.md` carries a matching item: withdraw
+those records before lock, or the published platform map will restore what the
+site map just dropped.
+
+Withdrawing the act is always required. Withdrawing the venue is the owner's
+call: a venue kept active with no assigned act is omitted from the published
+map anyway, and keeping it leaves a porch available for a late performer. Keep
+it only when the host is genuinely still willing — a host who withdrew must
+re-confirm before anyone is placed there.
 
 ### Recorded withdrawal — 2026-09-08
 
@@ -178,8 +184,13 @@ site are both unable to participate in 2026, and asked for the map to be
 corrected. Crazy Chester was that venue's only act, so the venue object was
 removed in site commit `f0d87df`. The validator reported 20 venues (down from
 21; 27 acts to 26), and the live `/map/` rendered 20 markers with no Bourne
-pin and no Crazy Chester lineup entry. The platform records were not changed —
-that is the open cutover item above.
+pin and no Crazy Chester lineup entry.
+
+The platform records were not changed in that session. On 2026-09-08 the owner
+decided to keep the 2379 Bourne venue record active there, in case a late
+performer needs a porch, and to withdraw only the act. The host's own
+withdrawal stands on the record, so that porch is not available for a placement
+until the host re-confirms. Both halves are the open cutover item above.
 
 ## Pending at time of writing
 
