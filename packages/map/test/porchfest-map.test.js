@@ -1106,6 +1106,38 @@ test("focus entering and leaving the venue list each schedules a relayout", asyn
   assert.equal(run.animationFrames.length, 1);
 });
 
+test("relayout holds the lineup height while measuring cards so the document never shrinks", async () => {
+  const venues = [
+    venue(),
+    venue({ title: "Second Stage", lat: 44.99 }),
+    venue({ title: "Third Stage", lat: 45.0 }),
+  ];
+  const run = await runScript({
+    fetch: () => Promise.resolve(response({ venues })),
+  });
+  const heightsDuringMeasurement = [];
+
+  run.nodes.list.offsetHeight = 900;
+  run.nodes.list.clientWidth = 1000;
+  run.nodes.list.children.forEach((card) => {
+    Object.defineProperty(card, "offsetHeight", {
+      get() {
+        heightsDuringMeasurement.push(run.nodes.list.style.height);
+        return 120;
+      },
+    });
+  });
+
+  run.nodes.list.dispatchEvent({ type: "focusin" });
+  flushAnimationFrames(run);
+
+  assert.ok(heightsDuringMeasurement.length > 0);
+  heightsDuringMeasurement.forEach((height) => {
+    assert.equal(height, "900px");
+  });
+  assert.equal(run.nodes.list.style.height, "256px");
+});
+
 test("max-height transition completion schedules one relayout and preserves card nodes", async () => {
   const venues = [venue(), venue({ title: "Second Stage", lat: 44.99 })];
   const run = await runScript({
