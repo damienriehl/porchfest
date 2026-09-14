@@ -504,6 +504,7 @@
     var gap;
     var columnWidth;
     var columnHeights;
+    var previousHeight = Number(list.offsetHeight) || 0;
 
     clearVenueLayout(list);
     if (usesSingleVenueColumn() || cards.length === 0) return;
@@ -513,6 +514,11 @@
     columnWidth = Math.max(0, (listWidth - gap) / 2);
     columnHeights = [0, 0];
     list.style.position = "relative";
+    // Each offsetHeight read forces layout; with cards out of flow and no
+    // explicit height, the document shrinks and the browser clamps scroll.
+    // A link press then releases over the map, so its click never fires.
+    // Hold the previous height to keep the document stable while measuring.
+    list.style.height = previousHeight + "px";
 
     cards.forEach(function (card) {
       var column = columnHeights[0] <= columnHeights[1] ? 0 : 1;
