@@ -68,22 +68,28 @@ Do not begin until every box is true.
       lock: placeholder records can still be corrected in `locked`, but
       assignments cannot. Keep any participant contact values in the platform
       and private operational record, not in this repository.
-      _Status 2026-09-07:_ the first bridge (1528 Grantham, two acts) is
-      entered — platform venue 26, acts 34 and 35, both slots assigned, the
-      coordinate organizer-verified against the site JSON point. Only a second
-      bridge, if one lands, still needs this step.
+      _Status 2026-09-14:_ done for every bridged change through the
+      2026-09-14 reconciliation (plan
+      `docs/plans/2026-09-14-0734-chore-pre-event-lineup-reconciliation-plan.md`):
+      The O'Keefe Brothers (act 34) moved to 960 Hampden 6–7 (venue 3, slot 5);
+      1528 Grantham (venue 26) keeps Loose Rooster 7–8 with slot 51 open;
+      Professor Tolzmann's Mechanical Music Machine (placeholder act 36) holds
+      both 2382 Doswell slots as a base assignment plus a continuation created
+      through core's assign operation, since the admin route cannot create a
+      continuation; The Nine Teas (act 37) on 2268 Knapp 6–7; Twist My Arm
+      (act 38) on 2227 Scudder 7–8; Larkspur reduced to 1399 Raymond 6–7. The
+      platform and the site map agree act for act as of site commit `9445b36`.
+      A late placement after this date needs this step again.
 - [ ] Every withdrawal removed from the marketing-site map is also withdrawn in
       the platform, so the two lineups agree in both directions. A venue or act
       that is gone from the site but still active and assigned in the platform
       will reappear on the published platform map at step 4.
-      _Open as of 2026-09-08:_ Crazy Chester and its host site, 2379 Bourne
-      Ave., both withdrew (the band's contact emailed the owner; his message
-      named the host site as withdrawing too). Both are off the marketing-site
-      map in site commit `f0d87df`. In the platform, the owner decided on
-      2026-09-08 to **keep the venue record active** in case a late performer
-      needs a porch, and to withdraw only the act. So: set the Crazy Chester
-      act to `status = 'withdrawn'` and release its slot, and leave the venue
-      active with open slots. A venue with no assigned act is already omitted
+      _Done 2026-09-14:_ Crazy Chester (act 21), Lonely Loons (act 29),
+      Scudder Strings (act 31), and Switchgrass (act 6) are `withdrawn` in the
+      platform with their slots released; the 2379 Bourne and 1040 Bayless
+      venue records stay active with open slots, per the owner's 2026-09-08
+      and 2026-09-14 decisions. Both venues are off the marketing-site map
+      (site commits `f0d87df` and `9445b36`). A venue with no assigned act is already omitted
       from the published map by `packages/web/src/routes/map.ts`, so the open
       venue cannot leak onto the map on its own. **Do not assign anyone to this
       porch without the host's fresh confirmation** — the host's withdrawal is
