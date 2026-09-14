@@ -22,6 +22,10 @@ A Slot reserved for a named act that has not signed up yet, carrying a decide-by
 
 The placement of one Act into one Slot. Assignments are how a Season's schedule exists.
 
+### Bridge
+
+Placing a late host or performer submission onto the public marketing-site map by hand-editing that site's data file, without publishing the platform map or locking the Season. A Bridge is always mirrored into the platform as a Placeholder plus Assignment before lock, and a withdrawal is bridged the same way in reverse. The procedure and its owner-approval rule live in `docs/operations/late-submissions-map-bridge.md`.
+
 ## Records and their lifecycle
 
 ### Venue
