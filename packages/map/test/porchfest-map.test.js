@@ -111,6 +111,8 @@ class TestNode {
     this.clientWidth = 0;
     this.offsetHeight = 0;
     this.style = new TestStyle();
+    this.scrollIntoViewCalls = [];
+    this.focusCalls = [];
     this._text = "";
     this._listeners = {};
     this.classList = {
@@ -204,6 +206,14 @@ class TestNode {
     (this._listeners[event.type] || []).forEach((listener) =>
       listener.call(this, event),
     );
+  }
+
+  scrollIntoView(arg) {
+    this.scrollIntoViewCalls.push(arg);
+  }
+
+  focus(options) {
+    this.focusCalls.push(options === undefined ? null : options);
   }
 
   querySelector(selector) {
@@ -574,7 +584,10 @@ async function runScript(options = {}) {
     },
     matchMedia(query) {
       return {
-        matches: query === "(max-width: 768px)" && this.innerWidth <= 768,
+        matches:
+          (query === "(max-width: 768px)" && this.innerWidth <= 768) ||
+          (query === "(prefers-reduced-motion: reduce)" &&
+            !!options.reducedMotion),
       };
     },
     getComputedStyle() {
@@ -1414,6 +1427,70 @@ test("a sorted card flies to and opens its venue-keyed marker", async () => {
   assert.equal(run.leaflet.records.markers[0].openPopupCalls, 0);
   run.leaflet.records.maps[0].fire("moveend");
   assert.equal(run.leaflet.records.markers[1].openPopupCalls, 1);
+});
+
+test("a card's Map button scrolls the map canvas into view before flying to the venue", async () => {
+  const run = await runScript({
+    fetch: () => Promise.resolve(response({ venues: [venue()] })),
+  });
+  const button = run.nodes.list.querySelector("button.porchfest-show-on-map");
+
+  button.dispatchEvent({ type: "click" });
+
+  assert.deepEqual(
+    run.nodes.mapElement.scrollIntoViewCalls.map((call) => ({
+      block: call.block,
+      behavior: call.behavior,
+    })),
+    [{ block: "start", behavior: "smooth" }],
+  );
+  assert.equal(run.leaflet.records.maps[0].flyToCalls.length, 1);
+});
+
+test("a card's Map button scrolls without animation when the user prefers reduced motion", async () => {
+  const run = await runScript({
+    reducedMotion: true,
+    fetch: () => Promise.resolve(response({ venues: [venue()] })),
+  });
+  const button = run.nodes.list.querySelector("button.porchfest-show-on-map");
+
+  button.dispatchEvent({ type: "click" });
+
+  assert.deepEqual(
+    run.nodes.mapElement.scrollIntoViewCalls.map((call) => ({
+      block: call.block,
+      behavior: call.behavior,
+    })),
+    [{ block: "start", behavior: "auto" }],
+  );
+});
+
+test("a card's Map button moves focus to the selected marker once the flight completes", async () => {
+  const venues = [
+    venue({ title: "North Stage", lat: 45.01, lng: -93.17 }),
+    venue({ title: "South Stage", lat: 44.97, lng: -93.21 }),
+  ];
+  const run = await runScript({
+    fetch: () => Promise.resolve(response({ venues })),
+  });
+  const firstSortedCard = run.nodes.list.children[0];
+  const button = firstSortedCard.querySelector("button.porchfest-show-on-map");
+  const targetMarker = run.leaflet.records.markers[1];
+  const otherMarker = run.leaflet.records.markers[0];
+
+  assert.equal(
+    firstSortedCard.dataset.venueKey,
+    run.testApi.venueKey(venues[1]),
+  );
+  button.dispatchEvent({ type: "click" });
+
+  assert.deepEqual(targetMarker.element.focusCalls, []);
+  run.leaflet.records.maps[0].fire("moveend");
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(targetMarker.element.focusCalls)),
+    [{ preventScroll: true }],
+  );
+  assert.deepEqual(otherMarker.element.focusCalls, []);
 });
 
 test("a card opens its popup only from the flight move-completion callback", async () => {

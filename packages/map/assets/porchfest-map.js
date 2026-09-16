@@ -14,6 +14,7 @@
   var TILE_ATTRIBUTION =
     '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
   var map = null;
+  var mapCanvas = null;
   var markersByVenueKey = Object.create(null);
   var pendingCardPopupHandler = null;
   var venueLayoutAnimationFrameId = null;
@@ -497,6 +498,13 @@
     return Number(window.innerWidth) <= 768;
   }
 
+  function prefersReducedMotion() {
+    return !!(
+      window.matchMedia &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    );
+  }
+
   function layoutVenueCards(listSection) {
     var list = listSection.querySelector(".porchfest-venue-list-items");
     var cards = list.querySelectorAll(".porchfest-venue-card");
@@ -632,8 +640,19 @@
     pendingCardPopupHandler = function () {
       pendingCardPopupHandler = null;
       marker.openPopup();
+      // Keyboard users arrive from a card that is now off-screen; focusing the
+      // marker keeps Tab order on the map instead of jumping back to the lineup.
+      var markerElement = marker.getElement && marker.getElement();
+      if (markerElement && typeof markerElement.focus === "function")
+        markerElement.focus({ preventScroll: true });
     };
     map.once("moveend", pendingCardPopupHandler);
+    // The map sits above the lineup, so panning alone leaves the card in view.
+    if (mapCanvas && typeof mapCanvas.scrollIntoView === "function")
+      mapCanvas.scrollIntoView({
+        block: "start",
+        behavior: prefersReducedMotion() ? "auto" : "smooth",
+      });
     map.flyTo([venue.lat, venue.lng], 17, { duration: 0.5 });
   }
 
@@ -923,6 +942,7 @@
         sortVenueCards(listSection, venues, viewState.sortDirection);
         var rendered = renderMap(mapElement, venues);
         map = rendered.map;
+        mapCanvas = mapElement;
         markersByVenueKey = rendered.markersByVenueKey;
         renderMapControls(
           mapElement,
