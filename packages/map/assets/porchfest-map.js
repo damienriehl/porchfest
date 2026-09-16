@@ -640,6 +640,11 @@
     pendingCardPopupHandler = function () {
       pendingCardPopupHandler = null;
       marker.openPopup();
+      // Keyboard users arrive from a card that is now off-screen; focusing the
+      // marker keeps Tab order on the map instead of jumping back to the lineup.
+      var markerElement = marker.getElement && marker.getElement();
+      if (markerElement && typeof markerElement.focus === "function")
+        markerElement.focus({ preventScroll: true });
     };
     map.once("moveend", pendingCardPopupHandler);
     // The map sits above the lineup, so panning alone leaves the card in view.

@@ -112,6 +112,7 @@ class TestNode {
     this.offsetHeight = 0;
     this.style = new TestStyle();
     this.scrollIntoViewCalls = [];
+    this.focusCalls = [];
     this._text = "";
     this._listeners = {};
     this.classList = {
@@ -209,6 +210,10 @@ class TestNode {
 
   scrollIntoView(arg) {
     this.scrollIntoViewCalls.push(arg);
+  }
+
+  focus(options) {
+    this.focusCalls.push(options === undefined ? null : options);
   }
 
   querySelector(selector) {
@@ -1458,6 +1463,34 @@ test("a card's Map button scrolls without animation when the user prefers reduce
     })),
     [{ block: "start", behavior: "auto" }],
   );
+});
+
+test("a card's Map button moves focus to the selected marker once the flight completes", async () => {
+  const venues = [
+    venue({ title: "North Stage", lat: 45.01, lng: -93.17 }),
+    venue({ title: "South Stage", lat: 44.97, lng: -93.21 }),
+  ];
+  const run = await runScript({
+    fetch: () => Promise.resolve(response({ venues })),
+  });
+  const firstSortedCard = run.nodes.list.children[0];
+  const button = firstSortedCard.querySelector("button.porchfest-show-on-map");
+  const targetMarker = run.leaflet.records.markers[1];
+  const otherMarker = run.leaflet.records.markers[0];
+
+  assert.equal(
+    firstSortedCard.dataset.venueKey,
+    run.testApi.venueKey(venues[1]),
+  );
+  button.dispatchEvent({ type: "click" });
+
+  assert.deepEqual(targetMarker.element.focusCalls, []);
+  run.leaflet.records.maps[0].fire("moveend");
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(targetMarker.element.focusCalls)),
+    [{ preventScroll: true }],
+  );
+  assert.deepEqual(otherMarker.element.focusCalls, []);
 });
 
 test("a card opens its popup only from the flight move-completion callback", async () => {
