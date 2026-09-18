@@ -192,6 +192,39 @@ performer needs a porch, and to withdraw only the act. The host's own
 withdrawal stands on the record, so that porch is not available for a placement
 until the host re-confirms. Both halves are the open cutover item above.
 
+## Recorded reconciliation — 2026-09-14
+
+Two days before the event, the owner asked for a full sweep of Gmail and the
+Forms sheet since the import cutoff. Eleven threads and three sheet rows
+produced seven map changes, applied in one site commit (`9445b36`, 20 → 19
+venues, 26 acts) and mirrored into the platform the same morning:
+
+- The O'Keefe Brothers moved from 1528 Grantham 6–7 to 960 Hampden 6–7. The
+  2026-09-06 placement had applied the unplaced-act fallback rule; the band and
+  the 960 Hampden host both wrote on 2026-09-13 that the map was wrong. Lesson:
+  before applying the fallback rule to an act with no house preference, search
+  Gmail for a match the owner already approved by email.
+- 2382 Doswell: Lonely Loons withdrew; Professor Tolzmann's Mechanical Music
+  Machine plays 6–8 (owner chose both hours on 2026-09-14).
+- 2268 Knapp: The Nine Teas added at 6–7.
+- 2227 Scudder: Twist My Arm replaces Scudder Strings at 7–8 (the host's own
+  two bands; no conflict).
+- 1040 Bayless: Switchgrass withdrew; venue removed from the map, kept active
+  in the platform.
+- 1399 Raymond: Larkspur reduced to 6–7.
+
+Two platform-side facts learned while mirroring: the admin assign route cannot
+create the second half of a two-hour assignment (core requires a continuation
+option only the importer passes), so that one write ran as a scripted call to
+core's assign operation inside the app container; and no route re-points a
+venue's host contact, so a host change is an in-place edit of the existing
+contact record (the original submission stays visible on the record).
+
+The per-venue final-details emails were created as Gmail drafts by appending
+byte-exact messages over IMAP from the production box, because the Gmail
+connector rewrites every URL in a stored draft into a Google redirect and
+detaches a draft from its thread on update.
+
 ## Pending at time of writing
 
 One performer submitted the form on 2026-08-27 for a solo acoustic set in
@@ -217,9 +250,12 @@ VERIFY-FAIL: out-file does not exist
 ```
 
 The JSON edit had nevertheless landed correctly in the working tree. Check
-`git diff` before interpreting that wrapper result as "no work." Better, set
-the deliverable file itself as the wrapper's out-file so its existence proves
-the requested write occurred.
+`git diff` before interpreting that wrapper result as "no work." Do **not**
+set the deliverable file itself as the wrapper's out-file: `codex-run.sh`
+deletes its out-file before every dispatch attempt, so that would erase the
+data file. Give the worker a separate untracked report file as the out-file
+(at least 400 bytes) and verify the data edit by `git diff` plus the validator,
+as the 2026-09-14 reconciliation did.
 
 ### Old tabs resemble current data
 
