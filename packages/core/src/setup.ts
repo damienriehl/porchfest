@@ -165,7 +165,10 @@ export function createSeasonSetup(
    * Organizer routes use the intention-revealing first/additional commands. */
   function createSeason(input: SeasonSetupInput): SeasonSetupResult {
     const validated = validate(input);
-    return insertSeason(db, validated, input.openSignups);
+    return db.transaction(
+      (tx) => insertSeason(tx, validated, input.openSignups),
+      { behavior: "immediate" },
+    );
   }
 
   /** Create the deployment's first season only when the database is still empty.

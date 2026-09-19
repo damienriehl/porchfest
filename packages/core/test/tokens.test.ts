@@ -517,3 +517,112 @@ describe("participant magic-link lifecycle", () => {
     expect(seasons.getVenue(firstHost.venue.id).title).toBe("First Porch");
   });
 });
+
+describe("participant credentials at failure boundaries", () => {
+  it.each(["", "unknown-token"])(
+    "rejects unrecognized credentials %j without storing anything",
+    (token) => {
+      const { tokens } = fixtures();
+      expect(() => tokens.resolve(token)).toThrow(ParticipantTokenError);
+      expect(database.db.select().from(participantMagicLinks).all()).toEqual(
+        [],
+      );
+    },
+  );
+
+  it("expires a grant at the exact expiration instant", () => {
+    const { tokens, firstHost } = fixtures();
+    const issued = tokens.issue("venue", firstHost.venue.id);
+    instant = new Date(issued.link.expiresAt.valueOf() - 1);
+    expect(tokens.resolve(issued.token).recordId).toBe(firstHost.venue.id);
+    instant = issued.link.expiresAt;
+    expect(() => tokens.resolve(issued.token)).toThrow(
+      expect.objectContaining({ reason: "expired" }),
+    );
+  });
+
+  it("returns no reissues for a missing address without minting credentials", () => {
+    const { tokens } = fixtures();
+    expect(tokens.reissueForEmail("absent@example.invalid")).toEqual([]);
+    expect(database.db.select().from(participantMagicLinks).all()).toEqual([]);
+  });
+
+  it("revokes a link when its target contact is repointed and keeps the new link usable", () => {
+    const { tokens, seasons, firstHost, secondHost } = fixtures();
+    const issued = tokens.issue("venue", firstHost.venue.id);
+    seasons.updateVenue(firstHost.venue.id, firstHost.venue.version, {
+      hostContactId: secondHost.contact.id,
+      reachViaContactId: secondHost.contact.id,
+    });
+    expect(() => tokens.resolve(issued.token)).toThrow(
+      expect.objectContaining({ reason: "revoked" }),
+    );
+    const replacement = tokens.issue("venue", firstHost.venue.id);
+    expect(tokens.resolve(replacement.token).contactId).toBe(
+      secondHost.contact.id,
+    );
+  });
+
+  it.each([
+    { gear: ["pa", "pa"], drinks: ["water"], amenities: ["seating"] },
+    { gear: ["invalid"], drinks: ["water"], amenities: ["seating"] },
+    { gear: ["pa"], drinks: ["invalid"], amenities: ["seating"] },
+    { gear: ["pa"], drinks: ["water"], amenities: ["invalid"] },
+  ])(
+    "rolls back contact and venue edits when selections are invalid (%#)",
+    (selections) => {
+      const { tokens, firstHost } = fixtures();
+      const issued = tokens.issue("venue", firstHost.venue.id);
+      const before = tokens.read(issued.token);
+      expect(() =>
+        tokens.update(issued.token, {
+          recordType: "venue",
+          recordId: firstHost.venue.id,
+          recordVersion: firstHost.venue.version,
+          contactVersion: firstHost.contact.version,
+          contact: { name: "Must roll back" },
+          record: { title: "Must roll back" },
+          ...selections,
+        }),
+      ).toThrow(ParticipantTokenError);
+      expect(tokens.read(issued.token)).toEqual(before);
+    },
+  );
+
+  it("clears all venue selections atomically and reads the resulting empty collections", () => {
+    const { tokens, firstHost } = fixtures();
+    const issued = tokens.issue("venue", firstHost.venue.id);
+    const result = tokens.update(issued.token, {
+      recordType: "venue",
+      recordId: firstHost.venue.id,
+      recordVersion: firstHost.venue.version,
+      contactVersion: firstHost.contact.version,
+      contact: {},
+      record: {},
+      gear: [],
+      drinks: [],
+      amenities: [],
+    });
+    expect(result.record.version).toBe(firstHost.venue.version + 1);
+    expect(tokens.read(issued.token)).toMatchObject({
+      gear: [],
+      drinks: [],
+      amenities: [],
+    });
+  });
+
+  it("abandons only pending reissues and treats repeated cleanup as harmless", () => {
+    const { tokens, firstHost } = fixtures();
+    const active = tokens.issue("venue", firstHost.venue.id);
+    tokens.abandonReissue(active.token);
+    tokens.abandonReissue("missing");
+    expect(tokens.resolve(active.token).recordId).toBe(firstHost.venue.id);
+    const pending = tokens.reissueForEmail("shared@example.invalid")[0]!;
+    tokens.abandonReissue(pending.token);
+    tokens.abandonReissue(pending.token);
+    expect(() => tokens.activateReissue(pending.token)).toThrow(
+      ParticipantTokenError,
+    );
+    expect(tokens.resolve(active.token).recordId).toBe(firstHost.venue.id);
+  });
+});

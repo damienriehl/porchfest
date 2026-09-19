@@ -1487,3 +1487,33 @@ describe("public signup forms", () => {
     );
   });
 });
+
+describe("participant link extraction across signup and persistence", () => {
+  it("stores duplicate normalized links only once and renders a single public URL", async () => {
+    const { runtime, seasonId } = await makeRuntime();
+    const { token } = await csrfToken(runtime, "/signup/performer", seasonId);
+    const values = performerValues(seasonId, token);
+    values.set(
+      "links",
+      "HTTPS://EXAMPLE.INVALID:443/demo, https://example.invalid/demo.",
+    );
+    const response = await submit(runtime, "/signup/performer", values);
+    expect(response.status).toBe(201);
+    const act = runtime.core.seasons
+      .listActivityQueue(seasonId)
+      .find((item) => item.recordType === "act")?.record;
+    expect(act).toMatchObject({ links: "https://example.invalid/demo" });
+    expect(await response.text()).toContain("https://example.invalid/demo");
+  });
+
+  it("rejects a malformed HTTP URL before creating a participant or act", async () => {
+    const { runtime, seasonId } = await makeRuntime();
+    const { token } = await csrfToken(runtime, "/signup/performer", seasonId);
+    const values = performerValues(seasonId, token);
+    values.set("links", "Listen at https://[bad]");
+    const response = await submit(runtime, "/signup/performer", values);
+    expect(response.status).toBe(422);
+    expect(runtime.core.seasons.listActivityQueue(seasonId)).toEqual([]);
+    expect(await response.text()).toContain("https://[bad]");
+  });
+});

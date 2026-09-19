@@ -230,3 +230,101 @@ describe("the full record list", () => {
     expect(first?.recordType).toBe("contact");
   });
 });
+
+describe("queue identity and empty-state boundaries", () => {
+  it("returns no activity for a season with no records or an unknown season", () => {
+    const { season, queue, organizer } = fixtures();
+    const alice = organizer("alice@example.invalid");
+    for (const id of [season.id, 999999]) {
+      expect(queue.listForOrganizer(id, alice.id)).toEqual([]);
+      expect(queue.listNewForOrganizer(id, alice.id)).toEqual([]);
+      expect(queue.countNewForOrganizer(id, alice.id)).toBe(0);
+    }
+  });
+
+  it("keeps record types separate when a venue and contact share an id", () => {
+    const { season, queue, organizer, host } = fixtures();
+    const alice = organizer("alice@example.invalid");
+    const signup = host();
+    expect(signup.venue.id).toBe(signup.contact.id);
+    queue.dismiss({
+      organizerId: alice.id,
+      seasonId: season.id,
+      recordType: "venue",
+      recordId: signup.venue.id,
+      version: signup.venue.version,
+    });
+    expect(
+      queue
+        .listNewForOrganizer(season.id, alice.id)
+        .map((item) => item.recordType),
+    ).toEqual(["contact"]);
+    expect(queue.countNewForOrganizer(season.id, alice.id)).toBe(1);
+    queue.dismiss({
+      organizerId: alice.id,
+      seasonId: season.id,
+      recordType: "contact",
+      recordId: signup.contact.id,
+      version: signup.contact.version,
+    });
+    expect(queue.countNewForOrganizer(season.id, alice.id)).toBe(0);
+    expect(queue.listForOrganizer(season.id, alice.id)).toHaveLength(2);
+  });
+
+  it("updates an existing dismissal without duplicating its stored identity", () => {
+    const { season, queue, seasons, organizer, host } = fixtures();
+    const alice = organizer("alice@example.invalid");
+    const signup = host();
+    const input = {
+      organizerId: alice.id,
+      seasonId: season.id,
+      recordType: "venue" as const,
+      recordId: signup.venue.id,
+      version: signup.venue.version,
+    };
+    queue.dismiss(input);
+    const old = database.sqlite
+      .prepare("select * from queue_dismissals")
+      .get() as { id: number; created_at: number };
+    advance(2000);
+    const updated = seasons.updateVenue(signup.venue.id, signup.venue.version, {
+      title: "Revised porch",
+    });
+    queue.dismiss({ ...input, version: updated.version });
+    const rows = database.sqlite
+      .prepare("select * from queue_dismissals")
+      .all();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      id: old.id,
+      created_at: old.created_at,
+      updated_at: Math.floor(clock.valueOf() / 1000),
+      version: 2,
+      dismissed_version: updated.version,
+    });
+    expect(
+      queue
+        .listNewForOrganizer(season.id, alice.id)
+        .some((item) => item.recordType === "venue"),
+    ).toBe(false);
+  });
+
+  it("rejects an unknown organizer through the storage constraint without hiding activity", () => {
+    const { season, queue, organizer, host } = fixtures();
+    const alice = organizer("alice@example.invalid");
+    const signup = host();
+    expect(() =>
+      queue.dismiss({
+        organizerId: 999999,
+        seasonId: season.id,
+        recordType: "venue",
+        recordId: signup.venue.id,
+        version: signup.venue.version,
+      }),
+    ).toThrow("FOREIGN KEY constraint failed");
+    expect(queue.countNewForOrganizer(season.id, alice.id)).toBe(2);
+    expect(
+      database.sqlite.prepare("select * from queue_dismissals").all(),
+    ).toEqual([]);
+  });
+});
