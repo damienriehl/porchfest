@@ -1,4 +1,12 @@
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  cp,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -53,6 +61,130 @@ describe("Goal-1 import CLI", () => {
     expect(missingOutput.stderrMessages.join("\n")).toContain(
       "private/geocache.json",
     );
+  });
+
+  it.each([
+    "--artifacts",
+    "--submissions-file",
+    "--slate-file",
+    "--geocache-file",
+    "--data-dir",
+    "--event-year",
+    "--locality",
+    "--bounds",
+  ])(
+    "rejects a missing or blank %s option before touching storage",
+    async (option) => {
+      const dataDirectory = join(
+        await temporary("porchfest-goal1-invalid-options-"),
+        "unused",
+      );
+      for (const args of [[option], [option + "="], [option, "   "]]) {
+        const output = captureOutput();
+        expect(
+          await main(args, { PORCHFEST_DATA_DIR: dataDirectory }, output),
+        ).toBe(1);
+        await expect(stat(dataDirectory)).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        expect(output.stdoutMessages).toEqual([]);
+        expect(output.stderrMessages.join("\n")).toContain(
+          option + " requires a value",
+        );
+      }
+    },
+  );
+
+  it.each(["26", "20310", "year", "20.1"])(
+    "rejects malformed event year %j from both CLI and environment",
+    async (year) => {
+      for (const [args, env] of [
+        [["--event-year", year], {}],
+        [[], { PORCHFEST_GOAL1_EVENT_YEAR: year }],
+      ] as const) {
+        const output = captureOutput();
+        expect(await main(args, env, output)).toBe(1);
+        expect(output.stderrMessages.join("\n")).toContain(
+          "must be a four-digit year",
+        );
+      }
+    },
+  );
+
+  it.each([
+    "1,2,3",
+    "1,2,3,4,5",
+    "NaN,2,3,4",
+    "1,2,Infinity,4",
+    "3,2,1,4",
+    "1,4,3,2",
+    "1,2,1,4",
+    "1,2,3,2",
+  ])("rejects malformed or inverted bounds %j", async (bounds) => {
+    const output = captureOutput();
+    expect(await main(["--bounds=" + bounds], {}, output)).toBe(1);
+    expect(output.stderrMessages.join("\n")).toContain("--bounds");
+    expect(output.stdoutMessages).toEqual([]);
+  });
+
+  it("reports unknown flags and an artifact file supplied instead of a directory", async () => {
+    const unknown = captureOutput();
+    expect(await main(["--unknown"], {}, unknown)).toBe(1);
+    expect(unknown.stderrMessages.join("\n")).toContain(
+      "Unknown argument: --unknown",
+    );
+    const fileOutput = captureOutput();
+    expect(
+      await main(
+        ["--artifacts", join(fixtureDirectory, "slate.synthetic.json")],
+        {},
+        fileOutput,
+      ),
+    ).toBe(1);
+    expect(fileOutput.stderrMessages.join("\n")).toContain("not a directory");
+  });
+
+  it("rejects missing or malformed geocoder bounds without evaluating Python", async () => {
+    const artifacts = await temporary("porchfest-goal1-source-bounds-");
+    await expect(readGeocodeBounds(artifacts)).rejects.toThrow(
+      "missing or unreadable",
+    );
+    await mkdir(join(artifacts, "tools"));
+    await writeFile(
+      join(artifacts, "tools/geocode.py"),
+      "raise Exception('must never execute')\nLAT_MIN = 1\n",
+    );
+    await expect(readGeocodeBounds(artifacts)).rejects.toThrow(
+      "Could not read LAT_MIN",
+    );
+    await writeFile(
+      join(artifacts, "tools/geocode.py"),
+      "LAT_MIN, LAT_MAX = 3, 1\nLNG_MIN, LNG_MAX = 2, 4\n",
+    );
+    await expect(readGeocodeBounds(artifacts)).rejects.toThrow("south < north");
+  });
+
+  it("imports using equals-style arguments and environment artifact paths into isolated SQLite", async () => {
+    const dataDirectory = await temporary("porchfest-goal1-equals-data-");
+    const output = captureOutput();
+    const args = [
+      "--submissions-file=synthetic.submissions.json",
+      "--slate-file=slate.synthetic.json",
+      "--geocache-file=synthetic.geocache.json",
+      "--bounds=9.5,19.5,10.5,20.5",
+      "--locality=Synthetic Quarter",
+      "--data-dir=" + dataDirectory,
+    ];
+    expect(
+      await main(args, { PORCHFEST_GOAL1_ARTIFACTS: fixtureDirectory }, output),
+    ).toBe(0);
+    expect(output.stderrMessages).toEqual([]);
+    expect(rowCount(dataDirectory, "seasons")).toBe(1);
+    const second = captureOutput();
+    expect(
+      await main([...args, "--artifacts=" + fixtureDirectory], {}, second),
+    ).toBe(0);
+    expect(rowCount(dataDirectory, "seasons")).toBe(1);
   });
 
   it("reads generic bounds from the artifact geocoder or accepts flags", async () => {
@@ -112,7 +244,10 @@ describe("Goal-1 import CLI", () => {
     delete slate.event.date;
     slate.event.date_display = "Wednesday, September 16";
     await writeFile(slatePath, `${JSON.stringify(slate, null, 2)}\n`);
+    const dataDirectory = await temporary("porchfest-goal1-year-data-");
     const baseArgs = [
+      "--data-dir",
+      dataDirectory,
       "--artifacts",
       copiedArtifacts,
       ...fixtureFileArgs,

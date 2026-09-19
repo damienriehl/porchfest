@@ -482,3 +482,183 @@ describe("participant change requests", () => {
     expect(requests.find(request.id)?.status).toBe("pending");
   });
 });
+
+describe("change request validation and recovery boundaries", () => {
+  it("returns empty lookups and refuses decisions about missing requests", () => {
+    const { season, requests } = fixtures();
+    expect(requests.find(999999)).toBeNull();
+    expect(requests.listPendingForSeason(season.id)).toEqual([]);
+    for (const action of [
+      requests.apply,
+      requests.reject,
+      requests.completeAddressReview,
+    ]) {
+      expect(() => action(999999, 1)).toThrow(ChangeRequestConflictError);
+    }
+  });
+
+  it("trims address proposals before deduplicating and rejects blank input", () => {
+    const { season, requests, host } = fixtures();
+    const input = {
+      seasonId: season.id,
+      recordType: "venue" as const,
+      recordId: host.venue.id,
+      recordVersion: host.venue.version,
+      kind: "address" as const,
+      proposedAddress: "  2 Proposed Ave  ",
+    };
+    const first = requests.record(input);
+    expect(first.proposedAddress).toBe("2 Proposed Ave");
+    expect(
+      requests.record({ ...input, proposedAddress: "2 Proposed Ave" }),
+    ).toEqual(first);
+    expect(() =>
+      requests.record({ ...input, proposedAddress: " \t " }),
+    ).toThrow(ChangeRequestLifecycleError);
+    expect(requests.listPendingForSeason(season.id)).toEqual([first]);
+  });
+
+  it.each([
+    [new Date("invalid"), new Date("2031-09-13T15:00:00Z")],
+    [new Date("2031-09-13T14:00:00Z"), new Date("invalid")],
+    [new Date("2031-09-13T14:00:00Z"), new Date("2031-09-13T14:00:00Z")],
+    [new Date("2031-09-13T15:00:00Z"), new Date("2031-09-13T14:00:00Z")],
+  ])(
+    "rejects an invalid availability interval without persisting a request (%#)",
+    (startsAt, endsAt) => {
+      const { season, requests, performer } = fixtures();
+      expect(() =>
+        requests.record({
+          seasonId: season.id,
+          recordType: "act",
+          recordId: performer.act.id,
+          recordVersion: performer.act.version,
+          kind: "availability",
+          proposedAvailability: [{ startsAt, endsAt }],
+        }),
+      ).toThrow(ChangeRequestLifecycleError);
+      expect(requests.listPendingForSeason(season.id)).toEqual([]);
+    },
+  );
+
+  it("does not let a rejection in the wrong season consume the pending version", () => {
+    const { season, requests, host } = fixtures();
+    const request = requests.record({
+      seasonId: season.id,
+      recordType: "venue",
+      recordId: host.venue.id,
+      recordVersion: host.venue.version,
+      kind: "withdrawal",
+    });
+    expect(() =>
+      requests.reject(request.id, request.version, season.id + 1),
+    ).toThrow(ChangeRequestConflictError);
+    expect(requests.find(request.id)).toEqual(request);
+    expect(
+      requests.reject(request.id, request.version, season.id),
+    ).toMatchObject({ status: "rejected", version: request.version + 1 });
+    expect(() =>
+      requests.reject(request.id, request.version, season.id),
+    ).toThrow(ChangeRequestConflictError);
+  });
+
+  it("does not complete a non-address request through address review", () => {
+    const { season, requests, performer } = fixtures();
+    const request = requests.record({
+      seasonId: season.id,
+      recordType: "act",
+      recordId: performer.act.id,
+      recordVersion: performer.act.version,
+      kind: "availability",
+      proposedAvailability: [],
+    });
+    expect(() =>
+      requests.completeAddressReview(request.id, request.version),
+    ).toThrow(ChangeRequestLifecycleError);
+    expect(requests.find(request.id)).toEqual(request);
+    requests.apply(request.id, request.version);
+    expect(
+      database.sqlite
+        .prepare("select * from act_availabilities where act_id = ?")
+        .all(performer.act.id),
+    ).toEqual([]);
+    expect(
+      database.sqlite
+        .prepare("select version from acts where id = ?")
+        .get(performer.act.id),
+    ).toEqual({ version: performer.act.version + 1 });
+  });
+
+  it.each([
+    "not-json",
+    "null",
+    "{}",
+    "[null]",
+    '[{"startsAt":"invalid","endsAt":"2031-09-13"}]',
+    '[{"startsAt":"2031-09-14","endsAt":"2031-09-13"}]',
+  ])(
+    "isolates corrupt availability %s and still allows rejection",
+    (proposal) => {
+      const { season, requests, performer } = fixtures();
+      const valid = requests.record({
+        seasonId: season.id,
+        recordType: "act",
+        recordId: performer.act.id,
+        recordVersion: performer.act.version,
+        kind: "withdrawal",
+      });
+      const { id } = database.sqlite
+        .prepare(
+          "insert into change_requests (season_id, record_type, record_id, record_version, kind, proposed_value) values (?, 'act', ?, ?, 'availability', ?) returning id",
+        )
+        .get(season.id, performer.act.id, performer.act.version, proposal) as {
+        id: number;
+      };
+      expect(() => requests.find(id)).toThrow(ChangeRequestLifecycleError);
+      expect(requests.listPendingForSeason(season.id)).toEqual([valid]);
+      expect(requests.reject(id, 1, season.id)).toMatchObject({
+        status: "rejected",
+        proposedAvailability: null,
+        version: 2,
+      });
+      expect(requests.listPendingForSeason(season.id)).toEqual([valid]);
+    },
+  );
+
+  it("rolls back the claim, act version, and deleted availability on storage failure", () => {
+    const { season, requests, performer } = fixtures();
+    const request = requests.record({
+      seasonId: season.id,
+      recordType: "act",
+      recordId: performer.act.id,
+      recordVersion: performer.act.version,
+      kind: "availability",
+      proposedAvailability: [
+        {
+          startsAt: new Date("2031-09-13T18:00:00Z"),
+          endsAt: new Date("2031-09-13T19:00:00Z"),
+        },
+      ],
+    });
+    const before = database.sqlite
+      .prepare("select * from act_availabilities where act_id = ?")
+      .all(performer.act.id);
+    database.sqlite.exec(
+      "create trigger refuse_availability before insert on act_availabilities begin select raise(abort, 'synthetic storage failure'); end;",
+    );
+    expect(() => requests.apply(request.id, request.version)).toThrow();
+    expect(requests.find(request.id)).toEqual(request);
+    expect(
+      database.sqlite
+        .prepare("select version from acts where id = ?")
+        .get(performer.act.id),
+    ).toEqual({ version: performer.act.version });
+    expect(
+      database.sqlite
+        .prepare("select * from act_availabilities where act_id = ?")
+        .all(performer.act.id),
+    ).toEqual(before);
+    database.sqlite.exec("drop trigger refuse_availability");
+    expect(requests.apply(request.id, request.version).status).toBe("applied");
+  });
+});
