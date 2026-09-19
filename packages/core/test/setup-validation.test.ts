@@ -201,6 +201,59 @@ describe("season setup validation and persistence", () => {
     ]);
   });
 
+  it("rolls back general creation after a template failure and permits retry", () => {
+    const setup = createSeasonSetup(database.db);
+    database.sqlite.exec(
+      "create trigger reject_template before insert on season_time_slots begin select raise(abort, 'synthetic template failure'); end",
+    );
+    expect(() => setup.createSeason(input())).toThrow(
+      "synthetic template failure",
+    );
+    expect(setup.seasonCount()).toBe(0);
+    expect(
+      database.sqlite
+        .prepare("select count(*) as count from season_time_slots")
+        .get(),
+    ).toEqual({ count: 0 });
+    database.sqlite.exec("drop trigger reject_template");
+    const created = setup.createSeason(input());
+    expect(setup.listSeasons()).toEqual([created.season]);
+    expect(setup.listTimeSlots(created.season.id)).toHaveLength(1);
+  });
+
+  it("isolates a caught creation failure inside a caller transaction", () => {
+    const setup = createSeasonSetup(database.db);
+    const retained = database.db.transaction(() => {
+      const created = setup.createSeason(input({ timeSlots: [] }));
+      database.sqlite.exec(
+        "create trigger reject_template before insert on season_time_slots begin select raise(abort, 'synthetic template failure'); end",
+      );
+      expect(() => setup.createSeason(input())).toThrow(
+        "synthetic template failure",
+      );
+      expect(setup.listSeasons()).toEqual([created.season]);
+      return created;
+    });
+    expect(setup.listSeasons()).toEqual([retained.season]);
+  });
+
+  it("lets the caller roll back a successfully created season and its templates", () => {
+    const setup = createSeasonSetup(database.db);
+    expect(() =>
+      database.db.transaction(() => {
+        const created = setup.createSeason(input());
+        expect(setup.listTimeSlots(created.season.id)).toHaveLength(1);
+        throw new Error("caller failure");
+      }),
+    ).toThrow("caller failure");
+    expect(setup.seasonCount()).toBe(0);
+    expect(
+      database.sqlite
+        .prepare("select count(*) as count from season_time_slots")
+        .get(),
+    ).toEqual({ count: 0 });
+  });
+
   it("rolls back the first-season aggregate when a template insert fails", () => {
     const setup = createSeasonSetup(database.db);
     database.sqlite.exec(
