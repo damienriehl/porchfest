@@ -26,7 +26,8 @@ related:
 The porchfest platform's KTD7 records how optimistic concurrency must be built: the
 compare-and-swap guard lives _inside_ the UPDATE statement, the same statement
 increments `version`, and the verdict comes from the affected-row count. KTD7 carries
-its own warning, quoted in `docs/handoffs/2026-08-22-u3-code-review-handoff.md:15-19`:
+its own warning, preserved in the retired U3 review handoff
+(`git show 4553bb0:docs/handoffs/2026-08-22-u3-code-review-handoff.md`, lines 15–19):
 
 > The compare-and-swap guard must stay INSIDE the UPDATE statement with its verdict
 > taken from the affected-row count. KTD7 records that a SELECT-compare-write version
